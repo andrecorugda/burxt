@@ -12615,3 +12615,141 @@ fn a_debug_build_maps_every_statement_to_its_own_line() {
 
     let _ = fs::remove_dir_all(&scratch);
 }
+
+/// A broken DECLARATION may not produce an error against an innocent file.
+///
+/// `check_program` infers which functions allocate by running the whole declaration pass in a
+/// throwaway probe, whose error is discarded (`let _ = probe.check_program_inner`). So any early
+/// `return Err` in that pass abandons the probe **before a single body is read**, silently, with
+/// nothing inferred — and the real pass then refuses every function that builds its own answer,
+/// because nothing told it they allocate.
+///
+/// **What a beginner saw.** `main` is a reserved name, since a Burxt program is its top-level
+/// statements. Declared alone the refusal is perfect. Add one `use` of a module that allocates and
+/// it became:
+///
+/// ```text
+/// error: function `pieces` cannot return [String], because its storage lives in a region
+///        and would not outlive it.
+///  --> helper.bx:1:20
+/// ```
+///
+/// Pointing into a file they did not write, at a function they never called, about a rule they did
+/// not break — for the crime of writing `function main`, which is the first thing anyone arriving
+/// from another language types. `helper.bx` checks clean on its own, and renaming `main` to
+/// anything else makes the message vanish.
+///
+/// **Reserved names, duplicate definitions, unknown types and `pure` + `touches` each reproduced it
+/// identically**, which is what made it a property of the loop rather than four bugs. The author
+/// had already found this once — the region rule ninety lines below carries the note that applying
+/// it early "aborted the declaration pass before a single body was read, so the probe found
+/// nothing" — and guarded that one check while four others still did it.
+///
+/// **Stage-1 was right all along and stage-0 was wrong**, so this asserts the two agree rather than
+/// asserting each separately. Every stage divergence found this week survived tests that checked
+/// each compiler on its own terms.
+#[test]
+fn a_broken_declaration_does_not_blame_an_innocent_file() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("declaration-probe");
+    fs::create_dir_all(&scratch).unwrap();
+
+    // Valid, and it allocates: it is the probe's answer that goes missing.
+    fs::write(
+        scratch.join("helper.bx"),
+        "function pieces(s: String) -> [String] allocates {\n    \
+         let out: [String] = [];\n    return out;\n}\n",
+    )
+    .unwrap();
+
+    let stage1 = scratch.join("stage1");
+    let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .current_dir(&scratch)
+        .output()
+        .expect("failed to spawn burxt");
+    assert!(
+        build.status.success(),
+        "stage-1 did not build:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    // Each is a broken declaration in the ROOT file, and each must be what gets reported.
+    let cases = [
+        ("reserved name", "function main() -> Int { return 0; }", "a name the language owns"),
+        (
+            "defined twice",
+            "function d() -> Int { return 0; }\nfunction d() -> Int { return 1; }",
+            // "twice" rather than either compiler's full sentence: stage-0 says "function `d` is
+            // defined twice" and stage-1 says "this function is declared twice". That wording
+            // divergence is real and is NOT what this test is about — matching either spelling
+            // would make this test fail for a reason it does not name.
+            "twice",
+        ),
+        ("unknown type", "function b(x: NoSuchType) -> Int { return 0; }", "unknown type"),
+        (
+            "pure that touches",
+            "pure function p() -> Int touches files { return 0; }",
+            "cannot also",
+        ),
+        // The methods pass, which the first version of this fix did not reach. Their presence is
+        // the argument for detecting the probe's death once rather than guarding refusals: five
+        // guards in the functions pass read as complete and these two still blamed helper.bx.
+        (
+            "method with an unknown type",
+            "class C { v: Int }\nfunction (self: C) m(x: NoSuchType) -> Int { return 0; }",
+            "unknown type",
+        ),
+        (
+            "method that is pure and touches",
+            "class C { v: Int }\npure function (self: C) m() -> Int touches files { return 0; }",
+            "cannot also",
+        ),
+    ];
+
+    for (what, decl, expected) in cases {
+        fs::write(scratch.join("prog.bx"), format!("use \"helper.bx\";\n{decl}\n")).unwrap();
+        for (which, binary) in
+            [("stage-0", PathBuf::from(env!("CARGO_BIN_EXE_burxt"))), ("stage-1", stage1.clone())]
+        {
+            let out = Command::new(&binary)
+                .arg("check")
+                .arg("prog.bx")
+                .current_dir(&scratch)
+                .output()
+                .expect("compiler");
+            let said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            // **The property, and it holds for both stages.** Whatever a compiler decides about
+            // the declaration in `prog.bx`, it may not answer by accusing `helper.bx`, which is
+            // valid and checks clean on its own.
+            assert!(
+                !said.contains("helper.bx"),
+                "{which} blamed helper.bx for a {what} in prog.bx. helper.bx is valid and checks \
+                 clean on its own, so this is the allocation probe having been abandoned by an \
+                 early return in the declaration pass:\n{said}"
+            );
+            // The exact message is asserted for stage-0 only, and NOT because stage-1 is exempt.
+            // Two independent stage-1 gaps were found by this test and are reported separately:
+            // it spells the duplicate refusal "this function is declared twice" where stage-0
+            // says "function `d` is defined twice", and it does not validate PARAMETER types at
+            // all — `function b(x: NoSuchType)` is accepted silently, where stage-0 refuses.
+            // Asserting stage-1's current output here would freeze both as expectations, and a
+            // stale limitation is worse than a stale claim because nobody re-tests it. Widen this
+            // to both stages when they agree; that is the check, not a comment.
+            if which == "stage-0" {
+                assert!(
+                    said.contains(expected),
+                    "{which} did not report the {what} in prog.bx:\n{said}"
+                );
+            }
+        }
+    }
+}
+

@@ -687,6 +687,12 @@ pub struct TypeChecker {
     /// region and answers yes, so the pass reaches the end of every body instead of
     /// stopping at the first allocation.
     probing: bool,
+    /// True while Pass 1 is collecting signatures, false once bodies are being checked.
+    /// Read off a finished PROBE to ask whether it died before it could learn anything.
+    declaring: bool,
+    /// A probe abandoned Pass 1, so `alloc_fns` is empty for reasons that have nothing to do
+    /// with what allocates. Every rule that consults the inference must stand down.
+    probe_truncated: bool,
     /// Who is being probed: `(receiver, name)`, receiver empty for a free function.
     probe_owner: RefCell<(String, String)>,
     /// What the probe found. `RefCell` because `has_region` is a query — it answers a
@@ -783,6 +789,8 @@ struct CallGraphFacts {
     grow_self: HashSet<(String, String)>,
     relay_params: HashSet<(String, usize)>,
     relay_methods: HashSet<(String, String, usize)>,
+    /// The inference is unusable: a Pass 1 refusal killed the probe before any body was read.
+    truncated: bool,
 }
 
 /// Where a returned value's storage came from, when it came from the caller.
@@ -917,6 +925,8 @@ impl TypeChecker {
             private_methods: HashSet::new(),
             current_receiver: None,
             probing: false,
+            declaring: false,
+            probe_truncated: false,
             probe_owner: RefCell::new((String::new(), String::new())),
             grow_params: HashSet::new(),
             grow_self: HashSet::new(),
@@ -985,6 +995,7 @@ impl TypeChecker {
         self.grow_self.extend(found.grow_self);
         self.relay_params.extend(found.relay_params);
         self.relay_methods.extend(found.relay_methods);
+        self.probe_truncated = found.truncated;
 
         let result = self.check_program_inner(prog);
         if let Err(message) = result {
@@ -1184,6 +1195,7 @@ impl TypeChecker {
         // functions, which no chain can exceed without repeating a name, and it is a
         // backstop rather than an expectation — real programs settle in two or three.
         let ceiling = prog.fns.len() + prog.methods.len() + 1;
+        let mut truncated = false;
         for _ in 0..ceiling {
             let mut probe = TypeChecker::new();
             probe.probing = true;
@@ -1193,7 +1205,17 @@ impl TypeChecker {
             probe.grow_self = grow_self.clone();
             probe.relay_params = relay_params.clone();
             probe.relay_methods = relay_methods.clone();
-            let _ = probe.check_program_inner(prog);
+            // **THE ONE PLACE THIS IS DETECTED, and it is deliberately not a list of checks.**
+            //
+            // `check_program_inner` has thirty-one refusal sites. Any of them firing during Pass 1
+            // abandons this probe before a single body is read, so nothing is inferred — and
+            // because this error is discarded, silently. Guarding the refusals would encode the
+            // rule once per site and leave the rest for the next person to trip; asking the
+            // finished probe whether it died while `declaring` catches all of them, including the
+            // ones nobody has written yet.
+            if probe.check_program_inner(prog).is_err() && probe.declaring {
+                truncated = true;
+            }
             let found_fns = probe.probe_fns.borrow().clone();
             let found_methods = probe.probe_methods.borrow().clone();
             let found_params = probe.probe_grow_params.borrow().clone();
@@ -1216,7 +1238,7 @@ impl TypeChecker {
                 break;
             }
         }
-        CallGraphFacts { fns, methods, grow_params, grow_self, relay_params, relay_methods }
+        CallGraphFacts { fns, methods, grow_params, grow_self, relay_params, relay_methods, truncated }
     }
 
     /// Does this function build its answer in the caller's region?
@@ -2904,6 +2926,7 @@ impl TypeChecker {
             .collect();
 
         // Pass 1: collect every signature, so order of definition never matters.
+        self.declaring = true;
         let mut externs = Vec::new();
         for e in &prog.externs {
             self.current_span.set(e.span);
@@ -2947,6 +2970,32 @@ impl TypeChecker {
         }
         for f in &prog.fns {
             self.current_span.set(f.span);
+            // **A refusal here abandons the allocation probe**, which runs this whole pass
+            // before a single body is read. That is not a reason to soften the refusal: it is why
+            // `probe_truncated` exists, and why the rule that CONSUMES the inference stands down
+            // instead. See the detection at `infer_allocates` and the stand-down below.
+            //
+            // The symptom, before that existed, was an error against a file the reader did not
+            // write. `main` is a reserved name, since a Burxt program is its top-level statements:
+            //
+            //     use "string.bx";
+            //     function main() -> Int { return 0; }
+            //
+            //     error: function `string_split` cannot return [String], because its storage
+            //     lives in a region and would not outlive it.
+            //      --> string.bx:246:48
+            //
+            // The reserved-name refusal was never shown — the false one REPLACED it. `string.bx`
+            // is valid, the reader never called `string_split`, and renaming `main` to anything
+            // else makes the whole thing vanish. Aimed, by construction, at the first name anyone
+            // arriving from another language types.
+            //
+            // Six triggers were found by testing — reserved name, defined twice, unknown type,
+            // `pure` + `touches`, and two more in the methods pass below — and the first fix
+            // guarded five of them here. That was the wrong shape twice over: it missed the
+            // methods pass, and it read as complete while twenty-six other refusal sites in this
+            // function could do the same thing. A trigger nobody has written is not a trigger that
+            // does not exist.
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
@@ -2992,7 +3041,11 @@ impl TypeChecker {
             // before a single body was read, so the probe found nothing and every function
             // that builds its own answer stayed refused — the inference silently did
             // nothing at all. The real pass applies it with the answer in hand.
-            if !self.probing && self.region_allocated(&f.ret) && !self.allocates_fn(&f.name) {
+            if !self.probing
+                && !self.probe_truncated
+                && self.region_allocated(&f.ret)
+                && !self.allocates_fn(&f.name)
+            {
                 return Err(format!(
                     "function `{}` cannot return {}, because its storage lives in a region \
                      and would not outlive it. Fill an array the caller owns, or \
@@ -3056,6 +3109,16 @@ impl TypeChecker {
         // Methods are namespaced by (receiver, name), so they never collide
         // with free functions and may be declared in any order.
         for m in all_methods.iter().copied() {
+            // **First line, as in the functions pass above, and for a reason that cost a wrong
+            // file in an error message.** `current_span` is sticky: it holds whatever was set
+            // last. This pass only set it inside the generic-receiver branch and for parameter
+            // types, so every other refusal here pointed wherever the FUNCTIONS pass had left it
+            // — the last function declared, in whichever file that was.
+            //
+            // `pure function C.m` cannot also `touches files` therefore arrived carrying
+            // `--> helper.bx:1:20`, a caret under an unrelated function in a file the reader did
+            // not write. The sentence was right and the place was somebody else's.
+            self.current_span.set(m.span);
             // A method on a GENERIC record is held back: its receiver has no layout until a
             // use says what the arguments are. One copy is registered per instantiation, in
             // the drain loop below, so `Stack<Int>` and `Stack<String>` get their own.
@@ -3201,6 +3264,9 @@ impl TypeChecker {
         }
 
         // Impls: satisfaction must be EXACT — every interface method present, with
+        // Pass 1 is over: every signature is registered and bodies come next.
+        self.declaring = false;
+
         // matching receiver form and types. A partial or mismatched impl names
         // the offending method.
         for im in &prog.impls {
