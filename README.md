@@ -76,9 +76,17 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 - **Composition-first OOP** — small interfaces, explicit `implement Trait for Type` conformance, static dispatch by default and runtime dispatch only where you write `dynamic`.
 - **Native, cross-platform by design** — one LLVM backend, many targets: desktop, mobile, and web (WebAssembly). The front end knows nothing about any platform, so reach is a configuration problem rather than a rewrite.
 
-## Status — 1.1.0
+## Status — 1.2.0
 
-**Released.** 1.1 added TCP sockets (`lib/net.bx`), processes (`os_fork`), and the one builtin that
+**Released.** 1.2 is the first Burxt a package can build on. `use "std/…"` lets a dependency reach
+the standard library, which sounds small and is the whole difference between a language you can read
+and one you can build on: before it, a library written outside this repository could not use `lib/`
+at all, because `use` resolved relative to the importing file. Two projects moved out of `lib/` to
+prove it — [BMX](https://github.com/andrecorugda/bmx), the document format, and
+[star-burxt](https://github.com/andrecorugda/star-burxt), the front-end framework — and each is now
+an ordinary dependency with its own repository, CI and version.
+
+1.1 added TCP sockets (`lib/net.bx`), processes (`os_fork`), and the one builtin that
 turned out to be the whole of the network wall — `c_bytes_to`, the mirror of `c_bytes_at`. See
 [`spec/1.1/M16-NETWORK.md`](spec/1.1/M16-NETWORK.md) for what the wall actually was.
 

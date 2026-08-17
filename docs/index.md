@@ -262,10 +262,13 @@ The work you stop doing is checking for the mistakes on this page.
 </div>
 
 <p style="font-size:14px; margin-top:2.5rem;">
-<strong>Burxt 1.1.0 is released.</strong> You can write a program, test it, debug it, depend on
-other people's code, serve TCP and fork workers, and ship it. The ecosystem is new; there are no
-threads, no TLS and no DNS — <a href="{{ site.baseurl }}/limitations.html">every gap is named, with
-its reason</a>.
+<strong>Burxt 1.2.0 is released.</strong> This is the first Burxt a package can build on: a
+dependency can now reach the standard library with <code>use "std/…"</code>, which is what lets a
+library or a framework live in its own repository instead of inside the compiler. Two already do —
+<a href="https://bmx.burxt-lang.org/">BMX</a> and
+<a href="https://star.burxt-lang.org/">star-burxt</a>. You can still write a program, test it, debug
+it, serve TCP and fork workers, and ship it. There are no threads, no TLS and no DNS —
+<a href="{{ site.baseurl }}/limitations.html">every gap is named, with its reason</a>.
 </p>
 
 </div>
