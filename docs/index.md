@@ -59,13 +59,14 @@ declare. And <code>balance</code> cannot go negative: not <em>should not</em>, <
 one, and nothing outside the class may name <code>balance</code> in a literal to get around either.
 You can confirm all of that from the declarations, without reading a body.</p>
 
+<!-- Six buttons is a choice nobody makes. Three of them — what it does not do, compared, what it
+     promises — are for somebody deciding whether to adopt this, and they now have their own
+     `About` group in the sidebar rather than competing with "how do I start". -->
 <div class="cta">
-  <a class="btn" href="{{ site.baseurl }}/refused/">See what it refuses</a>
-  <a class="btn ghost" href="{{ site.baseurl }}/guide/">Read the guide</a>
+  <a class="btn" href="{{ site.baseurl }}/guide/">Read the guide</a>
+  <a class="btn ghost" href="{{ site.baseurl }}/how-do-i.html">How do I…?</a>
   <a class="btn ghost" href="{{ site.baseurl }}/install/">Install</a>
-  <a class="btn ghost" href="{{ site.baseurl }}/limitations.html">What it does not do</a>
-  <a class="btn ghost" href="{{ site.baseurl }}/comparison.html">Compared</a>
-  <a class="btn ghost" href="{{ site.baseurl }}/compatibility.html">What it promises</a>
+  <a class="btn ghost" href="{{ site.baseurl }}/refused/">See what it refuses</a>
 </div>
 
 </div>

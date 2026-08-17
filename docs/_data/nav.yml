@@ -3,6 +3,90 @@
 # Every entry is read out of the page it links to, so a renamed heading moves its own
 # sidebar entry and cannot leave a dead anchor behind. A test regenerates this and diffs.
 
+- title: Start here
+  url: /install/
+  items:
+    - name: "Install"
+      url: /install/
+      steps:
+        - name: "One line, on any of the four"
+          id: one-line-on-any-of-the-four
+        - name: "Or pick your own"
+          id: or-pick-your-own
+        - name: "What the tarball needs from your Linux"
+          id: what-the-tarball-needs-from-your-linux
+        - name: "Windows"
+          id: windows
+        - name: "What it needs from your machine"
+          id: what-it-needs-from-your-machine
+        - name: "What the programs you write need"
+          id: what-the-programs-you-write-need
+        - name: "The sizes, measured"
+          id: the-sizes-measured
+        - name: "Without installing anything"
+          id: without-installing-anything
+        - name: "Building from source"
+          id: building-from-source
+        - name: "Editor support"
+          id: editor-support
+    - name: "How do I…?"
+      url: /how-do-i.html
+      steps:
+        - name: "…print something"
+          id: print-something
+        - name: "…read a file that might not be there"
+          id: read-a-file-that-might-not-be-there
+        - name: "…take an argument from the command line"
+          id: take-an-argument-from-the-command-line
+        - name: "…handle something that can fail"
+          id: handle-something-that-can-fail
+        - name: "…work with money without it drifting"
+          id: work-with-money-without-it-drifting
+        - name: "…divide two whole numbers"
+          id: divide-two-whole-numbers
+        - name: "…loop over a list"
+          id: loop-over-a-list
+        - name: "…group data together"
+          id: group-data-together
+        - name: "…stop a function being called with nonsense"
+          id: stop-a-function-being-called-with-nonsense
+        - name: "…say what a function is allowed to touch"
+          id: say-what-a-function-is-allowed-to-touch
+        - name: "…split a string"
+          id: split-a-string
+        - name: "…see everything a module offers"
+          id: see-everything-a-module-offers
+        - name: "…find out why it refused"
+          id: find-out-why-it-refused
+        - name: "…learn it properly rather than looking things up"
+          id: learn-it-properly-rather-than-looking-things-up
+    - name: "What it refuses"
+      url: /refused/
+      steps:
+        - name: "A rate added to a price"
+          id: a-rate-added-to-a-price
+        - name: "Money times a rate, unrounded"
+          id: money-times-a-rate-unrounded
+        - name: "A total past what an Int holds"
+          id: a-total-past-what-an-int-holds
+        - name: "The constructor skipped"
+          id: the-constructor-skipped
+        - name: "A case added after the code was written"
+          id: a-case-added-after-the-code-was-written
+        - name: "A precondition passed a value it forbids"
+          id: a-precondition-passed-a-value-it-forbids
+        - name: "Memory returned after it was freed"
+          id: memory-returned-after-it-was-freed
+        - name: "Text treated as money"
+          id: text-treated-as-money
+        - name: "An interface gained a method"
+          id: an-interface-gained-a-method
+        - name: "A count compared with a price"
+          id: a-count-compared-with-a-price
+        - name: "What is not here"
+          id: what-is-not-here
+    - name: "Examples"
+      url: /examples/
 - title: The guide
   url: /guide/
   items:
@@ -438,3 +522,47 @@
           id: types
         - name: "Functions"
           id: functions
+- title: About
+  url: /limitations.html
+  items:
+    - name: "What it does not do"
+      url: /limitations.html
+      steps:
+        - name: "Decisions — not coming"
+          id: decisions--not-coming
+        - name: "Not yet — real gaps"
+          id: not-yet--real-gaps
+        - name: "How to read this page"
+          id: how-to-read-this-page
+    - name: "Compared with others"
+      url: /comparison.html
+      steps:
+        - name: "Numbers and money"
+          id: numbers-and-money
+        - name: "Correctness"
+          id: correctness
+        - name: "Memory and runtime"
+          id: memory-and-runtime
+        - name: "Building and shipping"
+          id: building-and-shipping
+        - name: "What Burxt does not have"
+          id: what-burxt-does-not-have
+        - name: "The four rows that exist nowhere else"
+          id: the-four-rows-that-exist-nowhere-else
+    - name: "What it promises"
+      url: /compatibility.html
+      steps:
+        - name: "The three numbers"
+          id: the-three-numbers
+        - name: "The command"
+          id: the-command
+        - name: "What the command cannot do, stated here rather than in a footnote"
+          id: what-the-command-cannot-do-stated-here-rather-than-in-a-footnote
+        - name: "What is covered"
+          id: what-is-covered
+        - name: "What is not"
+          id: what-is-not
+        - name: "The honest part"
+          id: the-honest-part
+    - name: "The design log"
+      url: /log/01-the-language-runs.html

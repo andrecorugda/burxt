@@ -1,6 +1,6 @@
 # The Burxt guide
 
-Twelve pages, in reading order. Each one explains a decision and the reasoning behind it —
+Thirteen chapters, in reading order. Each one explains a decision and the reasoning behind it —
 what the language refuses is usually the interesting part.
 
 | | Page | |

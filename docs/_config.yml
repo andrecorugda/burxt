@@ -40,8 +40,14 @@ burxt_series: "1.1"
 # The SPECS stay out, and that part of the original reasoning still holds — they are a working record
 # for people reading the repository, and `spec/1.0/` in particular is an archive rather than
 # documentation. `docs/comparison.md` and `docs/limitations.md` are what a visitor should meet.
+# **A `.md` in this tree that Jekyll does not process is not a page — it is a 404 with a URL.**
+# `README.md` alone matches only the top level, so the two nested ones published as 404s. They are
+# for somebody reading the repository, not the site, so the honest fix is to exclude them rather
+# than give them front matter: nothing should look like a page that is not one.
 exclude:
   - README.md
+  - guide/README.md
+  - 1.0/guide/README.md
 
 # Every page in guide/ gets the same layout without twelve copies of the same front matter.
 #
