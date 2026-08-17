@@ -626,7 +626,28 @@ fn stdlib_roots() -> Vec<std::path::PathBuf> {
         }
     }
 
-    roots.push(std::path::PathBuf::from("/usr/local/lib/burxt"));
+    // `/usr/local/lib/burxt` WAS a third root and has been removed, because it is redundant when
+    // right and wrong when it fires.
+    //
+    // `scripts/install.sh` puts the binary at `$PREFIX/bin/burxt` and the library at
+    // `$PREFIX/lib/burxt`, so for a standard install the exe-relative root above ALREADY resolves to
+    // `/usr/local/lib/burxt`. The hardcoded root can therefore only be reached when the exe-relative
+    // one missed — which means the binary is somewhere else, which means that library belongs to a
+    // DIFFERENT installation.
+    //
+    // It was live: a compiler built in this repository has no `target/lib/burxt`, so on any machine
+    // with Burxt installed it fell through and compiled against the INSTALLED library. That is the
+    // version skew we chased on 2026-08-17 and thought we had closed by deleting
+    // `CARGO_MANIFEST_DIR` — it came back through a different door.
+    //
+    // It also contradicted the reason `std/` refuses a silent fallback, stated at the resolution
+    // arm: *a fallback would make the same program resolve differently on two machines*. A root list
+    // tried in order is that fallback, one layer down. And it undercut the argument for not
+    // version-pinning the standard library — *"the compiler and library ship in one tarball, so
+    // `burxt --version` already pins it"* — which is only true while a compiler uses its OWN library.
+    //
+    // What remains: an explicit `BURXT_LIB`, and the library that shipped beside this binary. A
+    // missing library is now a named refusal rather than silently somebody else's.
     roots
 }
 

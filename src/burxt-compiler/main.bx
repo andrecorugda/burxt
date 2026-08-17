@@ -124,7 +124,6 @@ external function getenv(name: String) -> CPointer touches input;
 //
 //   1. BURXT_LIB
 //   2. `../lib/burxt` beside THIS BINARY, from `argument(0)`
-//   3. /usr/local/lib/burxt
 //
 // **This function used to test `manifest_readable("lib")`, and that was worse than a miss.** A
 // relative path means `./lib`, so any directory named `lib` beside the user became the standard
@@ -180,8 +179,15 @@ function std_roots() -> String touches input, files {
             }
         }
     }
-    if len(roots) > 0 { roots = roots + "\n"; }
-    return roots + "/usr/local/lib/burxt";
+    // `/usr/local/lib/burxt` WAS a third root and has been removed, because it is redundant when
+    // right and wrong when it fires. `scripts/install.sh` puts the binary at `$PREFIX/bin/burxt` and
+    // the library at `$PREFIX/lib/burxt`, so for a standard install the exe-relative root above
+    // ALREADY resolves to it. The hardcoded one is therefore only reachable when exe-relative
+    // missed — meaning the binary is elsewhere, meaning that library is a DIFFERENT installation's.
+    //
+    // It was live: a compiler built in the repository has no `target/lib/burxt`, so on any machine
+    // with Burxt installed it fell through and compiled against the INSTALLED library.
+    return roots;
 }
 
 // The index of the last `/`, or -1. Written here rather than imported: the compiler modules do not
