@@ -28,6 +28,7 @@ of thirty "plans" cannot tell which describe a language that exists.
 | [`N9-VECTORS-EXACTLY.md`](N9-VECTORS-EXACTLY.md) | rows 1–5 shipped; 6–9 are open |
 | [`A8.0-RECORD-UPDATE.md`](A8.0-RECORD-UPDATE.md) | specified, **undecided** — Andre's call |
 | [`M16-NETWORK.md`](1.1/M16-NETWORK.md) | **sockets and processes, DONE** after 1.0.0 — and the wall that was one builtin |
+| [`M17-HANDLES.md`](M17-HANDLES.md) | **a value a host can hold between calls** — specified 2026-08-18, not built. The memory half turned out already solved; what is open is reclamation |
 | [`ROADMAP-1.2.md`](ROADMAP-1.2.md) | **THE PLAN OF RECORD for 1.2–1.5** — the road to the playground. Four minors, not one |
 | [`ROADMAP-2.0.md`](ROADMAP-2.0.md) · [`M15-WEB.md`](M15-WEB.md) | hosts and the web half — **now 2.0**, renamed once 1.1.0 shipped without them |
 
