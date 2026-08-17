@@ -3400,9 +3400,12 @@ fn every_runtime_declaration_is_listed_as_such() {
 /// Liquid syntax error (line 13): Variable '{{ x` is an error, not text.
 /// ```
 ///
-/// `docs/reference/bmx.md` is GENERATED from `lib/bmx.bx`'s header, which documents BMX's slot
-/// syntax and therefore contains a literal `{{`. Jekyll read it as a variable and the whole site
-/// build died — on a page nobody wrote by hand, from a library header that is correct.
+/// `docs/reference/` is GENERATED from library headers, and a header is free to document a
+/// brace. `lib/bmx.bx`'s did — BMX's slot syntax is a literal `{{` — Jekyll read it as a
+/// variable, and the whole site build died on a page nobody wrote by hand, from a library header
+/// that was correct. That module has since moved to its own repository, which changes nothing
+/// here: the guard is on the emitter, so the next header to mention a brace is covered without
+/// anyone remembering this happened.
 ///
 /// A guard that covers only the syntax its author was last burned by is a whitelist wearing a
 /// test's clothes. So this checks two properties, both derived from the files:
@@ -3443,8 +3446,8 @@ fn no_page_hands_jekyll_a_liquid_delimiter_it_did_not_mean() {
     assert!(
         unwrapped.is_empty(),
         "these GENERATED reference pages are not wrapped in `{{% raw %}}`: {:?}\n\
-         They are built from library headers, and a header is free to document a brace — \
-         `lib/bmx.bx` documents `{{{{` because that is BMX's slot syntax. Wrap them in \
+         They are built from library headers, and a header is free to document a brace. \
+         Wrap them in \
          scripts/site-reference.py, never in the page.",
         unwrapped
     );
@@ -3541,6 +3544,48 @@ fn every_library_module_has_a_reference_page() {
          Add them to MODULES in scripts/site-reference.py and regenerate. A module with no page is \
          a module a reader concludes does not exist.",
         missing
+    );
+
+    // **And the other direction, which this test asked for years and never answered.**
+    //
+    // `scripts/site-reference.py` WRITES pages and never removes one, so a module leaving `lib/`
+    // strands its page: it documents functions that are gone, and every `[Source]` link on it
+    // points at a line in a file that no longer exists. `bmx.bx` moved to its own repository and
+    // left exactly that behind — twenty-nine pages on disk from a run that generated twenty-eight.
+    //
+    // Nothing caught it. `the_reference_is_not_stale` compares the committed pages against a fresh
+    // generation, and an ORPHAN is not a difference in any page it generates — it is a file the
+    // generator has no opinion about. The sweep above is module → page; this is page → module, and
+    // the message above already said why it matters in the other direction: *a module with no page
+    // is a module a reader concludes does not exist.* A page with no module is worse — the reader
+    // concludes something exists that does not, and follows a dead link to be sure.
+    let mut orphans = Vec::new();
+    for entry in fs::read_dir(root.join("docs/reference")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let name = path.file_stem().unwrap().to_str().unwrap().to_string();
+        // Three pages are legitimately not a module's. `index.md` is the contents page;
+        // `builtins.md` and `cli.md` are generated from the COMPILER — `render_builtins` and
+        // `render_cli` in `scripts/site-reference.py` — so they document things that were never in
+        // `lib/` and never will be. Named individually rather than pattern-matched, because a list
+        // of three is checkable and a pattern would quietly exempt the next orphan too.
+        if name == "index" || name == "builtins" || name == "cli" {
+            continue;
+        }
+        if !root.join("lib").join(format!("{}.bx", name)).exists() {
+            orphans.push(name);
+        }
+    }
+    orphans.sort();
+    assert!(
+        orphans.is_empty(),
+        "these pages in docs/reference/ document a module that is not in lib/: {:?}\n\
+         The generator writes pages and never deletes one, so a module that moved or was removed \
+         leaves its page behind — documenting functions that are gone, under `[Source]` links that \
+         404. Delete the page, and drop the name from MODULES in scripts/site-reference.py.",
+        orphans
     );
 }
 
@@ -4299,75 +4344,14 @@ fn modules_compile_as_one_program_and_report_per_file() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
-/// `lib/bmx.bx` conforms to the BMX format, judged by the format's OWN suite.
-///
-/// The suite is data — `input → expected AST` files vendored in `tests/bmx-conformance/` — and
-/// it is run by the format's thirty-line Python harness rather than by anything written here.
-/// That is deliberate and it is the point: **a format whose conformance suite can only be run
-/// by its reference implementation is not a format, it is that implementation's test suite.**
-/// Rewriting the harness in Rust would pass just as often and would prove something else.
-///
-/// It also catches the drift a hand-written test cannot see. On its first run against a real
-/// parser it found that three cases had been written to three different readings of what a
-/// slot's `offset` means, and the spec sentence they came from was genuinely ambiguous — in a
-/// format whose entire claim is one unambiguous reading.
-#[test]
-fn the_bmx_implementation_passes_the_formats_own_conformance_suite() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let scratch = scratch_dir("bmx-conformance");
-    fs::create_dir_all(&scratch).unwrap();
+// BMX's conformance suite left with the implementation it judged.
+//
+// It asserted that `lib/bmx.bx` passed the format's OWN suite — `input → expected AST` data
+// vendored from the format's repository — and that the vendored copy had not shrunk. Both moved to
+// github.com/andrecorugda/bmx, where the suite is not a vendored copy of anything and the
+// implementation sits beside it as `burxt/bmx.bx`. Running it here would have meant re-vendoring a
+// corpus to judge a file this repository no longer contains.
 
-    let parser = scratch.join("bmx-parse");
-    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
-        .arg("build")
-        .arg(root.join("examples/bmx/parse.bx"))
-        .arg("-o")
-        .arg(&parser)
-        .output()
-        .expect("burxt");
-    assert!(
-        built.status.success(),
-        "examples/bmx/parse.bx does not build:\n{}",
-        String::from_utf8_lossy(&built.stdout)
-    );
-
-    let harness = root.join("tests/bmx-conformance/harness.py");
-    let out = match Command::new("python3").arg(&harness).arg(&parser).output() {
-        Ok(out) => out,
-        Err(e) => {
-            eprintln!("skipping: python3 is not available ({})", e);
-            return;
-        }
-    };
-    let said = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(out.status.success(), "the BMX conformance suite failed:\n{}", said);
-    // A harness that finds no cases would "pass" silently, and a harness that silently found
-    // HALF of them would too — the shape of every ratchet failure this project has already had.
-    // So the reported count is checked against the documents actually on disk rather than
-    // against a number written here, which would go stale the first time a case is added.
-    let vendored = ["cases", "errors"]
-        .iter()
-        .map(|which| {
-            fs::read_dir(root.join("tests/bmx-conformance").join(which))
-                .unwrap()
-                .filter(|e| {
-                    e.as_ref().unwrap().path().extension().and_then(|x| x.to_str()) == Some("bmx")
-                })
-                .count()
-        })
-        .sum::<usize>();
-    assert!(vendored >= 39, "the vendored BMX suite has shrunk to {} documents", vendored);
-    assert!(
-        said.contains(&format!("{} cases", vendored)),
-        "the harness ran a different number of cases than the {} vendored documents:\n{}",
-        vendored,
-        said
-    );
-}
 
 /// Every `lib/*.bx` imports its siblings by BARE FILENAME, never by a path.
 ///
@@ -4563,155 +4547,18 @@ fn a_strangers_lib_directory_is_not_the_standard_library() {
     }
 }
 
-/// BMX level 2: a document becomes a view the COMPILER checks.
-///
-/// This is the whole reason the format was worth defining, and it is the one thing a level-1
-/// host cannot copy. A template is the last place in most programs where nothing is checked —
-/// the slot names a field that may not exist, holds a type it cannot state, and escapes by
-/// convention. Below, each of those is a build error.
-///
-/// **None of it is implemented by the generator.** It emits ordinary Burxt and the language does
-/// the rest, which is `BOUNDARY.md` paying off: the format stays dumb enough for anyone to
-/// implement, and the checking lives where it can actually be enforced.
-#[test]
-fn the_bmx_generator_hands_the_compiler_a_view_it_can_check() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let scratch = scratch_dir("bmx-generate");
-    fs::create_dir_all(&scratch).unwrap();
-
-    let generator = scratch.join("bmx-generate");
-    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
-        .arg("build")
-        .arg(root.join("examples/bmx/generate.bx"))
-        .arg("-o")
-        .arg(&generator)
-        .output()
-        .expect("burxt");
-    assert!(
-        built.status.success(),
-        "examples/bmx/generate.bx does not build:\n{}",
-        String::from_utf8_lossy(&built.stdout)
-    );
-
-    // `use` is textual, so the program names its types FIRST and the generated view second —
-    // the view brings `lib/html.bx` with it.
-    fs::write(
-        scratch.join("types.bx"),
-        "class Order { reference: String, customer: String, total: Decimal<2, RoundHalfEven>, \
-         amount: Decimal<2>, rate: Decimal<2> }\n\n\
-         pure function money2(value: Decimal<2>) -> String { return to_string(value); }\n",
-    )
-    .unwrap();
-    // `lib/…` in the generated file resolves relative to it.
-    #[cfg(unix)]
-    let _ = std::os::unix::fs::symlink(root.join("lib"), scratch.join("lib"));
-
-    let generate = |document: &str, body: &str, name: &str| -> (bool, String) {
-        fs::write(scratch.join(document), body).unwrap();
-        let out = Command::new(&generator)
-            .arg(scratch.join(document))
-            .arg(name)
-            .arg("order: Order")
-            .current_dir(&scratch)
-            .output()
-            .expect("generate");
-        (
-            out.status.success(),
-            if out.status.success() {
-                String::from_utf8_lossy(&out.stdout).into_owned()
-            } else {
-                String::from_utf8_lossy(&out.stderr).into_owned()
-            },
-        )
-    };
-
-    let compile = |view: &str, program: &str| -> (bool, String) {
-        fs::write(scratch.join("view.bx"), view).unwrap();
-        fs::write(scratch.join("app.bx"), program).unwrap();
-        let out = burxt("run", &scratch.join("app.bx"), &scratch);
-        (
-            out.status.success(),
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-        )
-    };
-
-    // 1. A correct document renders, the slot value is escaped, and the money keeps its scale.
-    let (ok, view) = generate(
-        "receipt.bmx",
-        "# Receipt {{ order.reference }}\n\nThanks, **{{ order.customer }}** — {{ to_string(order.total) }}.\n",
-        "receipt_view",
-    );
-    assert!(ok, "generating a valid document failed:\n{}", view);
-    let (ran, said) = compile(
-        &view,
-        "use \"types.bx\";\nuse \"view.bx\";\n\
-         let o: Order = Order { reference: \"R-1\", customer: \"Tom & <Co>\", total: 59.97, \
-         amount: 1.00, rate: 1.00 };\nprint(html_render(receipt_view(o)));\n",
-    );
-    assert!(ran, "the generated view did not compile and run:\n{}", said);
-    assert!(
-        said.contains("<h1>Receipt R-1</h1>") && said.contains("Tom &amp; &lt;Co&gt;")
-            && said.contains("59.97"),
-        "the rendered page was not what the document said:\n{}",
-        said
-    );
-
-    // 2. A slot naming a field that does not exist. THE case: in every other template language
-    //    this renders an empty string and ships.
-    let (ok, view) = generate("typo.bmx", "Hi {{ order.custmer }}.\n", "typo_view");
-    assert!(ok, "{}", view);
-    let (ran, said) = compile(&view, "use \"types.bx\";\nuse \"view.bx\";\n");
-    assert!(!ran, "a slot naming a missing field compiled:\n{}", said);
-    assert!(
-        said.contains("has no field named `custmer`"),
-        "the error did not name the field the document got wrong:\n{}",
-        said
-    );
-
-    // 3. A slot holding something that is not a String. The conversion has to be written in the
-    //    DOCUMENT, where a reviewer sees it — `html_text` takes a String and `to_string` of a
-    //    String is refused, so there is no way to make this implicit.
-    let (ok, view) = generate("raw.bmx", "Total: {{ order.total }}\n", "raw_view");
-    assert!(ok, "{}", view);
-    let (ran, said) = compile(&view, "use \"types.bx\";\nuse \"view.bx\";\n");
-    assert!(!ran, "a Decimal in a String slot compiled:\n{}", said);
-    assert!(
-        said.contains("must be String"),
-        "the error did not say the slot's type was wrong:\n{}",
-        said
-    );
-
-    // 4. Money that would silently re-round, inside a view. This is the thesis reaching the
-    //    template: the exact product has four places and reaching two means rounding, so the
-    //    view is refused until the document says how.
-    let (ok, view) = generate(
-        "money.bmx",
-        "Due: {{ money2(order.amount * order.rate) }}\n",
-        "money_view",
-    );
-    assert!(ok, "{}", view);
-    let (ran, said) = compile(&view, "use \"types.bx\";\nuse \"view.bx\";\n");
-    assert!(!ran, "a view re-rounded money silently:\n{}", said);
-    assert!(
-        said.contains("means rounding it"),
-        "the refusal was not the rounding rule:\n{}",
-        said
-    );
-
-    // 5. A dangerous link target is refused by the GENERATOR, before any page exists. A
-    //    document's targets are static text, so this never needs to reach a render.
-    let (ok, said) = generate("evil.bmx", "[click](javascript:steal)\n", "evil_view");
-    assert!(!ok, "a javascript: target was generated:\n{}", said);
-    assert!(
-        said.starts_with("BMX-G001"),
-        "the generator's refusal did not carry its code:\n{}",
-        said
-    );
-}
+// BMX level 2 left with the generator it tested, and it is the one worth naming.
+//
+// It asserted the format's whole reason for existing: a document becomes a `pure function -> Html`
+// whose slots the COMPILER checks, so a missing field, a wrong type and silently re-rounded money
+// are all compile errors, and a `javascript:` target never reaches a page. Five cases, the
+// accepting one first — a generator that refused everything would pass every refusal.
+//
+// It is `burxt/test.py` in github.com/andrecorugda/bmx now, ported rather than filed, and it runs
+// in that repository's CI against a Burxt built from source. Moving it found a defect this version
+// could not: the generator emitted `use "lib/html.bx"` into every view, which resolved relative to
+// wherever the view was written — so it only worked because THIS test arranged a `lib/` symlink
+// beside the output. It emits `use "std/html.bx"` now.
 
 /// The standard library compiles, and does what it says. Written in Burxt from the same
 /// builtins any program has — so this test is really asking whether `lib/` is *usable*,
@@ -4729,7 +4576,7 @@ fn the_standard_library_compiles_and_works() {
     // Three modules of twenty-four, and the name of this test claims all of them. Widening it to
     // a glob is its own change; `html.bx` is here because `spec/M15-WEB.md:295` names this test
     // as W0's bar.
-    for module in ["string.bx", "files.bx", "os.bx", "html.bx", "cgi.bx", "bmx.bx"] {
+    for module in ["string.bx", "files.bx", "os.bx", "html.bx", "cgi.bx"] {
         let out = burxt("check", &root.join("lib").join(module), &scratch);
         assert!(
             out.status.success(),
@@ -9130,15 +8977,6 @@ fn the_repository_layout_is_declared() {
         ("tests/panic", "programs that must compile and then die at run time"),
         ("tests/review", "`old.bx`/`new.bx`/`.expect` triples for `burxt review`"),
         (
-            "tests/bmx-conformance",
-            "the BMX format's own conformance suite, VENDORED. Not ours and not organised by \
-             verdict: `input → expected AST` data files plus the format's own Python harness, \
-             copied from the format's repository at a stated version. It is not `tests/support`, \
-             which holds harness programs we wrote, and not `tests/pass`, which holds fixtures \
-             judged by our rules — the whole point is that this corpus is judged by somebody \
-             else's",
-        ),
-        (
             "tests/support",
             "Burxt programs a runner invariant DRIVES rather than compares — a harness whose \
              answer depends on the arguments it is given, so it has no checked-in `.stdout`",
@@ -9168,13 +9006,6 @@ fn the_repository_layout_is_declared() {
          compile time, two stopped at run time. See its README"),
         ("examples/negative", "the same, for the site's negative examples"),
         ("examples/mcp", "the MCP manifest example and its fixtures"),
-        (
-            "examples/bmx",
-            "BMX's two programs. `parse.bx` prints a document's AST as JSON — the other half of \
-             the format's conformance harness, and the suite being data is why it can be this \
-             small. `generate.bx` is level 2: a document becomes a `pure function -> Html` whose \
-             slots the COMPILER checks",
-        ),
         ("examples/pos", "the point-of-sale example, in Burxt"),
         ("examples/pos-php", "the same program in PHP, for the comparison"),
         ("examples/pos-python", "the same program in Python"),

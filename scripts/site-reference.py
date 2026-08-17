@@ -86,7 +86,7 @@ GH = "https://github.com/andrecorugda/burxt/blob/main"
 # `lib/` itself, so adding a module to the library and forgetting the site is a failing test.
 MODULES = [
     "option", "result", "decimal", "string", "array", "set", "map", "math", "fn",
-    "json", "csv", "html", "cgi", "bmx", "encoding", "hash", "secure", "vector",
+    "json", "csv", "html", "cgi", "encoding", "hash", "secure", "vector",
     "files", "path", "os", "net", "time", "random", "log", "test",
 ]
 
@@ -1121,8 +1121,6 @@ def render_module(mod):
     # This page is generated from the source and answers "what functions are there"; it cannot
     # answer "how do I write a document", and a reader who lands here looking for the second
     # should not have to find out that it lives somewhere else.
-    if mod["name"] in HOME:
-        out.append("> **%s** — %s\n" % (HOME[mod["name"]][1], HOME[mod["name"]][0]))
     if mod["blurb"]:
         out.append(mod["blurb"] + "\n")
 
@@ -1159,13 +1157,6 @@ def render_module(mod):
     return "\n".join(out) + "\n"
 
 
-# Modules that implement a format documented on its own site. The reference page is generated from
-# the source and says what the functions are; the format's own site says how to write a document in
-# it, and a reader who arrives here wanting the second should be sent rather than left.
-HOME = {
-    "bmx": ("BMX is a format with its own specification, guide and conformance suite.",
-            "[Read the BMX documentation at bmx.burxt-lang.org](https://bmx.burxt-lang.org/)"),
-}
 
 MODULE_TITLES = {}
 

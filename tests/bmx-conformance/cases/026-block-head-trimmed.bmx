@@ -1,3 +1,0 @@
-:::card    title="x"   
-Body.
-:::

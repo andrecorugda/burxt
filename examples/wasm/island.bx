@@ -4,7 +4,7 @@
 //
 // **This file is not special.** It is an ordinary `pure function` returning a `String`, and
 // that is the entire point: an island is not a new kind of Burxt program, it is a Burxt
-// program with a different `--target`. What `lib/bmx.bx`'s generator emits from a `.bmx`
+// program with a different `--target`. What BMX's generator emits from a `.bmx`
 // document is exactly this shape, so a generated view needs no change to become an island.
 //
 // The four-line wrapper at the bottom is the only machinery involved, and it earns its place:

@@ -25,7 +25,8 @@ crossing**, and the host cannot opt out because there is no raw path to opt into
 property that makes this worth having rather than a curiosity.
 
 An island is not a new kind of Burxt program. It is a Burxt program with a different `--target`.
-What `lib/bmx.bx`'s generator emits from a `.bmx` document is already this shape.
+What BMX's generator emits from a `.bmx` document is already this shape — see
+[bmx.burxt-lang.org](https://bmx.burxt-lang.org/), where the implementation lives now.
 
 ## The host is seven to eleven symbols, and two of them do real work
 

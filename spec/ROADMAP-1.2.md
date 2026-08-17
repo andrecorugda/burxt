@@ -29,8 +29,16 @@ a patch.**
 
 Neither is any of it a **major**, and the same document is equally precise: a major is *"a program
 that compiled may stop compiling, or may compile and mean something different."* Nothing here
-breaks a program. `burxt effects` is a new verb; `os_limit_cpu` is a new function; `lib/bmx.bx` is
-a new module. A program written against 1.1 compiles unchanged against every one of them.
+breaks a program. `burxt effects` is a new verb; `os_limit_cpu` is a new function; `lib/html.bx`
+and `lib/cgi.bx` are new modules. A program written against 1.1 compiles unchanged against every
+one of them.
+
+**One thing here IS a major and it is worth stating rather than discovering.** `lib/bmx.bx`
+existed on `develop` and has moved to BMX's own repository — but it was never in a release, so
+removing it breaks no published program and costs nothing. That was true only while it stayed
+unreleased: `docs/compatibility.md:20` makes removing a shipped `lib/` module a major, so a tag
+cut before the move would have made the move itself a breaking change. It is why the release was
+held until the migration finished.
 
 So: **four minors, shipped separately** — Andre's call, and the right one. Each is large enough to
 be understood on its own, and bundling four unrelated capabilities into one number tells a reader
@@ -136,8 +144,8 @@ Being built in a parallel session; listed so the release knows what it contains.
 |---|---|---|
 | ☐ | P3a | `lib/html.bx` — §W0's typed tree. Written, uncommitted |
 | ☐ | P3b | `lib/cgi.bx` — request and response. Written, uncommitted |
-| ☐ | P3c | `lib/bmx.bx` + the conformance suite. Written, uncommitted |
-| ☐ | P3d | BMX's own repo question — **the reference parser is `lib/bmx.bx` today, which is the decision by default if nobody rules.** Andre's |
+| ☑ | P3c | BMX's implementation + the conformance suite. **Not in `lib/` — they are `burxt/bmx.bx` and `tests/` in github.com/andrecorugda/bmx**, reached as a package: `dependency bmx <repo> <commit>` and `use "bmx/burxt/bmx.bx"` |
+| ☑ | P3d | Ruled, and not by default. BMX has its own repository, its own version — 0.2 against Burxt's 1.1 — and its own CI, which runs the format's suite with no Burxt installed **and** the Burxt implementation against a compiler built from source. A module in somebody else's standard library has that language's version and no say in its own; adding `Fenced` to the AST was a minor for the format and a major for anyone matching on it, and there was nowhere to record the difference |
 
 ### P3b · Exact money, all the way to the characters
 
