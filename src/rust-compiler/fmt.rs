@@ -198,38 +198,24 @@ pub fn format(src: &str) -> Result<String, Diagnostic> {
             continue;
         }
 
-        // **A continuation line keeps the indentation it was written with, and that is a design
-        // decision rather than a gap.** Where a wrapped expression lines up is a judgement about
-        // what belongs under what:
+        // **A continuation is indented TWO levels, always.** One rule, no judgement, and the
+        // second level is not decoration — at one level a continuation is indistinguishable from the
+        // block body it precedes:
         //
-        //     let complained: Int = self.complain_at(src, item.token,
-        //         "`pure function (mutable self: "
-        //         + substring(src, receiver.start, receiver.length) + ") "
+        //     function f(a: Int,
+        //         b: Int) -> Int {     <- continuation
+        //         return a + b;        <- body, same column
         //
-        // An author aligned that to the call it continues. No mechanical rule reproduces the
-        // intent, and a formatter that guesses would move 30 lines in `lib/json.bx` alone — every
-        // one of them to somewhere less readable, measured against a corpus that had been aligned
-        // by hand. So this sets BLOCK structure, which has one right answer, and leaves alignment
-        // to whoever wrote it, which does not.
-        //
-        // That is also what keeps the tool adoptable: a formatter is only run by people who trust
-        // it not to argue with them, and the first time it un-aligns a table somebody turns it off
-        // for good.
-        if continued {
-            let kept: String = raw.chars().take_while(|c| *c == ' ').collect();
-            out.push_str(&kept);
-            out.push_str(body);
-            out.push('\n');
-            depth += net[i];
-            if depth < 0 {
-                depth = 0;
-            }
-            replay(&mut stack, &brackets[i]);
-            continued = ends_open(&last[i], continued, *stack.last().unwrap_or(&false));
-            continue;
-        }
-
+        // This replaces "keep whatever was written", which was the conservative choice and the wrong
+        // one for this language. Alignment-to-the-bracket is what a person does by eye; it depends on
+        // the width of the name to its left, so renaming a function reflows a paragraph. Preserving
+        // it means the formatter permits two styles, and a formatter that permits two styles leaves
+        // the argument in review — which is the thing it exists to remove. One spelling per concept
+        // is the house rule; this is that rule applied to layout.
         let mut level = depth + dip[i];
+        if continued {
+            level += 2;
+        }
         if level < 0 {
             level = 0;
         }

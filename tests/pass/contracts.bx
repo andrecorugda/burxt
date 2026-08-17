@@ -2,32 +2,32 @@
 // written in the signature, where a reader looks for what a function demands and
 // promises, rather than in a comment or buried in the body.
 function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
-    requires amount > $0.00
-    requires amount <= balance
-    ensures result >= $0.00
-{
+        requires amount > $0.00
+        requires amount <= balance
+        ensures result >= $0.00
+        {
     return balance - amount;
 }
 
 // Contracts compose with the other signature markers.
 pure function doubled(n: Int) -> Int
-    requires n >= 0
-    ensures result >= n
-{
+        requires n >= 0
+        ensures result >= n
+        {
     return n * 2;
 }
 
 function label(n: Int) -> String
-    requires n > 0
-{
+        requires n > 0
+        {
     return "n=" + to_string(n);
 }
 
 // Every return is checked, not just the last one.
 function clamp(n: Int) -> Int
-    ensures result >= 0
-    ensures result <= 10
-{
+        ensures result >= 0
+        ensures result <= 10
+        {
     if n < 0 {
         return 0;
     }

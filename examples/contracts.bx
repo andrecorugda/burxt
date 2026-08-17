@@ -10,10 +10,10 @@
 
 // ---- requires and ensures --------------------------------------------------
 function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
-    requires amount > $0.00
-    requires amount <= balance
-    ensures result >= $0.00
-{
+        requires amount > $0.00
+        requires amount <= balance
+        ensures result >= $0.00
+        {
     return balance - amount;
 }
 
@@ -38,8 +38,8 @@ pure function fee_for(amount: Decimal<2>) -> Decimal<2> {
 // at the call site, which is why it works with `return tail`, where the frame
 // making the call is already gone.
 function countdown(n: Int, acc: Int) -> Int
-    decreases n
-{
+        decreases n
+        {
     if n <= 0 { return acc; }
     return tail countdown(n - 1, acc + n);
 }
@@ -50,9 +50,9 @@ function countdown(n: Int, acc: Int) -> Int
 class Ledger { from_side: Decimal<2>, to_side: Decimal<2> }
 
 function (mutable self: Ledger) transfer(amount: Decimal<2>) -> Int
-    requires amount > $0.00
-    ensures self.from_side + self.to_side == old(self.from_side + self.to_side)
-{
+        requires amount > $0.00
+        ensures self.from_side + self.to_side == old(self.from_side + self.to_side)
+        {
     self.from_side = self.from_side - amount;
     self.to_side = self.to_side + amount;
     return 0;

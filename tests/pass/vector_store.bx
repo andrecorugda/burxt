@@ -29,8 +29,8 @@ let r2: Int = push(rows, Row { id: "mostly-north", values: vec3(0.6000000, 0.800
 // A negative component, because an embedding lives in [-1, 1] and the minus sign is the part a
 // hand-written parser gets wrong.
 let r3: Int = push(rows, Row {
-    id: "down",
-    values: vec3(tick * (0 - 6000000), 0.8000000, tick * (0 - 10000000)),
+        id: "down",
+        values: vec3(tick * (0 - 6000000), 0.8000000, tick * (0 - 10000000)),
 });
 
 // ---- out ----

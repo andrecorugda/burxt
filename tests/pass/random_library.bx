@@ -120,7 +120,7 @@ region main {
     }
     show("next_between(17, 17) is 17", same_point);
     show("and drew nothing: the sequence is where it was",
-         point.next() == untouched.next());
+            point.next() == untouched.next());
 
     // Inclusive at BOTH ends — the decision `next_between` records. A two-value range must produce
     // both values, and a three-value range all three; an exclusive upper end would never show the
@@ -218,7 +218,7 @@ region main {
     print(random_shuffle(shuffler, single));
     print(single[0]);
     show("shuffling 0 and 1 elements consumed no randomness",
-         shuffler.next() == mirror.next());
+            shuffler.next() == mirror.next());
 
     // ---- 8. shuffle: it is a permutation, and it moves things ----
     let mutable deck: [Int] = [];

@@ -73,11 +73,11 @@ function (mutable self: Unit) complain(src: String, what: String) -> Int {
             self.problem_start = t.start;
             self.problem_length = t.length;
             self.problem_message = "expected " + what + ", found `"
-                + substring(src, t.start, t.length) + "`";
+                    + substring(src, t.start, t.length) + "`";
         }
         if self.diagnose == 0 {
             print("parse error: expected " + what + ", found `"
-                  + substring(src, t.start, t.length) + "`");
+                    + substring(src, t.start, t.length) + "`");
         }
     } else {
         if self.problem_start < 0 {
@@ -185,7 +185,7 @@ function (mutable self: Unit) note_generic(name_tok: Int, count: Int) -> Int {
     }
     let cleared: Int = truncate(self.pending_bounds, 0);
     let noted: Int = push(self.generics, Generic { start: name.start, length: name.length,
-                                                   type_param_start: type_param_start, type_param_count: count });
+            type_param_start: type_param_start, type_param_count: count });
     return 1;
 }
 
@@ -213,8 +213,8 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
         let n: Int = self.advance();
         if self.in_extern_signature == 0 {
             let complained: Int = self.complain_at(src, here,
-                "CInt only exists at the C boundary (external function signatures) — "
-                + "use Int in Burxt code; values convert at the call.");
+                        "CInt only exists at the C boundary (external function signatures) — "
+                    + "use Int in Burxt code; values convert at the call.");
         }
         return self.add(43, 0, 0, 0, 0, here);
     }
@@ -247,8 +247,8 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
                 spelled = "i" + to_string(bits);
             }
             let complained: Int = self.complain_at(src, here,
-                "`" + spelled + "` only exists at the C boundary (external function signatures) — "
-                + "use Int in Burxt code; values convert at the call.");
+                        "`" + spelled + "` only exists at the C boundary (external function signatures) — "
+                    + "use Int in Burxt code; values convert at the call.");
         }
         return self.add(52, bits, signed, 0, 0, here);
     }
@@ -266,7 +266,7 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
         // declaration the reader can fix.
         if scale < 0 || scale > 18 {
             return self.complain(src, "a scale between 0 and 18 — this is "
-                + to_string(scale) + ", and a scaled i64 holds at most 18 fractional digits");
+                    + to_string(scale) + ", and a scaled i64 holds at most 18 fractional digits");
         }
         let m: Int = self.advance();
         let mutable contract: Int = 0;
@@ -331,7 +331,7 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
             // rather than at the first index, because there may never be one.
             if count < 1 {
                 return self.complain(src, "an array length of at least 1 — an array must hold at "
-                    + "least one value, and `[T; 0]` is storage nothing can occupy");
+                        + "least one value, and `[T; 0]` is storage nothing can occupy");
             }
             let m: Int = self.advance();
             if !self.eat(src, 34, "`]` closing the array type") { return -1; }
@@ -349,8 +349,8 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
         let element: Node = self.nodes[elem];
         if element.kind == 47 || element.kind == 48 {
             return self.complain(src, "an element that is not itself an array — a growable array "
-                + "cannot hold one yet, because its element would need its own region reasoning. "
-                + "Use a class element");
+                        + "cannot hold one yet, because its element would need its own region reasoning. "
+                    + "Use a class element");
         }
         return self.add(47, elem, 0, 0, 0, here);
     }
@@ -366,8 +366,8 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
         let n: Int = self.advance();
         if self.at(30) {                             // ')' — `()`
             let complained: Int = self.complain_at(src, here,
-                "`()` is not a type: a tuple holds two or more values, and Burxt "
-                + "has no unit type for the empty one to be.");
+                        "`()` is not a type: a tuple holds two or more values, and Burxt "
+                    + "has no unit type for the empty one to be.");
             let close: Int = self.advance();
             return -1;
         }
@@ -392,9 +392,9 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
             // disagree with itself.
             let only: String = self.show_type(src, self.declared_type(src, gathered[0]));
             let complained: Int = self.complain_at(src, self.position,
-                "a tuple holds two or more values, so `(" + only + ")` is just `" + only
-                + "` — drop the parentheses. There is no one-value tuple in Burxt: it "
-                + "would differ from a parenthesised type by one comma.");
+                        "a tuple holds two or more values, so `(" + only + ")` is just `" + only
+                        + "` — drop the parentheses. There is no one-value tuple in Burxt: it "
+                    + "would differ from a parenthesised type by one comma.");
             let close: Int = self.advance();
             return -1;
         }
@@ -597,12 +597,12 @@ function (self: Unit) written_int(node: Int) -> Int {
 // also need a MUTABLE binding, because they change the array in place.
 function is_bit_builtin(name: String) -> Bool {
     return name == "bit_and" || name == "bit_or" || name == "bit_xor" || name == "bit_not"
-        || name == "shift_left" || name == "shift_right_zeros" || name == "shift_right_sign";
+            || name == "shift_left" || name == "shift_right_zeros" || name == "shift_right_sign";
 }
 
 function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: String, first: Type,
-                                       second: Type, first_node: Int,
-                                       second_node: Int) -> Int {
+            second: Type, first_node: Int,
+        second_node: Int) -> Int {
     // Exactly the Equatable set — the types `==` works on. A key needs equality and a hash, and
     // the set of types that have equality is the set that can have one, which is why there is no
     // separate `Hashable` bound naming the same four types again.
@@ -612,13 +612,13 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
     if is_bit_builtin(called) {
         if !is_unknown(first) && first.kind != 40 {
             let complained: Int = self.complain_at(src, at,
-                "`" + called + "` works on the bits of an Int, but this is "
-                + self.show_type(src, first));
+                        "`" + called + "` works on the bits of an Int, but this is "
+                    + self.show_type(src, first));
         }
         if called != "bit_not" && !is_unknown(second) && second.kind != 40 {
             let complained: Int = self.complain_at(src, at,
-                "`" + called + "` works on Ints, but the second argument is "
-                + self.show_type(src, second));
+                        "`" + called + "` works on Ints, but the second argument is "
+                    + self.show_type(src, second));
         }
         // A shift distance outside 0..=63 has no answer — LLVM leaves it undefined and the
         // hardware silently masks it, so `x << 64` comes back as x. A literal is refused here, the
@@ -631,8 +631,8 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
                 if distance.kind == 1 {
                     if distance.value < 0 || distance.value > 63 {
                         let complained: Int = self.complain_at(src, at,
-                            "`" + called + "` by " + to_string(distance.value)
-                            + " has no answer: an Int is 64 bits, so a shift distance is 0 to 63");
+                                    "`" + called + "` by " + to_string(distance.value)
+                                + " has no answer: an Int is 64 bits, so a shift distance is 0 to 63");
                     }
                 }
             }
@@ -642,11 +642,11 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
     // and letting one become one by writing it down would hand the language exactly the ability the
     // wall exists to withhold.
     if called == "c_is_null" || called == "c_string_at" || called == "c_bytes_at"
-        || called == "c_bytes_to" {
+            || called == "c_bytes_to" {
         if !is_unknown(first) && first.kind != 51 {
             let complained: Int = self.complain_at(src, at,
-                "`" + called + "` takes a CPointer, the thing an `external function` handed back, "
-                + "but this is " + self.show_type(src, first));
+                        "`" + called + "` takes a CPointer, the thing an `external function` handed back, "
+                    + "but this is " + self.show_type(src, first));
         }
     }
     // The count is the caller's CLAIM about how many bytes are there, and nothing in the type can
@@ -659,15 +659,15 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
     if called == "c_bytes_to" {
         if !is_unknown(second) && second.kind != 47 {
             let objected: Int = self.complain_at(src, at,
-                "`c_bytes_to(p, bytes)` writes an array of bytes — the [Int] that `c_bytes_at` "
-                + "answers — but this is " + self.show_type(src, second));
+                        "`c_bytes_to(p, bytes)` writes an array of bytes — the [Int] that `c_bytes_at` "
+                    + "answers — but this is " + self.show_type(src, second));
         }
     }
     if called == "c_bytes_at" {
         if !is_unknown(second) && second.kind != 40 {
             let complained: Int = self.complain_at(src, at,
-                "`c_bytes_at(p, n)` takes a count of bytes as an Int, but this is "
-                + self.show_type(src, second));
+                        "`c_bytes_at(p, n)` takes a count of bytes as an Int, but this is "
+                    + self.show_type(src, second));
         }
         // `-1` is a unary minus WRAPPING the literal 1, not a literal holding -1: the lexer reads
         // no sign. So this rule existed and never fired — it tested `kind == 1` and every negative
@@ -679,9 +679,9 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
             let shown: Int = self.written_int(second_node);
             if shown < 0 {
                 let complained: Int = self.complain_at(src, at,
-                    "`c_bytes_at(p, " + to_string(shown) + ")` asks for a negative "
-                    + "number of bytes, which is not a smaller read but an enormous one. "
-                    + "A count is 0 or more.");
+                            "`c_bytes_at(p, " + to_string(shown) + ")` asks for a negative "
+                            + "number of bytes, which is not a smaller read but an enormous one. "
+                        + "A count is 0 or more.");
             }
         }
     }
@@ -692,8 +692,8 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
     if called == "byte_as_string" {
         if !is_unknown(first) && first.kind != 40 {
             let complained: Int = self.complain_at(src, at,
-                "`byte_as_string` takes an Int byte value, but this is "
-                + self.show_type(src, first));
+                        "`byte_as_string` takes an Int byte value, but this is "
+                    + self.show_type(src, first));
         }
         // A WRITTEN-DOWN value out of range is refused now; anything computed is checked at
         // runtime. Both, unlike `CInt`, which traps at runtime only — a fixture pins CInt's
@@ -703,9 +703,9 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
             let shown: Int = self.written_int(first_node);
             if shown < 0 || shown > 255 {
                 let complained: Int = self.complain_at(src, at,
-                    "`byte_as_string(" + to_string(shown) + ")` has no answer: a byte is 0 to 255. "
-                    + "A codepoint above 255 is more than one byte — `from_codepoint` in "
-                    + "lib/string.bx encodes it");
+                            "`byte_as_string(" + to_string(shown) + ")` has no answer: a byte is 0 to 255. "
+                            + "A codepoint above 255 is more than one byte — `from_codepoint` in "
+                        + "lib/string.bx encodes it");
             }
         }
         return 1;
@@ -725,43 +725,43 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
             }
             if !ok {
                 let complained: Int = self.complain_at(src, at,
-                    "`hash` needs an Equatable value, and `"
-                    + substring(src, first.name_start, first.name_length)
-                    + "` has no such bound: write `"
-                    + substring(src, first.name_start, first.name_length)
-                    + ": Equatable` in the declaration, which is what lets a key be hashed and "
-                    + "compared");
+                            "`hash` needs an Equatable value, and `"
+                            + substring(src, first.name_start, first.name_length)
+                            + "` has no such bound: write `"
+                            + substring(src, first.name_start, first.name_length)
+                            + ": Equatable` in the declaration, which is what lets a key be hashed and "
+                        + "compared");
             }
             return 1;
         }
         if !is_unknown(first) && first.kind != 40 && first.kind != 41 && first.kind != 42
-           && first.kind != 45 {
+                && first.kind != 45 {
             let complained: Int = self.complain_at(src, at,
-                "`hash` needs an Equatable value, and " + self.show_type(src, first)
-                + " is not one. Equatable is Int, Bool, String and Decimal — the types `==` "
-                + "works on. For a compound key, build a String from the parts");
+                        "`hash` needs an Equatable value, and " + self.show_type(src, first)
+                        + " is not one. Equatable is Int, Bool, String and Decimal — the types `==` "
+                    + "works on. For a compound key, build a String from the parts");
         }
         return 1;
     }
     if called == "len" {
         if !is_unknown(first) && first.kind != 47 && first.kind != 48 && first.kind != 42 {
             let complained: Int = self.complain_at(src, at,
-                "`len` counts the elements of an array or the bytes of a String, but "
-                + "this is " + self.show_type(src, first));
+                        "`len` counts the elements of an array or the bytes of a String, but "
+                    + "this is " + self.show_type(src, first));
         }
         return 1;
     }
     if called == "byte_at" || called == "substring" {
         if !is_unknown(first) && first.kind != 42 {
             let complained: Int = self.complain_at(src, at,
-                "`" + called + "` reads a String, but this is " + self.show_type(src, first));
+                    "`" + called + "` reads a String, but this is " + self.show_type(src, first));
         }
         return 1;
     }
     if called == "to_string" {
         if first.kind == 42 {
             let complained: Int = self.complain_at(src, at,
-                "`to_string` of a String is a copy with a name that says otherwise");
+                    "`to_string` of a String is a copy with a name that says otherwise");
         }
         // 53 is a tuple, and it is the THIRD place this same list needed it — `print`, here,
         // and `check_pieces` below. Stage-0 refuses all three through one `Named` arm, because
@@ -770,21 +770,21 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
         // ADDRESS — a different number every run, in the language whose central claim is that
         // a program's output is not.
         if first.kind == 46 || first.kind == 49 || first.kind == 47 || first.kind == 48
-           || first.kind == 53 {
+                || first.kind == 53 {
             let complained: Int = self.complain_at(src, at,
-                "`to_string` renders a number, a Bool or a Decimal — " + self.show_type(src, first)
-                + " has no one rendering the language can choose for it");
+                        "`to_string` renders a number, a Bool or a Decimal — " + self.show_type(src, first)
+                    + " has no one rendering the language can choose for it");
         }
         return 1;
     }
     if called == "divide_floor" || called == "divide_toward_zero" || called == "remainder" {
         if !is_unknown(first) && first.kind != 40 {
             let complained: Int = self.complain_at(src, at,
-                "`" + called + "` divides Ints, but the left side is " + self.show_type(src, first));
+                    "`" + called + "` divides Ints, but the left side is " + self.show_type(src, first));
         }
         if !is_unknown(second) && second.kind != 40 {
             let complained: Int = self.complain_at(src, at,
-                "`" + called + "` divides Ints, but the right side is " + self.show_type(src, second));
+                    "`" + called + "` divides Ints, but the right side is " + self.show_type(src, second));
         }
         return 1;
     }
@@ -793,23 +793,23 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
         // building. `push` fills the buffer; this empties it.
         if !is_unknown(first) && first.kind != 42 {
             let complained: Int = self.complain_at(src, at,
-                "a path is a String, but this is " + self.show_type(src, first));
+                    "a path is a String, but this is " + self.show_type(src, first));
         }
         if !is_unknown(second) && second.kind != 47 {
             let complained: Int = self.complain_at(src, at,
-                "`write_bytes` writes the bytes of a growable `[Int]`, but this is "
-                + self.show_type(src, second));
+                        "`write_bytes` writes the bytes of a growable `[Int]`, but this is "
+                    + self.show_type(src, second));
         }
         return 1;
     }
     if called == "read_file" || called == "write_file" {
         if !is_unknown(first) && first.kind != 42 {
             let complained: Int = self.complain_at(src, at,
-                "a path is a String, but this is " + self.show_type(src, first));
+                    "a path is a String, but this is " + self.show_type(src, first));
         }
         if called == "write_file" && !is_unknown(second) && second.kind != 42 {
             let complained: Int = self.complain_at(src, at,
-                "`write_file` writes a String, but this is " + self.show_type(src, second));
+                    "`write_file` writes a String, but this is " + self.show_type(src, second));
         }
         return 1;
     }
@@ -822,8 +822,8 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
     if called == "push" || called == "truncate" {
         if !is_unknown(first) && first.kind != 47 {
             let complained: Int = self.complain_at(src, at,
-                "`" + called + "` needs a growable array — a `[T]` — but this is "
-                + self.show_type(src, first));
+                        "`" + called + "` needs a growable array — a `[T]` — but this is "
+                    + self.show_type(src, first));
             return 1;
         }
         // In place means the binding itself changes, so it must be one that may.
@@ -837,9 +837,9 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
                     // read a `for` range's counter (code 2) as writable. See `Binding` in ast.bx.
                     if self.bindings[found].writable != 1 {
                         let complained: Int = self.complain_at(src, at,
-                            "`" + called + "` changes the array in place, so `"
-                            + substring(src, t.start, t.length)
-                            + "` has to be declared `let mutable`");
+                                    "`" + called + "` changes the array in place, so `"
+                                    + substring(src, t.start, t.length)
+                                + "` has to be declared `let mutable`");
                     }
                 }
             }
@@ -893,11 +893,11 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
                     if owner >= 0 && self.bindings[owner].in_region == 0 {
                         let named: String = substring(src, root.start, root.length);
                         let complained: Int = self.complain_at(src, at,
-                            "`" + named + "` was declared outside " + self.open_region(src)
-                            + ", so it cannot grow inside it — `push` builds a new buffer in the "
-                            + "region, and the bytes are released at the closing brace, leaving `"
-                            + named + "` reading whatever the region hands out next. Declare `"
-                            + named + "` inside the region, or grow it outside it.");
+                                    "`" + named + "` was declared outside " + self.open_region(src)
+                                    + ", so it cannot grow inside it — `push` builds a new buffer in the "
+                                    + "region, and the bytes are released at the closing brace, leaving `"
+                                    + named + "` reading whatever the region hands out next. Declare `"
+                                + named + "` inside the region, or grow it outside it.");
                     }
                 }
             }
@@ -911,8 +911,8 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
             // lib/vector.bx: a plain Decimal<7> could not be pushed into a contracted array.
             if !is_unknown(second) && !self.fits(src, second, want) {
                 let complained: Int = self.complain_at(src, at,
-                    "this array holds " + self.show_type(src, want) + ", but the value is "
-                    + self.show_type(src, second));
+                            "this array holds " + self.show_type(src, want) + ", but the value is "
+                        + self.show_type(src, second));
             }
         }
         if called == "truncate" && !is_unknown(second) && second.kind != 40 {
@@ -933,7 +933,7 @@ function (mutable self: Unit) byte_array_type() -> Type {
         self.int_type_node = self.add(40, 0, 0, 0, 0, 0);
     }
     return Type { kind: 47, scale: self.int_type_node, contract: 0,
-                name_start: 0, name_length: 0 };
+            name_start: 0, name_length: 0 };
 }
 
 function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, args: Int) -> Type {
@@ -979,29 +979,29 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
     let wanted: Int = builtin_arity(called);
     if wanted >= 0 && count != wanted {
         let complained: Int = self.complain_at(src, at,
-            "`" + called + "` takes " + to_string(wanted) + " argument(s), but this "
-            + "call passes " + to_string(count));
+                    "`" + called + "` takes " + to_string(wanted) + " argument(s), but this "
+                + "call passes " + to_string(count));
         if called == "c_bytes_at" {
             return self.byte_array_type();
         }
         return builtin_result(called);
     }
     let checked: Int = self.check_builtin_args(src, at, called, first, second, first_node,
-                                     second_node);
+            second_node);
     // Four builtins hand back a freshly built String, so all four need a region —
     // except `to_string` of a Bool, which renders to one of two literals and so
     // allocates nothing.
     let mutable builds: Bool = span_equal(src, name.start, name.length, "substring")
-        || span_equal(src, name.start, name.length, "read_file")
-        || span_equal(src, name.start, name.length, "c_string_at")
-        || span_equal(src, name.start, name.length, "byte_as_string");
+            || span_equal(src, name.start, name.length, "read_file")
+            || span_equal(src, name.start, name.length, "c_string_at")
+            || span_equal(src, name.start, name.length, "byte_as_string");
     if span_equal(src, name.start, name.length, "to_string") && first.kind != 41 {
         builds = true;
     }
     if builds {
         if !self.has_region() {
             let r: Int = self.needs_region(src, at,
-                substring(src, name.start, name.length) + "(...)");
+                    substring(src, name.start, name.length) + "(...)");
         }
     }
     if self.in_pure == 1 {
@@ -1041,7 +1041,7 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
 // it differs for a reason rather than by omission. Passing the flag rather than asking the Type
 // keeps the two cases named at the call site, where a reader can see which one they are in.
 function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: Node,
-                                            borrowed: Int) -> Type {
+        borrowed: Int) -> Type {
     let wanted: Token = self.tokens[call.token];
     let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
@@ -1076,10 +1076,10 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
         if argument.kind == 46 {
             if self.find_type(src, argument.name_start, argument.name_length) < 0 {
                 let complained: Int = self.complain_at(src, call.token,
-                    "`" + substring(src, argument.name_start, argument.name_length)
-                    + "` in `" + substring(src, holder.name_start, holder.name_length)
-                    + "<...>` names no type. A method's type parameters come from its receiver — "
-                    + "`function (self: List<T>) ...` declares `T` and nothing else.");
+                            "`" + substring(src, argument.name_start, argument.name_length)
+                            + "` in `" + substring(src, holder.name_start, holder.name_length)
+                            + "<...>` names no type. A method's type parameters come from its receiver — "
+                        + "`function (self: List<T>) ...` declares `T` and nothing else.");
             }
         }
         ai += 1;
@@ -1119,20 +1119,20 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
                 }
                 if root < 0 {
                     let complained: Int = self.complain_at(src, call.token,
-                        "`" + substring(src, named.start, named.length)
-                        + "` is a mutating method (`function (mutable self: "
-                        + self.show_type(src, holder) + ") ...`); it can only be called on a "
-                        + "variable, not an expression.");
+                                "`" + substring(src, named.start, named.length)
+                                + "` is a mutating method (`function (mutable self: "
+                                + self.show_type(src, holder) + ") ...`); it can only be called on a "
+                            + "variable, not an expression.");
                 } else {
                     let base: Token = self.tokens[self.nodes[root].token];
                     let bound: Int = self.find_binding(src, base.start, base.length);
                     // `!= 1`: 1 is the only code that means writable. See `Binding` in ast.bx.
                     if bound >= 0 && self.bindings[bound].writable != 1 {
                         let complained: Int = self.complain_at(src, call.token,
-                            "cannot call the mutating method `"
-                            + substring(src, named.start, named.length) + "` on `"
-                            + substring(src, base.start, base.length)
-                            + "`: it was declared immutable. " + self.writable_advice(src, bound));
+                                    "cannot call the mutating method `"
+                                    + substring(src, named.start, named.length) + "` on `"
+                                    + substring(src, base.start, base.length)
+                                + "`: it was declared immutable. " + self.writable_advice(src, bound));
                     }
                     // B25 through a vtable, which A11 is what makes reachable at all — before it
                     // no mutating method could be called through a `dynamic`, so `grows_self` had
@@ -1149,12 +1149,12 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
                         if owner >= 0 {
                             let held: Binding = self.bindings[owner];
                             let grown: Int = self.record_parameter_growth(src, held.start,
-                                                                  held.length);
+                                    held.length);
                             if self.region_depth > 0 && held.in_region == 0 {
                                 let complained: Int = self.complain_at(src, call.token,
-                                    self.growing_an_outer_binding(src,
-                                        substring(src, held.start, held.length),
-                                        self.show_type(src, holder) + "."
+                                            self.growing_an_outer_binding(src,
+                                                substring(src, held.start, held.length),
+                                                self.show_type(src, holder) + "."
                                         + substring(src, named.start, named.length) + "(...)"));
                             }
                         }
@@ -1165,8 +1165,8 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
             let list: Node = self.nodes[call.b];
             if list.b != sig.c {
                 let complained: Int = self.complain_at(src, call.token,
-                    "this call passes " + to_string(list.b) + " argument(s), but the "
-                    + "method takes " + to_string(sig.c));
+                            "this call passes " + to_string(list.b) + " argument(s), but the "
+                        + "method takes " + to_string(sig.c));
                 let answer: Type = self.resolve_deep(src, self.declared_type(src, sig.a), sig.a);
                 let dropped: Int = truncate(self.type_bindings, bind_base);
                 return answer;
@@ -1181,8 +1181,8 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
                 let got: Type = self.type_of(src, self.children[list.a + p], want);
                 if !is_unknown(got) && !self.fits(src, got, want) {
                     let complained: Int = self.complain_at(src, call.token,
-                        "argument " + to_string(p + 1) + " should be " + self.show_type(src, want)
-                        + ", but it is " + self.show_type(src, got));
+                                "argument " + to_string(p + 1) + " should be " + self.show_type(src, want)
+                            + ", but it is " + self.show_type(src, got));
                 }
                 p += 1;
             }
@@ -1205,8 +1205,8 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
             let leaks: Bool = self.any_implementation_allocates(src, holder, wanted);
             if leaks && !self.has_region() {
                 let r: Int = self.needs_region(src, call.token,
-                    "`dynamic " + substring(src, holder.name_start, holder.name_length) + "."
-                    + substring(src, wanted.start, wanted.length) + "`");
+                            "`dynamic " + substring(src, holder.name_start, holder.name_length) + "."
+                        + substring(src, wanted.start, wanted.length) + "`");
             }
             let answer: Type = self.resolve_deep(src, self.declared_type(src, sig.a), sig.a);
             let dropped: Int = truncate(self.type_bindings, bind_base);
@@ -1215,7 +1215,7 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
         i += 1;
     }
     let complained: Int = self.complain_at(src, call.token,
-        self.show_type(src, holder) + " has no such method");
+            self.show_type(src, holder) + " has no such method");
     let dropped: Int = truncate(self.type_bindings, bind_base);
     return unknown_type();
 }
@@ -1224,14 +1224,14 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
 // stage-1's two-span method lookup instead of a `(receiver, name)` set — the same table every
 // direct call already reads `allocates` from, so there is no second place for the answer to live.
 function (self: Unit) any_implementation_allocates(src: String, holder: Type,
-                                              wanted: Token) -> Bool {
+        wanted: Token) -> Bool {
     let mutable i: Int = 0;
     while i < len(self.impls) {
         let candidate: Implementation = self.impls[i];
         if spans_equal(src, candidate.trait_start, candidate.trait_len,
-                    holder.name_start, holder.name_length) {
+                holder.name_start, holder.name_length) {
             let found: Int = self.find_method_named(src, candidate.type_start, candidate.type_len,
-                                wanted.start, wanted.length);
+                    wanted.start, wanted.length);
             if found >= 0 && flag_allocates(self.methods[found].flags) == 1 {
                 return true;
             }
@@ -1251,14 +1251,14 @@ function (self: Unit) any_implementation_allocates(src: String, holder: Type,
 // looked up in two different tables and folding them would need the `0 = self, i + 1 = parameter`
 // encoding this file deliberately does not use.
 function (self: Unit) any_implementation_relays_self(src: String, holder: Type,
-                                               wanted: Token) -> Bool {
+        wanted: Token) -> Bool {
     let mutable i: Int = 0;
     while i < len(self.impls) {
         let candidate: Implementation = self.impls[i];
         if spans_equal(src, candidate.trait_start, candidate.trait_len,
-                    holder.name_start, holder.name_length) {
+                holder.name_start, holder.name_length) {
             let found: Int = self.find_method_named(src, candidate.type_start, candidate.type_len,
-                                wanted.start, wanted.length);
+                    wanted.start, wanted.length);
             if found >= 0 && self.relays_self(found) {
                 return true;
             }
@@ -1277,14 +1277,14 @@ function (self: Unit) any_implementation_relays_self(src: String, holder: Type,
 // A11 is what makes it reachable: until a mutating method could be called through an interface
 // object, `grows_self` had no way to be asked here at all.
 function (self: Unit) any_implementation_grows_self(src: String, holder: Type,
-                                               wanted: Token) -> Bool {
+        wanted: Token) -> Bool {
     let mutable i: Int = 0;
     while i < len(self.impls) {
         let candidate: Implementation = self.impls[i];
         if spans_equal(src, candidate.trait_start, candidate.trait_len,
-                    holder.name_start, holder.name_length) {
+                holder.name_start, holder.name_length) {
             let found: Int = self.find_method_named(src, candidate.type_start, candidate.type_len,
-                                wanted.start, wanted.length);
+                    wanted.start, wanted.length);
             if found >= 0 && self.grows_self(found) {
                 return true;
             }
@@ -1295,14 +1295,14 @@ function (self: Unit) any_implementation_grows_self(src: String, holder: Type,
 }
 
 function (self: Unit) any_implementation_relays_parameter(src: String, holder: Type,
-                                               wanted: Token, parameter: Int) -> Bool {
+        wanted: Token, parameter: Int) -> Bool {
     let mutable i: Int = 0;
     while i < len(self.impls) {
         let candidate: Implementation = self.impls[i];
         if spans_equal(src, candidate.trait_start, candidate.trait_len,
-                    holder.name_start, holder.name_length) {
+                holder.name_start, holder.name_length) {
             let found: Int = self.find_method_named(src, candidate.type_start, candidate.type_len,
-                                wanted.start, wanted.length);
+                    wanted.start, wanted.length);
             if found >= 0 && self.relays_method_parameter(found, parameter) {
                 return true;
             }
@@ -1313,7 +1313,7 @@ function (self: Unit) any_implementation_relays_parameter(src: String, holder: T
 }
 
 function (self: Unit) find_method_named(src: String, holder_start: Int, holder_len: Int,
-                                  name_start: Int, name_length: Int) -> Int {
+        name_start: Int, name_length: Int) -> Int {
     let mutable i: Int = 0;
     while i < len(self.methods) {
         let m: Method = self.methods[i];
@@ -1333,7 +1333,7 @@ function (self: Unit) find_method(src: String, holder: Type, name_tok: Int) -> I
     }
     let wanted: Token = self.tokens[name_tok];
     return self.find_method_named(src, holder.name_start, holder.name_length,
-                                  wanted.start, wanted.length);
+            wanted.start, wanted.length);
 }
 
 // `Enum.Variant(payload)`: the variant has to exist, and the payload has to match it.
@@ -1356,11 +1356,11 @@ function (mutable self: Unit) check_construction(src: String, holder: Type, call
             }
             if given != variant.c {
                 let complained: Int = self.complain_at(src, call.token,
-                    "`" + substring(src, named.start, named.length) + "` carries "
-                    + to_string(variant.c) + " value(s), but this passes "
-                    + to_string(given));
+                            "`" + substring(src, named.start, named.length) + "` carries "
+                            + to_string(variant.c) + " value(s), but this passes "
+                        + to_string(given));
                 let dropped: Int = truncate(self.type_bindings, bound_base);
-        return 0;
+                return 0;
             }
             let list: Node = self.nodes[call.b];
             let mutable p: Int = 0;
@@ -1370,18 +1370,18 @@ function (mutable self: Unit) check_construction(src: String, holder: Type, call
                 let got: Type = self.type_of(src, self.children[list.a + p], want);
                 if !is_unknown(got) && !self.fits(src, got, want) {
                     let complained: Int = self.complain_at(src, call.token,
-                        "this variant carries " + self.show_type(src, want) + ", but the value "
-                        + "is " + self.show_type(src, got));
+                                "this variant carries " + self.show_type(src, want) + ", but the value "
+                            + "is " + self.show_type(src, got));
                 }
                 p += 1;
             }
             let dropped: Int = truncate(self.type_bindings, bound_base);
-    return 1;
+            return 1;
         }
         i += 1;
     }
     let complained: Int = self.complain_at(src, call.token,
-        self.show_type(src, holder) + " has no variant of this name");
+            self.show_type(src, holder) + " has no variant of this name");
     return 0;
 }
 
@@ -1395,10 +1395,10 @@ function (mutable self: Unit) check_pieces(src: String, n: Node) -> Int {
         // 53 — a tuple, for the reason the `to_string` list above records. `"v: {pair}"`
         // interpolated the tuple's address until this arm existed.
         if shown.kind == 46 || shown.kind == 47 || shown.kind == 48 || shown.kind == 49
-           || shown.kind == 53 {
+                || shown.kind == 53 {
             let complained: Int = self.complain_at(src, self.nodes[piece].token,
-                "an interpolated value renders a number, a Bool, a Decimal or a String — "
-                + self.show_type(src, shown) + " has none the language can choose for it");
+                        "an interpolated value renders a number, a Bool, a Decimal or a String — "
+                    + self.show_type(src, shown) + " has none the language can choose for it");
         }
         i += 1;
     }
@@ -1428,8 +1428,8 @@ function (mutable self: Unit) bind_arm(src: String, holder: Type, arm: Node) -> 
             // Bind each name in the arm to the payload type at the same position.
             if arm.c != variant.c {
                 let complained: Int = self.complain_at(src, arm.token,
-                    "this arm binds " + to_string(arm.c) + " name(s), but the variant "
-                    + "carries " + to_string(variant.c));
+                            "this arm binds " + to_string(arm.c) + " name(s), but the variant "
+                        + "carries " + to_string(variant.c));
             }
             // The scrutinee's type arguments bind the variant's parameters, so matching an
             // `Option<Int>` binds `Some(n)` as an Int rather than as `T`.
@@ -1448,14 +1448,14 @@ function (mutable self: Unit) bind_arm(src: String, holder: Type, arm: Node) -> 
                 // widened silently.
                 if self.find_const(src, name.start, name.length) >= 0 {
                     let complained: Int = self.complain_at(src, arm.token,
-                        "this name is already declared as a `const`, which is in scope in "
-                        + "every function — Burxt does not shadow");
+                                "this name is already declared as a `const`, which is in scope in "
+                            + "every function — Burxt does not shadow");
                 }
                 let stated: Type = self.declared_type(src, self.nested_children[variant.b + p]);
                 let payload_type: Type = self.resolve_deep(src, stated, arm.token);
                 push(self.bindings, Binding { start: name.start, length: name.length,
-                                      bound_type: payload_type, writable: 0, depth: self.depth + 1,
-                                      in_region: 0, holds_region: 0, dyn_owner: 0 - 1 });
+                                bound_type: payload_type, writable: 0, depth: self.depth + 1,
+                        in_region: 0, holds_region: 0, dyn_owner: 0 - 1 });
                 p += 1;
             }
             let dropped: Int = truncate(self.type_bindings, bound_base);
@@ -1490,9 +1490,9 @@ function (mutable self: Unit) fits(src: String, got: Type, want: Type) -> Bool {
     while i < len(self.impls) {
         let candidate: Implementation = self.impls[i];
         if spans_equal(src, candidate.trait_start, candidate.trait_len,
-                    want.name_start, want.name_length) {
+                want.name_start, want.name_length) {
             if spans_equal(src, candidate.type_start, candidate.type_len,
-                        got.name_start, got.name_length) {
+                    got.name_start, got.name_length) {
                 // The INSTANTIATION has to match too, not just the interface's name. Roadmap A9.
                 //
                 // **Without this stage-1 accepted the program and the binary SEGFAULTED**: a
@@ -1520,7 +1520,7 @@ function (mutable self: Unit) fits(src: String, got: Type, want: Type) -> Bool {
 // two arrive at the same answer and `tests/fail/a_generic_interface_is_not_its_other_
 // instantiation.bx` is what says so.
 function (mutable self: Unit) instantiation_matches(src: String, candidate: Implementation,
-                                                    want: Type) -> Bool {
+        want: Type) -> Bool {
     if candidate.trait_arg_count != want.contract {
         return false;
     }
@@ -1745,8 +1745,8 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
     if n.kind == 13 {                                // a call
         let name: Token = self.tokens[n.token];
         if span_equal(src, name.start, name.length, "substring")
-            || span_equal(src, name.start, name.length, "read_file")
-            || span_equal(src, name.start, name.length, "argument") {
+                || span_equal(src, name.start, name.length, "read_file")
+                || span_equal(src, name.start, name.length, "argument") {
             return true;
         }
         // Three more that build a String or an array out of the arena, and all three were missing.
@@ -1764,8 +1764,8 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
         // — that one already names `c_string_at` and `byte_as_string`, and this one did not, which
         // is how the gap survived: one of the two places was right.
         if span_equal(src, name.start, name.length, "byte_as_string")
-            || span_equal(src, name.start, name.length, "c_string_at")
-            || span_equal(src, name.start, name.length, "c_bytes_at") {
+                || span_equal(src, name.start, name.length, "c_string_at")
+                || span_equal(src, name.start, name.length, "c_bytes_at") {
             return true;
         }
         if span_equal(src, name.start, name.length, "to_string") {
@@ -1911,7 +1911,7 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
 // exist would read past the list, so the pairing is checked rather than assumed — the same guard
 // `check_growing_arguments` keeps for the same reason.
 function (mutable self: Unit) relayed_argument_allocates(src: String, callee: Int,
-                                            list_node: Int) -> Bool {
+        list_node: Int) -> Bool {
     let list: Node = self.nodes[list_node];
     let mutable i: Int = 0;
     while i < list.b {
@@ -1929,7 +1929,7 @@ function (mutable self: Unit) relayed_argument_allocates(src: String, callee: In
 // `dynamic`. Three functions rather than one, because the three look their answer up in three
 // different tables; the loop is the same and the fact asked is the same.
 function (mutable self: Unit) relayed_method_argument_allocates(src: String, callee: Int,
-                                            list_node: Int) -> Bool {
+        list_node: Int) -> Bool {
     let list: Node = self.nodes[list_node];
     let mutable i: Int = 0;
     while i < list.b {
@@ -1944,7 +1944,7 @@ function (mutable self: Unit) relayed_method_argument_allocates(src: String, cal
 }
 
 function (mutable self: Unit) relayed_dyn_argument_allocates(src: String, holder: Type,
-                                            wanted: Token, list_node: Int) -> Bool {
+        wanted: Token, list_node: Int) -> Bool {
     let list: Node = self.nodes[list_node];
     let mutable i: Int = 0;
     while i < list.b {
@@ -2023,9 +2023,9 @@ function (mutable self: Unit) note_allocates() -> Int {
             return 0;
         }
         self.methods[self.current_method] = Method { receiver_start: m.receiver_start,
-            receiver_length: m.receiver_length, start: m.start, length: m.length,
-            return_type: m.return_type, parameters: m.parameters, mutating: m.mutating,
-            flags: m.flags + 2 };
+                    receiver_length: m.receiver_length, start: m.start, length: m.length,
+                    return_type: m.return_type, parameters: m.parameters, mutating: m.mutating,
+                flags: m.flags + 2 };
         self.probe_changes += 1;
         return 1;
     }
@@ -2035,8 +2035,8 @@ function (mutable self: Unit) note_allocates() -> Int {
             return 0;
         }
         self.functions[self.current_function] = DeclaredFunction { start: f.start,
-            length: f.length, return_type: f.return_type, parameters: f.parameters,
-            flags: f.flags + 2 };
+                    length: f.length, return_type: f.return_type, parameters: f.parameters,
+                flags: f.flags + 2 };
         self.probe_changes += 1;
         return 1;
     }
@@ -2093,15 +2093,15 @@ function (mutable self: Unit) has_region() -> Bool {
 // on the signature. M1a exists because for a while only the first was available.
 function (mutable self: Unit) needs_region(src: String, at: Int, what: String) -> Int {
     let complained: Int = self.complain_at(src, at,
-        what + " allocates, so it needs a region: there is none open here. Open one "
-        + "with `region r \{ ... \}`");
+                what + " allocates, so it needs a region: there is none open here. Open one "
+            + "with `region r \{ ... \}`");
     return 0;
 }
 
 function (mutable self: Unit) not_pure(src: String, at: Int, what: String) -> Int {
     let complained: Int = self.complain_at(src, at,
-        "a `pure` function may not " + what + ": a function that can change the "
-        + "program is not one whose answer depends on its arguments alone");
+                "a `pure` function may not " + what + ": a function that can change the "
+            + "program is not one whose answer depends on its arguments alone");
     return 0;
 }
 
@@ -2133,7 +2133,7 @@ function (mutable self: Unit) parse_touches(src: String) -> Int {
             // `net` should not have to go looking for the list.
             return self.complain(src, "one of `files`, `commands`, `clock`, `input`, `network` "
                         + "or `model` — the list is closed, so that scanning a diff for `network` "
-                        + "keeps working");
+                    + "keeps working");
         }
         mask = mask + bit;
         let effect: Int = self.advance();
@@ -2233,9 +2233,9 @@ function (mutable self: Unit) parse_expr(src: String) -> Int {
     // expression: the only way to see it is to have finished one.
     if result >= 0 && self.at(42) && self.range_bounds == 0 {
         print("parse error: `..` builds a range, and a range is only a `for` construct — there "
-            + "is no range VALUE yet. Write `for i in 0..n \{ ... \}`. A range that can be "
-            + "stored, passed and chained needs an iterator protocol, which is a separate "
-            + "piece of work; half of one would be worse than waiting.");
+                    + "is no range VALUE yet. Write `for i in 0..n \{ ... \}`. A range that can be "
+                    + "stored, passed and chained needs an iterator protocol, which is a separate "
+                + "piece of work; half of one would be worse than waiting.");
         self.errors += 1;
         return -1;
     }
@@ -2367,10 +2367,10 @@ function (mutable self: Unit) parse_postfix(src: String) -> Int {
                 let outer: String = to_string(divide_floor(d.value, ten));
                 let inner: String = to_string(remainder(d.value, ten));
                 let complained: Int = self.complain_at(src, self.position,
-                    "`." + outer + "." + inner + "` cannot be written: after a `.`, `" + outer
-                    + "." + inner + "` is lexed as one decimal literal rather than two "
-                    + "positions. Bind the inner tuple first — `let inner = t." + outer
-                    + "; inner." + inner + "`.");
+                            "`." + outer + "." + inner + "` cannot be written: after a `.`, `" + outer
+                            + "." + inner + "` is lexed as one decimal literal rather than two "
+                            + "positions. Bind the inner tuple first — `let inner = t." + outer
+                        + "; inner." + inner + "`.");
                 return -1;
             }
             // `pair.0` — a tuple's field name IS its position, and the lexer already produced
@@ -2538,9 +2538,9 @@ function (mutable self: Unit) parse_primary(src: String) -> Int {
                 // the reader asked for. The one list in the language that says no.
                 if self.at(30) {                     // ')'
                     let complained: Int = self.complain_at(src, self.position,
-                        "a tuple literal takes no trailing comma. `(a,)` is a one-value tuple "
-                        + "in some other languages and Burxt has none — write `(a, b)` for the "
-                        + "pair, or drop the parentheses for the value.");
+                                "a tuple literal takes no trailing comma. `(a,)` is a one-value tuple "
+                                + "in some other languages and Burxt has none — write `(a, b)` for the "
+                            + "pair, or drop the parentheses for the value.");
                     let dropped: Int = self.commit(base);
                     return -1;
                 }
@@ -2718,8 +2718,8 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
     // "expected a statement".
     if k == 134 {
         return self.complain(src, "a `const` at the top level, not inside a block — it is a "
-                                  + "name for the whole program. Use `let`, which is already "
-                                  + "immutable");
+                    + "name for the whole program. Use `let`, which is already "
+                + "immutable");
     }
 
     if k == 100 {                                    // let
@@ -2834,7 +2834,7 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
             // plainly meant a range and the answer is that a range has two bounds.
             if self.at(42) {
                 print("parse error: a range has exactly two bounds — `0..n`. There is no "
-                    + "`a..b..c`, and no step: a loop that skips writes the skip in its body.");
+                        + "`a..b..c`, and no step: a loop that skips writes the skip in its body.");
                 self.errors += 1;
                 return -1;
             }
@@ -2848,8 +2848,8 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
         let holder: Node = self.nodes[iterable];
         if holder.kind != 5 && holder.kind != 11 {
             let complained: Int = self.complain_at(src, name_tok,
-                "`for` iterates a named array, and this is not a name: its result would "
-                + "be recomputed on every pass. Bind it first and iterate that");
+                        "`for` iterates a named array, and this is not a name: its result would "
+                    + "be recomputed on every pass. Bind it first and iterate that");
             return -1;
         }
         let body: Int = self.parse_block(src);
@@ -2888,7 +2888,7 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
             let pk: Int = self.kind_at(0);
             if pk != 1 && pk != 2 && pk != 4 && pk != 120 && pk != 121 {
                 return self.complain(src, "a variant name, or a literal and `_` when the match is "
-                            + "on an Int, a String or a Bool");
+                        + "on an Int, a String or a Bool");
             }
             let variant_tok: Int = self.position;
             let v: Int = self.advance();
@@ -3007,8 +3007,8 @@ function (mutable self: Unit) parse_params(src: String) -> Int {
             let marshaller: Token = self.tokens[self.position];
             if !span_equal(src, marshaller.start, marshaller.length, "scaled") {
                 return self.complain(src, "the boundary marshaller `scaled` — it is the only one, "
-                    + "as in `amount: Decimal<2> as scaled`, which passes the exact unscaled "
-                    + "integer");
+                            + "as in `amount: Decimal<2> as scaled`, which passes the exact unscaled "
+                        + "integer");
             }
             marshalled = 1;
             let m: Int = self.advance();
@@ -3042,7 +3042,7 @@ function (mutable self: Unit) parse_params(src: String) -> Int {
 //
 // Answers 0 when there was no bracket at all, 1 when it read one, -1 on a parse error.
 function (mutable self: Unit) parse_value_contracts(src: String, subject_tok: Int,
-                                              is_result: Int, which: Int) -> Int {
+        is_result: Int, which: Int) -> Int {
     if !self.at(33) {                                // '[' — no bracket here
         return 0;
     }
@@ -3062,7 +3062,7 @@ function (mutable self: Unit) parse_value_contracts(src: String, subject_tok: In
         // from a whole condition by the first token, exactly as stage-0 tells them apart.
         let first: Int = self.kind_at(0);
         let elided: Bool = first == 12 || first == 13 || first == 14 || first == 15
-                           || first == 35 || first == 36;
+                || first == 35 || first == 36;
         let mutable cond: Int = -1;
         if elided {
             let op_tok: Int = self.position;
@@ -3125,7 +3125,7 @@ function (mutable self: Unit) parse_value_contracts(src: String, subject_tok: In
             length = named.length;
         }
         push(self.clause_subjects, ClauseSubject { clause: text_start, start: start,
-                                      length: length, is_result: is_result, mode: mode });
+                length: length, is_result: is_result, mode: mode });
         if self.used_it == 1 {
             self.it_seen = 1;
         }
@@ -3164,7 +3164,7 @@ function (mutable self: Unit) parse_clauses(src: String, return_type: Int, recei
     let dropped: Int = truncate(self.bracket_clauses, 0);
     self.it_seen = 0;
     while self.at_word(src, "requires") || self.at_word(src, "ensures")
-          || self.at_word(src, "decreases") {
+            || self.at_word(src, "decreases") {
         // Which clause, decided before the word is consumed.
         let mutable which: Int = 126;
         if self.at_word(src, "ensures") { which = 127; }
@@ -3229,8 +3229,8 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
         if self.at(30) {
             if owner < 0 {
                 return self.complain(src,
-                    "the receiver's type: outside an `implement` block nothing says which "
-                    + "one, so write `function (self: Type) name(...)`");
+                            "the receiver's type: outside an `implement` block nothing says which "
+                        + "one, so write `function (self: Type) name(...)`");
             }
             receiver_tok = owner;
         } else {
@@ -3282,7 +3282,7 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
             if span_equal(src, named.start, named.length, "it") {
                 return self.complain(src, "a parameter not called `it`, on a function whose "
                             + "contract bracket says `it` — `it` would mean two things in one "
-                            + "signature. Rename the parameter, or write its name in the clause");
+                        + "signature. Rename the parameter, or write its name in the clause");
             }
             p += 1;
         }
@@ -3387,7 +3387,7 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
             push(self.items, block);
             if args_count > 0 {
                 push(self.impl_traits, ImplTrait { item: block, args_start: args_start,
-                                                   args_count: args_count });
+                        args_count: args_count });
             }
             more = false;
             if self.at(22) {                             // ','
@@ -3440,7 +3440,7 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
                 // flags itself and has no reason to know about class bodies.
                 let m: Node = self.nodes[method];
                 self.nodes[method] = Node { kind: m.kind, a: m.a, b: m.b, c: m.c,
-                                        value: m.value + 16, token: m.token };
+                        value: m.value + 16, token: m.token };
             }
             push(self.items, method);
             continue;
@@ -3661,7 +3661,7 @@ function (mutable self: Unit) parse_impl(src: String) -> Int {
     let block: Int = self.add(85, start, count, type_tok, 0, trait_tok);
     if args_count > 0 {
         push(self.impl_traits, ImplTrait { item: block, args_start: args_start,
-                                           args_count: args_count });
+                args_count: args_count });
     }
     return block;
 }
@@ -3675,8 +3675,8 @@ function (mutable self: Unit) parse_extern(src: String) -> Int {
     let n: Int = self.advance();
     if self.at(35) {                                 // '<'
         let complained: Int = self.complain_at(src, name_tok,
-            "an `external function` cannot be generic: C has no type parameters, and there "
-            + "would be no symbol to link against");
+                    "an `external function` cannot be generic: C has no type parameters, and there "
+                + "would be no symbol to link against");
         return -1;
     }
     // The one window in which a sized width may be written. Set around the parameters AND the
@@ -3724,8 +3724,8 @@ function (mutable self: Unit) parse_item(src: String) -> Int {
         let after: Int = self.kind_at(0);
         if after != 102 && after != 109 && after != 110 && after != 112 && after != 124 {
             let complained: Int = self.complain(src,
-                "`public` describes a declaration a dependent package may reach — a `function`, "
-                + "`class`, `enum` or `interface`");
+                        "`public` describes a declaration a dependent package may reach — a `function`, "
+                    + "`class`, `enum` or `interface`");
             return 0 - 1;
         }
     }

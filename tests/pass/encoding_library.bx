@@ -151,9 +151,9 @@ region main {
     let h5: Int = vector("fooba", "666f6f6261", encoding_hex_encode_text("fooba"));
     let h6: Int = vector("foobar", "666f6f626172", encoding_hex_encode_text("foobar"));
     let hu: Int = decoded_text("\"666F6F626172\" (the RFC's own uppercase)",
-                               encoding_hex_decode_text("666F6F626172"));
+            encoding_hex_decode_text("666F6F626172"));
     let hm: Int = decoded_text("\"666f6F626172\" (mixed case)",
-                               encoding_hex_decode_text("666f6F626172"));
+            encoding_hex_decode_text("666f6F626172"));
 
     // ---- base64url: two characters differ, and the padding is gone ---------------------------
     //
@@ -250,8 +250,8 @@ region main {
         }
         Some(back) => {
             show("and it decodes back to the same three bytes",
-                 len(back) == 3 && byte_at(back, 0) == 104 && byte_at(back, 1) == 0
-                                && byte_at(back, 2) == 105);
+                        len(back) == 3 && byte_at(back, 0) == 104 && byte_at(back, 1) == 0
+                    && byte_at(back, 2) == 105);
         }
     }
 

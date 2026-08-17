@@ -188,8 +188,8 @@ pure function random_mask_for(value: Int) -> Int {
 // unsigned bit pattern and compared with `random_unsigned_at_most`. This is the one place in the
 // file where a value is not a number; every operation on `spread` treats it as bits.
 function (mutable self: Random) next_between(low: Int, high: Int) -> Int
-    requires low <= high
-{
+        requires low <= high
+        {
     let spread: Int = math_wrapping_sub(high, low);
     if spread == 0 {
         return low;
@@ -220,8 +220,8 @@ function (mutable self: Random) next_between(low: Int, high: Int) -> Int
 // `bound == 1` answers 0 every time, draws nothing, and is not a special case in the code: it
 // falls out of `next_between(0, 0)`.
 function (mutable self: Random) next_below(bound: Int) -> Int
-    requires bound > 0
-{
+        requires bound > 0
+        {
     return self.next_between(0, bound - 1);
 }
 

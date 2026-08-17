@@ -143,7 +143,7 @@ function (mutable self: Unit) layout_cells(src: String, given: Type) -> Int {
     }
     if written.kind == 48 {                          // [T; N]
         return written.contract
-               * self.layout_cells(src, self.declared_type(src, written.scale));
+                * self.layout_cells(src, self.declared_type(src, written.scale));
     }
     // A tuple, roadmap A8 — its elements end to end, in the order written. The class arm below
     // with the declaration lookup taken out, because a tuple's members ARE its type.
@@ -152,7 +152,7 @@ function (mutable self: Unit) layout_cells(src: String, given: Type) -> Int {
         let mutable e: Int = 0;
         while e < written.contract {
             total += self.layout_cells(src,
-                         self.declared_type(src, self.nested_children[written.scale + e]));
+                    self.declared_type(src, self.nested_children[written.scale + e]));
             e += 1;
         }
         return total;
@@ -208,7 +208,7 @@ function (mutable self: Unit) layout_widest_variant(src: String, item: Node) -> 
         let mutable p: Int = 0;
         while p < variant.c {
             carried += self.layout_cells(src,
-                           self.declared_type(src, self.nested_children[variant.b + p]));
+                    self.declared_type(src, self.nested_children[variant.b + p]));
             p += 1;
         }
         if carried > widest {
@@ -241,7 +241,7 @@ function (mutable self: Unit) layout_align(src: String, given: Type) -> Int {
         let mutable e: Int = 0;
         while e < written.contract {
             let mine: Int = self.layout_align(src,
-                                self.declared_type(src, self.nested_children[written.scale + e]));
+                    self.declared_type(src, self.nested_children[written.scale + e]));
             if mine > widest {
                 widest = mine;
             }
@@ -299,7 +299,7 @@ function (mutable self: Unit) layout_bytes(src: String, given: Type) -> Int {
     if written.kind == 48 {                          // [T; N] — stride times length
         let element: Type = self.declared_type(src, written.scale);
         let stride: Int = round_up(self.layout_bytes(src, element),
-                                  self.layout_align(src, element));
+                self.layout_align(src, element));
         return stride * written.contract;
     }
     // A tuple: pad up to each element's own alignment, place it, advance — then round the whole
@@ -407,7 +407,7 @@ function (self: Unit) layout_type_name(src: String, given: Type) -> String {
     }
     if written.kind == 48 {
         return "[" + self.layout_type_name(src, self.declared_type(src, written.scale)) + "; "
-               + to_string(written.contract) + "]";
+                + to_string(written.contract) + "]";
     }
     // A tuple RECURSES rather than falling through to `show_type`, for the reason the slice arm
     // above gives: `show_type` renders an element straight from its node, so a `(T, Int)` inside
@@ -418,7 +418,7 @@ function (self: Unit) layout_type_name(src: String, given: Type) -> String {
         while e < written.contract {
             if e > 0 { out += ", "; }
             out += self.layout_type_name(src,
-                       self.declared_type(src, self.nested_children[written.scale + e]));
+                    self.declared_type(src, self.nested_children[written.scale + e]));
             e += 1;
         }
         return out + ")";
@@ -470,7 +470,7 @@ function (self: Unit) layout_is_concrete(src: String, applied: Type) -> Bool {
     let mutable i: Int = 0;
     while i < applied.contract {
         let mutable argument: Type = self.resolve_shallow(src,
-                                 self.declared_type(src, self.nested_children[applied.scale + i]));
+                self.declared_type(src, self.nested_children[applied.scale + i]));
         // `[[T]]` needs the loop rather than one unwrap, and an array is 48 for the same reason.
         while argument.kind == 47 || argument.kind == 48 {
             argument = self.resolve_shallow(src, self.declared_type(src, argument.scale));
@@ -520,7 +520,7 @@ function (self: Unit) layout_is_concrete(src: String, applied: Type) -> Bool {
 // has a field of type `[MapEntry<K, V>]`. So its arguments live in an array, and this is the
 // same binding from the other direction. Answers the base to truncate back to.
 function (mutable self: Unit) layout_bind_args(src: String, name_start: Int, name_length: Int,
-                                              held: [Type], from: Int, count: Int) -> Int {
+        held: [Type], from: Int, count: Int) -> Int {
     let base: Int = len(self.type_bindings);
     let generic: Int = self.generic_named(src, name_start, name_length);
     if generic < 0 {
@@ -531,7 +531,7 @@ function (mutable self: Unit) layout_bind_args(src: String, name_start: Int, nam
     while i < declaration.type_param_count && i < count {
         let named: Token = self.tokens[self.type_parameters[declaration.type_param_start + i]];
         push(self.type_bindings, TypeBinding { name_start: named.start,
-                                              name_length: named.length, bound: held[from + i] });
+                name_length: named.length, bound: held[from + i] });
         i += 1;
     }
     return base;
@@ -540,7 +540,7 @@ function (mutable self: Unit) layout_bind_args(src: String, name_start: Int, nam
 // The mangled name of an instantiation whose arguments are held in an array — the naming half of
 // the same asymmetry `layout_bind_args` describes.
 function (self: Unit) layout_name_with(src: String, name_start: Int, name_length: Int,
-                                      held: [Type], from: Int, count: Int) -> String {
+        held: [Type], from: Int, count: Int) -> String {
     // A TUPLE entry, marked by `name_start < 0`: it has no declaration and therefore no name
     // span, so its identity is its spelling — which is exactly the name stage-0 files it under.
     // See `Type::Tuple` in `ast.rs`: the anonymous class behind `(Int, String)` IS called
@@ -572,7 +572,7 @@ function (self: Unit) layout_name_with(src: String, name_start: Int, name_length
 // which the caller reads as "skip this row" rather than printing a size for a type it could not
 // name.
 function (mutable self: Unit) layout_tuple_holder(held: [Type], from: Int, count: Int,
-                                                 at: Int) -> Type {
+        at: Int) -> Type {
     let start: Int = len(self.nested_children);
     let mutable e: Int = 0;
     while e < count {
@@ -596,7 +596,7 @@ function (mutable self: Unit) layout_tuple_holder(held: [Type], from: Int, count
 // report could not see. One answer to "what are this aggregate\'s members, in order".
 function (mutable self: Unit) layout_one(src: String, name: String, holder: Type) -> Int {
     print(name + ": size " + to_string(self.layout_bytes(src, holder)) + " align "
-          + to_string(self.layout_align(src, holder)));
+            + to_string(self.layout_align(src, holder)));
     let restore: Int = self.bind_from_application(src, holder);
     let members: Int = self.member_count(src, holder);
     let mutable offset: Int = 0;
@@ -605,7 +605,7 @@ function (mutable self: Unit) layout_one(src: String, name: String, holder: Type
         let mine: Type = self.member_type(src, holder, f);
         offset = round_up(offset, self.layout_align(src, mine));
         print("  +" + to_string(offset) + " " + self.layout_type_name(src, mine)
-              + " (" + to_string(self.layout_bytes(src, mine)) + " bytes)");
+                + " (" + to_string(self.layout_bytes(src, mine)) + " bytes)");
         offset += self.layout_bytes(src, mine);
         f += 1;
     }
@@ -622,8 +622,8 @@ function (self: Unit) layout_is_generic(src: String, name: Token) -> Bool {
     while i < len(self.generics) {
         let declaration: Generic = self.generics[i];
         if declaration.type_param_count > 0
-           && spans_equal(src, declaration.start, declaration.length,
-                          name.start, name.length) {
+                && spans_equal(src, declaration.start, declaration.length,
+                name.start, name.length) {
             return true;
         }
         i += 1;
@@ -676,9 +676,9 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                 // A class ITEM is not a type node, so the holder is built from the name span:
                 // kind 46 with no arguments, which is what a plain class name is.
                 let whole: Type = Type { kind: 46, scale: 0, contract: 0,
-                                        name_start: named.start, name_length: named.length };
+                        name_start: named.start, name_length: named.length };
                 let fields: Int = self.layout_one(src,
-                                     substring(src, named.start, named.length), whole);
+                        substring(src, named.start, named.length), whole);
                 shown += 1;
             }
         }
@@ -712,17 +712,17 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
         if n.kind == 46 && n.b > 0 {
             let applied: Type = self.declared_type(src, node);
             if applied.kind == 46
-               && self.generic_named(src, applied.name_start, applied.name_length) >= 0 {
+                    && self.generic_named(src, applied.name_start, applied.name_length) >= 0 {
                 let declared: Int = self.find_type(src, applied.name_start, applied.name_length);
                 if declared >= 0 && self.types[declared].kind == 82
-                   && self.layout_is_concrete(src, applied) {
+                        && self.layout_is_concrete(src, applied) {
                     // Seeded onto the stack with its arguments copied into `held`, so that a seed
                     // and a discovered dependency are the same shape from here on.
                     let from: Int = len(held);
                     let mutable a: Int = 0;
                     while a < applied.contract {
                         push(held, self.resolve_shallow(src,
-                                 self.declared_type(src, self.nested_children[applied.scale + a])));
+                                self.declared_type(src, self.nested_children[applied.scale + a])));
                         a += 1;
                     }
                     push(stack_start, applied.name_start);
@@ -749,7 +749,7 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                 let mutable a: Int = 0;
                 while a < applied.contract {
                     push(held, self.resolve_shallow(src,
-                             self.declared_type(src, self.nested_children[applied.scale + a])));
+                            self.declared_type(src, self.nested_children[applied.scale + a])));
                     a += 1;
                 }
                 push(stack_start, 0 - 1);            // the tuple marker: no declaration span
@@ -794,7 +794,7 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                 let mutable a: Int = 0;
                 while a < literal.contract {
                     push(held, self.resolve_shallow(src,
-                             self.declared_type(src, self.nested_children[literal.scale + a])));
+                            self.declared_type(src, self.nested_children[literal.scale + a])));
                     a += 1;
                 }
                 push(stack_start, 0 - 1);
@@ -845,17 +845,17 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
         if n.kind == 46 && n.b > 0 {
             let applied: Type = self.declared_type(src, node);
             if applied.kind == 46
-               && self.generic_named(src, applied.name_start, applied.name_length) >= 0 {
+                    && self.generic_named(src, applied.name_start, applied.name_length) >= 0 {
                 let declared: Int = self.find_type(src, applied.name_start, applied.name_length);
                 if declared >= 0 && self.types[declared].kind == 82
-                   && self.layout_is_concrete(src, applied) {
+                        && self.layout_is_concrete(src, applied) {
                     // The arguments have to be in `held` before they can be bound, because
                     // `layout_bind_args` reads them from there.
                     let args: Int = len(held);
                     let mutable a: Int = 0;
                     while a < applied.contract {
                         push(held, self.resolve_shallow(src,
-                                 self.declared_type(src, self.nested_children[applied.scale + a])));
+                                self.declared_type(src, self.nested_children[applied.scale + a])));
                         a += 1;
                     }
                     push(work_start, applied.name_start);
@@ -875,7 +875,7 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
         let here_from: Int = work_from[w];
         let here_count: Int = work_count[w];
         let here_name: String = self.layout_name_with(src, here_start, here_length,
-                                                     held, here_from, here_count);
+                held, here_from, here_count);
         let mutable already: Bool = false;
         let mutable s: Int = 0;
         while s < len(work_seen) {
@@ -891,21 +891,21 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
         push(work_seen, here_name);
 
         let restore: Int = self.layout_bind_args(src, here_start, here_length,
-                                                held, here_from, here_count);
+                held, here_from, here_count);
         // The same holder the emit loop builds for an instantiation: a bare kind-46 naming the
         // class, with the arguments supplied by the bindings rather than by the Type.
         let whole: Type = Type { kind: 46, scale: 0, contract: 0,
-                                name_start: here_start, name_length: here_length };
+                name_start: here_start, name_length: here_length };
 
         let mutable m: Int = 0;
         while m < len(self.methods) {
             let declared_method: Method = self.methods[m];
             if spans_equal(src, declared_method.receiver_start, declared_method.receiver_length,
-                           here_start, here_length) {
+                    here_start, here_length) {
                 // `[(K, V)]` is the shape that actually occurs, so see through the slice — the
                 // same unwinding `layout_is_concrete` now does.
                 let mutable answered: Type = self.resolve_shallow(src,
-                                                 declared_method.return_type);
+                        declared_method.return_type);
                 while answered.kind == 47 || answered.kind == 48 {
                     answered = self.resolve_shallow(src, self.declared_type(src, answered.scale));
                 }
@@ -917,7 +917,7 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                         // below, and a `K` copied unresolved would spell itself `K` when the emit
                         // loop finally reached it.
                         push(held, self.resolve_shallow(src, self.declared_type(src,
-                                     self.nested_children[answered.scale + e])));
+                                self.nested_children[answered.scale + e])));
                         e += 1;
                     }
                     push(stack_start, 0 - 1);
@@ -939,15 +939,15 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                 inner = self.resolve_shallow(src, self.declared_type(src, inner.scale));
             }
             if inner.kind == 46 && inner.contract > 0
-               && self.generic_named(src, inner.name_start, inner.name_length) >= 0
-               && self.layout_is_concrete(src, inner) {
+                    && self.generic_named(src, inner.name_start, inner.name_length) >= 0
+                    && self.layout_is_concrete(src, inner) {
                 let sub: Int = self.find_type(src, inner.name_start, inner.name_length);
                 if sub >= 0 && self.types[sub].kind == 82 {
                     let at: Int = len(held);
                     let mutable a: Int = 0;
                     while a < inner.contract {
                         push(held, self.resolve_shallow(src, self.declared_type(src,
-                                     self.nested_children[inner.scale + a])));
+                                self.nested_children[inner.scale + a])));
                         a += 1;
                     }
                     push(work_start, inner.name_start);
@@ -1024,7 +1024,7 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                         let mutable a: Int = 0;
                         while a < inner.contract {
                             push(held, self.resolve_shallow(src, self.declared_type(src,
-                                         self.nested_children[inner.scale + a])));
+                                    self.nested_children[inner.scale + a])));
                             a += 1;
                         }
                         push(stack_start, 0 - 1);
@@ -1034,15 +1034,15 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                         push(opened, 0);
                     }
                     if inner.kind == 46 && inner.contract > 0
-                       && self.generic_named(src, inner.name_start, inner.name_length) >= 0
-                       && self.layout_is_concrete(src, inner) {
+                            && self.generic_named(src, inner.name_start, inner.name_length) >= 0
+                            && self.layout_is_concrete(src, inner) {
                         let sub: Int = self.find_type(src, inner.name_start, inner.name_length);
                         if sub >= 0 && self.types[sub].kind == 82 {
                             let at: Int = len(held);
                             let mutable a: Int = 0;
                             while a < inner.contract {
                                 push(held, self.resolve_shallow(src, self.declared_type(src,
-                                             self.nested_children[inner.scale + a])));
+                                        self.nested_children[inner.scale + a])));
                                 a += 1;
                             }
                             push(stack_start, inner.name_start);
@@ -1063,14 +1063,14 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
             if declared >= 0 {
                 let item: Node = self.nodes[self.types[declared].node];
                 let restore: Int = self.layout_bind_args(src, name_start, name_length,
-                                                        held, from, count);
+                        held, from, count);
                 let mutable f: Int = 0;
                 while f < item.b {
                     let field: Node = self.nodes[self.children[item.a + f]];
                     // Through a slice or an array too: `Map`'s entries are `[MapEntry<K, V>]`,
                     // and the instantiation is inside the brackets.
                     let mutable inner: Type = self.resolve_shallow(src,
-                                                  self.declared_type(src, field.a));
+                            self.declared_type(src, field.a));
                     while inner.kind == 47 || inner.kind == 48 {
                         inner = self.resolve_shallow(src, self.declared_type(src, inner.scale));
                     }
@@ -1082,7 +1082,7 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                         let mutable a: Int = 0;
                         while a < inner.contract {
                             push(held, self.resolve_shallow(src, self.declared_type(src,
-                                         self.nested_children[inner.scale + a])));
+                                    self.nested_children[inner.scale + a])));
                             a += 1;
                         }
                         push(stack_start, 0 - 1);
@@ -1092,15 +1092,15 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                         push(opened, 0);
                     }
                     if inner.kind == 46 && inner.contract > 0
-                       && self.generic_named(src, inner.name_start, inner.name_length) >= 0
-                       && self.layout_is_concrete(src, inner) {
+                            && self.generic_named(src, inner.name_start, inner.name_length) >= 0
+                            && self.layout_is_concrete(src, inner) {
                         let sub: Int = self.find_type(src, inner.name_start, inner.name_length);
                         if sub >= 0 && self.types[sub].kind == 82 {
                             let at: Int = len(held);
                             let mutable a: Int = 0;
                             while a < inner.contract {
                                 push(held, self.resolve_shallow(src, self.declared_type(src,
-                                             self.nested_children[inner.scale + a])));
+                                        self.nested_children[inner.scale + a])));
                                 a += 1;
                             }
                             push(stack_start, inner.name_start);
@@ -1140,9 +1140,9 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
         if declared >= 0 {
             let item: Node = self.nodes[self.types[declared].node];
             let restore: Int = self.layout_bind_args(src, name_start, name_length,
-                                                    held, from, count);
+                    held, from, count);
             let whole: Type = Type { kind: 46, scale: 0, contract: 0,
-                                    name_start: name_start, name_length: name_length };
+                    name_start: name_start, name_length: name_length };
             let fields: Int = self.layout_one(src, name, whole);
             let dropped: Int = truncate(self.type_bindings, restore);
             shown += 1;

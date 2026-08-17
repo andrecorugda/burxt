@@ -461,7 +461,7 @@ pure function json_member2(text: String, at: Int, first: String, second: String)
 }
 
 pure function json_member3(text: String, at: Int, first: String, second: String,
-                           third: String) -> Int {
+        third: String) -> Int {
     let two: Int = json_member2(text, at, first, second);
     if two < 0 {
         return 0 - 1;
@@ -570,7 +570,7 @@ function json_string_bytes(text: String, at: Int) -> [Int] {
                 i += 4;
                 // A high surrogate is half a codepoint; the low one follows as a second `\u`.
                 if code >= 55296 && code < 56320 && byte_at(text, i + 2) == 92
-                    && byte_at(text, i + 3) == 117 {
+                        && byte_at(text, i + 3) == 117 {
                     let low: Int = json_hex4(text, i + 4);
                     if low >= 56320 && low < 57344 {
                         code = 65536 + shift_left(code - 55296, 10) + (low - 56320);
@@ -697,13 +697,13 @@ function lsp_respond(id: String, result: String) -> Int {
 // an unknown notification is ignored. The presence of an `id` is the whole difference.
 function lsp_method_not_found(id: String, method: String) -> Int {
     return lsp_send("\{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":\{\"code\":-32601,"
-        + "\"message\":" + json_escape("unsupported method `" + method + "`") + "\}\}");
+            + "\"message\":" + json_escape("unsupported method `" + method + "`") + "\}\}");
 }
 
 function lsp_publish_message(uri: String, diagnostics: String) -> Int {
     return lsp_send("\{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
-        + "\"params\":\{\"uri\":" + json_escape(uri) + ",\"diagnostics\":" + diagnostics
-        + "\}\}");
+                + "\"params\":\{\"uri\":" + json_escape(uri) + ",\"diagnostics\":" + diagnostics
+            + "\}\}");
 }
 
 // 1 = Full sync: the client sends the whole document on every change. Incremental sync would
@@ -717,7 +717,7 @@ function lsp_publish_message(uri: String, diagnostics: String) -> Int {
 // is a lie a client would repeat in its logs.
 function lsp_initialize_result() -> String {
     return "\{\"capabilities\":\{\"textDocumentSync\":1,\"hoverProvider\":true\},"
-        + "\"serverInfo\":\{\"name\":\"burxt-lsp\"\}\}";
+            + "\"serverInfo\":\{\"name\":\"burxt-lsp\"\}\}";
 }
 
 // ---- positions -------------------------------------------------------------------------
@@ -759,7 +759,7 @@ pure function lsp_offset_of(src: String, line: Int, character: Int) -> Int {
 // people; the protocol counts from 0, and this is the one place the subtraction happens.
 function lsp_position(src: String, offset: Int) -> String {
     return "\{\"line\":" + to_string(line_number_at(src, offset) - 1)
-        + ",\"character\":" + to_string(column_at(src, offset) - 1) + "\}";
+            + ",\"character\":" + to_string(column_at(src, offset) - 1) + "\}";
 }
 
 function lsp_range(src: String, from: Int, to: Int) -> String {
@@ -1252,8 +1252,8 @@ function lsp_diagnostics(uri: String, buffer: String) -> String touches files {
             // `shift` — and against `blank_imports(buffer)` rather than `buffer` itself, which
             // is the same bytes at the same offsets by construction.
             out += "\{\"range\":" + lsp_range(blank_imports(buffer), span_start - shift,
-                                             span_end - shift)
-                + ",\"severity\":1,\"source\":\"burxt\",\"message\":" + json_escape(message) + "\}";
+                    span_end - shift)
+                    + ",\"severity\":1,\"source\":\"burxt\",\"message\":" + json_escape(message) + "\}";
         }
         which += 1;
     }
@@ -1262,7 +1262,7 @@ function lsp_diagnostics(uri: String, buffer: String) -> String touches files {
 
 // How many diagnostics before `which` named the same token text inside the same region.
 function lsp_earlier_claims(printed: String, which: Int, item_from: [Int], item_to: [Int],
-                                 from_token: Int) -> Int {
+        from_token: Int) -> Int {
     let wanted: String = lsp_token_text_of(printed, lsp_error_line(printed, which));
     if len(wanted) == 0 {
         return 0;
@@ -1282,7 +1282,7 @@ function lsp_earlier_claims(printed: String, which: Int, item_from: [Int], item_
 
 // The index of the `skip`-th token in `[from, to)` whose text is exactly `wanted`, or -1.
 function (self: Unit) lsp_token_named(src: String, wanted: String, from: Int, to: Int,
-                                      skip: Int) -> Int {
+        skip: Int) -> Int {
     if len(wanted) == 0 {
         return 0 - 1;
     }
@@ -1381,15 +1381,15 @@ function (self: Unit) lsp_explain(src: String, t: Type) -> String {
         }
         if t.contract == 1 {
             return "Exact decimal, " + to_string(t.scale) + places
-                + ". A result that needs rounding rounds half to even (banker's rounding).";
+                    + ". A result that needs rounding rounds half to even (banker's rounding).";
         }
         if t.contract == 2 {
             return "Exact decimal, " + to_string(t.scale) + places
-                + ". A result that needs rounding rounds half away from zero.";
+                    + ". A result that needs rounding rounds half away from zero.";
         }
         return "Exact decimal, " + to_string(t.scale) + places
-            + " — no rounding contract, so any operation that could round is a compile error "
-            + "until one is declared.";
+                + " — no rounding contract, so any operation that could round is a compile error "
+                + "until one is declared.";
     }
     if t.kind == 43 {
         return "C's 32-bit `int`, at the FFI boundary only.";
@@ -1402,7 +1402,7 @@ function (self: Unit) lsp_explain(src: String, t: Type) -> String {
     }
     if t.kind == 49 {
         return "A interface object: dispatch to whichever type implements `"
-            + substring(src, t.name_start, t.name_length) + "`, decided at runtime.";
+                + substring(src, t.name_start, t.name_length) + "`, decided at runtime.";
     }
     return "";
 }
@@ -1465,8 +1465,8 @@ function lsp_hover(uri: String, buffer: String, line: Int, character: Int) -> St
         return "null";                               // the cursor landed in a sibling's text
     }
     return "\{\"contents\":\{\"kind\":\"markdown\",\"value\":" + json_escape(value)
-        + "\},\"range\":" + lsp_range(blank_imports(buffer), t.start - shift,
-                                     t.start + t.length - shift) + "\}";
+            + "\},\"range\":" + lsp_range(blank_imports(buffer), t.start - shift,
+            t.start + t.length - shift) + "\}";
 }
 
 // ---- documents -------------------------------------------------------------------------
@@ -1575,7 +1575,7 @@ function lsp_serve() -> Int touches input, files {
                 // be. Kept VERBATIM so a string id is echoed as a string.
                 let id: String = json_raw_at(message, json_member(message, 0, "id"));
                 let uri: String = json_string_at(message,
-                    json_member3(message, 0, "params", "textDocument", "uri"));
+                        json_member3(message, 0, "params", "textDocument", "uri"));
 
                 if method == "initialize" {
                     if len(id) > 0 {
@@ -1585,7 +1585,7 @@ function lsp_serve() -> Int touches input, files {
                     clean += 0;                      // nothing to do, and not an error either
                 } else if method == "textDocument/didOpen" {
                     let text: String = json_string_at(message,
-                        json_member3(message, 0, "params", "textDocument", "text"));
+                            json_member3(message, 0, "params", "textDocument", "text"));
                     lsp_doc_store(uri, text);
                     lsp_publish_message(uri, lsp_diagnostics(uri, text));
                 } else if method == "textDocument/didChange" {
@@ -1608,9 +1608,9 @@ function lsp_serve() -> Int touches input, files {
                 } else if method == "textDocument/hover" {
                     if len(id) > 0 {
                         let line: Int = json_int_at(message,
-                            json_member3(message, 0, "params", "position", "line"));
+                                json_member3(message, 0, "params", "position", "line"));
                         let character: Int = json_int_at(message,
-                            json_member3(message, 0, "params", "position", "character"));
+                                json_member3(message, 0, "params", "position", "character"));
                         let text: String = lsp_doc_text(uri);
                         if len(text) == 0 || line < 0 || character < 0 {
                             lsp_respond(id, "null");

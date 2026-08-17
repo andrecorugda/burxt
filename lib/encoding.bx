@@ -183,8 +183,8 @@ pure function encoding_hex_value(byte: Int) -> Int {
 // Bytes to lowercase hex. Two characters per byte, always — a leading zero is never dropped,
 // because a hex string whose length is not twice its byte count cannot be decoded back.
 pure function encoding_hex_encode(bytes: [Int]) -> String
-    requires encoding_bytes_in_range(bytes)
-{
+        requires encoding_bytes_in_range(bytes)
+        {
     let count: Int = len(bytes);
     let mutable pieces: [String] = [];
     let mutable chunk: String = "";
@@ -192,7 +192,7 @@ pure function encoding_hex_encode(bytes: [Int]) -> String
     while i < count {
         let byte: Int = bytes[i];
         chunk += substring(ENCODING_HEX_ALPHABET, shift_right_zeros(byte, 4), 1)
-               + substring(ENCODING_HEX_ALPHABET, bit_and(byte, 15), 1);
+                + substring(ENCODING_HEX_ALPHABET, bit_and(byte, 15), 1);
         if len(chunk) >= ENCODING_CHUNK {
             push(pieces, chunk);
             chunk = "";
@@ -278,9 +278,9 @@ pure function encoding_base64_value(byte: Int, sixty_two: Int, sixty_three: Int)
 // The shared encoder. `alphabet` must be 64 characters; `pad` decides whether the final quantum is
 // filled out to four characters with `=`.
 pure function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: Bool) -> String
-    requires len(alphabet) == 64
-    requires encoding_bytes_in_range(bytes)
-{
+        requires len(alphabet) == 64
+        requires encoding_bytes_in_range(bytes)
+        {
     let count: Int = len(bytes);
     let mutable pieces: [String] = [];
     let mutable chunk: String = "";
@@ -289,11 +289,11 @@ pure function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: B
     // Whole three-byte groups: 24 bits in, four six-bit characters out.
     while i + 3 <= count {
         let trio: Int = bit_or(bit_or(shift_left(bytes[i], 16), shift_left(bytes[i + 1], 8)),
-                               bytes[i + 2]);
+                bytes[i + 2]);
         chunk += substring(alphabet, shift_right_zeros(trio, 18), 1)
-               + substring(alphabet, bit_and(shift_right_zeros(trio, 12), 63), 1)
-               + substring(alphabet, bit_and(shift_right_zeros(trio, 6), 63), 1)
-               + substring(alphabet, bit_and(trio, 63), 1);
+                + substring(alphabet, bit_and(shift_right_zeros(trio, 12), 63), 1)
+                + substring(alphabet, bit_and(shift_right_zeros(trio, 6), 63), 1)
+                + substring(alphabet, bit_and(trio, 63), 1);
         if len(chunk) >= ENCODING_CHUNK {
             push(pieces, chunk);
             chunk = "";
@@ -309,7 +309,7 @@ pure function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: B
     if left == 1 {
         let one: Int = shift_left(bytes[i], 16);
         chunk += substring(alphabet, shift_right_zeros(one, 18), 1)
-               + substring(alphabet, bit_and(shift_right_zeros(one, 12), 63), 1);
+                + substring(alphabet, bit_and(shift_right_zeros(one, 12), 63), 1);
         if pad {
             chunk += "==";
         }
@@ -317,8 +317,8 @@ pure function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: B
     if left == 2 {
         let two: Int = bit_or(shift_left(bytes[i], 16), shift_left(bytes[i + 1], 8));
         chunk += substring(alphabet, shift_right_zeros(two, 18), 1)
-               + substring(alphabet, bit_and(shift_right_zeros(two, 12), 63), 1)
-               + substring(alphabet, bit_and(shift_right_zeros(two, 6), 63), 1);
+                + substring(alphabet, bit_and(shift_right_zeros(two, 12), 63), 1)
+                + substring(alphabet, bit_and(shift_right_zeros(two, 6), 63), 1);
         if pad {
             chunk += "=";
         }
@@ -333,9 +333,9 @@ pure function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: B
 // The shared decoder. Every refusal in this module's header is one of the `return Option.None`
 // lines below, and they are in the order the header lists them.
 pure function encoding_base64_decode_with(text: String,
-                                     sixty_two: Int,
-                                     sixty_three: Int,
-                                     padding_required: Bool) -> Option<[Int]> {
+            sixty_two: Int,
+            sixty_three: Int,
+        padding_required: Bool) -> Option<[Int]> {
     let count: Int = len(text);
     let mutable out: [Int] = [];
     if count == 0 {
@@ -381,7 +381,7 @@ pure function encoding_base64_decode_with(text: String,
             return Option.None;
         }
         let quad: Int = bit_or(bit_or(shift_left(a, 18), shift_left(b, 12)),
-                               bit_or(shift_left(c, 6), d));
+                bit_or(shift_left(c, 6), d));
         push(out, bit_and(shift_right_zeros(quad, 16), 255));
         push(out, bit_and(shift_right_zeros(quad, 8), 255));
         push(out, bit_and(quad, 255));
@@ -429,8 +429,8 @@ pure function encoding_base64_decode_with(text: String,
 // contract failure names. The second walk of the array costs about 3 ms per megabyte against the
 // encode's 90, which is what a precondition is worth.
 pure function encoding_base64_encode(bytes: [Int]) -> String
-    requires encoding_bytes_in_range(bytes)
-{
+        requires encoding_bytes_in_range(bytes)
+        {
     return encoding_base64_encode_with(bytes, ENCODING_BASE64_ALPHABET, true);
 }
 
@@ -456,8 +456,8 @@ pure function encoding_base64_decode_text(text: String) -> Option<String> {
 // ---- base64url: `-_`, unpadded out, either way in --------------------------------------------
 
 pure function encoding_base64url_encode(bytes: [Int]) -> String
-    requires encoding_bytes_in_range(bytes)
-{
+        requires encoding_bytes_in_range(bytes)
+        {
     return encoding_base64_encode_with(bytes, ENCODING_BASE64URL_ALPHABET, false);
 }
 

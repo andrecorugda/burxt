@@ -115,8 +115,8 @@ pure function html_raw(trusted: String) -> Html {
 }
 
 pure function html_attr(name: String, value: String) -> Attr
-    requires html_is_name(name)
-{
+        requires html_is_name(name)
+        {
     return Attr { name: name, value: value };
 }
 
@@ -124,9 +124,9 @@ pure function html_attr(name: String, value: String) -> Attr
 // surface, and `Html.Node(html_element(...))` at every level would be ceremony carrying no
 // promise.
 pure function html_element(tag: String, attrs: [Attr], children: [Html]) -> Html
-    requires html_is_name(tag)
-    requires !html_is_void(tag) || len(children) == 0
-{
+        requires html_is_name(tag)
+        requires !html_is_void(tag) || len(children) == 0
+        {
     return Html.Node(Element { tag: tag, attrs: attrs, children: children });
 }
 

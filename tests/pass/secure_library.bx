@@ -278,7 +278,7 @@ region main {
                     shaped = false;
                 } else {
                     if byte_at(id, 8) != 45 || byte_at(id, 13) != 45
-                       || byte_at(id, 18) != 45 || byte_at(id, 23) != 45 {
+                            || byte_at(id, 18) != 45 || byte_at(id, 23) != 45 {
                         shaped = false;
                     }
                     // The version nibble: the first character of the third group.
@@ -296,8 +296,8 @@ region main {
                     }
                     // Everything that is not a hyphen is a lowercase hex digit.
                     let flat: String = substring(id, 0, 8) + substring(id, 9, 4)
-                                     + substring(id, 14, 4) + substring(id, 19, 4)
-                                     + substring(id, 24, 12);
+                            + substring(id, 14, 4) + substring(id, 19, 4)
+                            + substring(id, 24, 12);
                     if len(flat) != 32 || !is_lower_hex(flat) {
                         hexed = false;
                     }
@@ -360,11 +360,11 @@ region main {
     print("-- string_equals_constant_time");
     show("equal strings", string_equals_constant_time("correct-horse", "correct-horse"));
     show("differing in the FIRST byte",
-         !string_equals_constant_time("correct-horse", "xorrect-horse"));
+            !string_equals_constant_time("correct-horse", "xorrect-horse"));
     show("differing in the LAST byte",
-         !string_equals_constant_time("correct-horse", "correct-horsf"));
+            !string_equals_constant_time("correct-horse", "correct-horsf"));
     show("differing in the middle",
-         !string_equals_constant_time("correct-horse", "correct-Horse"));
+            !string_equals_constant_time("correct-horse", "correct-Horse"));
     show("a prefix is not the whole", !string_equals_constant_time("correct", "correct-horse"));
     show("and the whole is not a prefix", !string_equals_constant_time("correct-horse", "correct"));
     show("empty against empty", string_equals_constant_time("", ""));
@@ -373,7 +373,7 @@ region main {
     // The wrapping read must not make a repeated shorter string look equal: "abab" against "ab"
     // walks b twice and would compare equal if the length were not folded in.
     show("a repeat of the shorter is still not equal",
-         !string_equals_constant_time("abab", "ab"));
+            !string_equals_constant_time("abab", "ab"));
     show("nor is a triple", !string_equals_constant_time("ababab", "ab"));
     // A NUL is an ordinary byte, so it is compared rather than ending the comparison.
     let nul_a: String = from_bytes([104, 0, 105]);

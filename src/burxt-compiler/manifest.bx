@@ -90,7 +90,7 @@ function manifest_parent(path: String) -> String {
 // declare, and needing a manifest to compile one would make the language harder to try.
 function manifest_discover(source: String) -> Package touches files {
     let empty: Package = Package { found: false, root: "", name: "", version: "",
-                                   names: [], roots: [] };
+            names: [], roots: [] };
     let mutable here: String = manifest_parent(source);
     let mutable guard: Int = 0;
     // Bounded rather than `while true`: a path has finitely many parents, and a loop that walks a
@@ -137,7 +137,7 @@ function manifest_parse(text: String, root: String, shown_as: String) -> Package
                 if len(words) != 2 {
                     print_error("error: " + where_at + "`" + key
                                 + "` takes exactly one word, and this line has "
-                                + to_string(len(words) - 1));
+                            + to_string(len(words) - 1));
                     exit(2);
                 }
                 if key == "name" { name = words[1]; } else { version = words[1]; }
@@ -146,7 +146,7 @@ function manifest_parse(text: String, root: String, shown_as: String) -> Package
                     if len(words) != 3 && len(words) != 4 {
                         print_error("error: " + where_at
                                     + "a dependency is `dependency <name> <directory>` or "
-                                    + "`dependency <name> <git-url> <tag>`");
+                                + "`dependency <name> <git-url> <tag>`");
                         exit(2);
                     }
                     let dependency: String = words[1];
@@ -158,14 +158,14 @@ function manifest_parse(text: String, root: String, shown_as: String) -> Package
                         // DERIVED from the URL and tag rather than stored, so two manifests naming
                         // the same tag share one copy and neither has to know the other exists.
                         where_from = root + ".burxt/packages/"
-                                     + manifest_cache_key(words[2], words[3]) + "/";
+                                + manifest_cache_key(words[2], words[3]) + "/";
                     }
                     let noted_name: Int = push(names, dependency);
                     let noted_root: Int = push(roots, where_from);
                 } else {
                     print_error("error: " + where_at + "unknown key `" + key
                                 + "`. A manifest has `name`, `version` and `dependency` — and "
-                                + "that is the whole grammar.");
+                            + "that is the whole grammar.");
                     exit(2);
                 }
             }
@@ -181,7 +181,7 @@ function manifest_parse(text: String, root: String, shown_as: String) -> Package
         exit(2);
     }
     return Package { found: true, root: root, name: name, version: version,
-                     names: names, roots: roots };
+            names: names, roots: roots };
 }
 
 // A directory name for a git dependency, derived from what identifies it. Readable rather than

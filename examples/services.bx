@@ -18,8 +18,8 @@
 // ---- The interface ---------------------------------------------------------
 interface Rates {
     function rate_for(self, country: String) -> Decimal<4>
-    function name(self) -> String
-}
+            function name(self) -> String
+        }
 
 // ---- Two implementations ---------------------------------------------------
 class FlatRates { everywhere: Decimal<4> }
@@ -47,9 +47,9 @@ implement Rates for TableRates {
 class Order { subtotal: Decimal<2, RoundHalfEven>, country: String }
 
 function new_order(subtotal: Decimal<2, RoundHalfEven>, country: String) -> Order
-    requires subtotal >= $0.00
-    requires len(country) == 2
-{
+        requires subtotal >= $0.00
+        requires len(country) == 2
+        {
     // Every field, always. There is no half-built object here and no `null` to
     // leave in one — which is the initialization bug a constructor can still have
     // in most languages with classes.

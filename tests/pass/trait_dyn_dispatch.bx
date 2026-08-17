@@ -2,8 +2,8 @@
 // site, two concrete impls, resolved at runtime through the vtable.
 interface HasBalance {
     function balance_of(self) -> Decimal<2>
-    function label(self) -> Int
-}
+            function label(self) -> Int
+        }
 
 class Account { balance: Decimal<2>, id: Int }
 class Escrow  { held: Decimal<2>, fee: Decimal<2> }

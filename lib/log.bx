@@ -254,8 +254,8 @@ function log_env_problem() -> Option<String> touches input {
             // DEBUG, so "answers DEBUG without being spelled debug" identifies it exactly.
             if log_level_from_name(name) == LOG_DEBUG && name != "debug" {
                 return Option.Some(LOG_VARIABLE + "=" + raw
-                    + " is not a level I know, so everything is being logged."
-                    + " The levels are: off, debug, info, warn, error.");
+                            + " is not a level I know, so everything is being logged."
+                        + " The levels are: off, debug, info, warn, error.");
             }
             return Option.None;
         }
@@ -383,8 +383,8 @@ pure function log_merge(chunks: [String]) -> String allocates {
 // side of the year 10000.
 pure function log_format(level: Int, message: String, unix_seconds: Int) -> String allocates {
     return time_format_iso(time_from_unix(unix_seconds)) + " "
-         + log_pad_level(log_level_name(level)) + " "
-         + log_one_line(message);
+            + log_pad_level(log_level_name(level)) + " "
+            + log_one_line(message);
 }
 
 // ---- the four a program calls ---------------------------------------------------------------

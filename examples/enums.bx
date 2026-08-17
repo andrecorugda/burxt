@@ -10,7 +10,7 @@ enum Status {
     Paid,
     Owing(Decimal<2>),
     Void
-}
+        }
 
 // ---- Exhaustive matching, with no wildcard --------------------------------
 // There is deliberately no `_` arm. If you add a fourth variant tomorrow, every
@@ -38,7 +38,7 @@ let invoices: [Status; 3] = [
     Status.Paid,
     Status.Owing($42.50),
     Status.Void
-];
+        ];
 
 let mutable i: Int = 0;
 let mutable total: Decimal<2> = $0.00;

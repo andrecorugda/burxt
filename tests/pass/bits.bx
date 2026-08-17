@@ -45,7 +45,7 @@ print(shift_left(1, 63));
 // ---- packing bytes, which is most of a binary format ----
 function be32(a: Int, b: Int, c: Int, d: Int) -> Int {
     return bit_or(bit_or(shift_left(a, 24), shift_left(b, 16)),
-                  bit_or(shift_left(c, 8), d));
+            bit_or(shift_left(c, 8), d));
 }
 function byte_of(word: Int, which: Int) -> Int {
     return bit_and(shift_right_zeros(word, 8 * which), 0xFF);

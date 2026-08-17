@@ -11,7 +11,7 @@
 // failure a fixture is least likely to be written for and most annoying to diagnose.
 interface Chain<T> {
     function then(self, next: dynamic Chain<T>, x: T) -> T
-}
+        }
 
 class Add { by: Int }
 implement Chain<Int> for Add {

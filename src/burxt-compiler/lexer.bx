@@ -135,24 +135,24 @@ function (self: Unit) keyword_code(src: String, start: Int, length: Int) -> Int 
 
 function (mutable self: Unit) emit(kind: Int, start: Int, length: Int) -> Int {
     push(self.tokens, Token {
-        kind: kind, start: start, length: length,
-        value: 0, scale: 0, interpolated: false,
+            kind: kind, start: start, length: length,
+            value: 0, scale: 0, interpolated: false,
     });
     return len(self.tokens);
 }
 
 function (mutable self: Unit) emit_number(kind: Int, start: Int, length: Int, value: Int, scale: Int) -> Int {
     push(self.tokens, Token {
-        kind: kind, start: start, length: length,
-        value: value, scale: scale, interpolated: false,
+            kind: kind, start: start, length: length,
+            value: value, scale: scale, interpolated: false,
     });
     return len(self.tokens);
 }
 
 function (mutable self: Unit) emit_string(start: Int, length: Int, interpolated: Bool) -> Int {
     push(self.tokens, Token {
-        kind: 4, start: start, length: length,
-        value: 0, scale: 0, interpolated: interpolated,
+            kind: 4, start: start, length: length,
+            value: 0, scale: 0, interpolated: interpolated,
     });
     return len(self.tokens);
 }
@@ -201,7 +201,7 @@ function (mutable self: Unit) scan_number(src: String, from: Int, stop: Int) -> 
     // `bit_not(0)`. Overflow past sixteen digits is what stage-0 refuses; here it wraps, and the
     // differential is what would catch a program that relied on the difference.
     if !money && byte_at(src, i) == 48 && (at_byte(src, i + 1, stop) == 120
-                                       || at_byte(src, i + 1, stop) == 88) {
+            || at_byte(src, i + 1, stop) == 88) {
         i += 2;
         let mutable hex: Int = 0;
         let mutable digits: Int = 0;
@@ -264,7 +264,7 @@ function (mutable self: Unit) scan_number(src: String, from: Int, stop: Int) -> 
     // that addition for the same reason: `1.0000000000000000005%` is scale 20, not 18.
     if scale > 18 {
         print("error: this decimal literal has " + to_string(scale)
-            + " fractional digits, but Decimal supports at most 18 — a scaled i64 holds no more");
+                + " fractional digits, but Decimal supports at most 18 — a scaled i64 holds no more");
         self.errors += 1;
     }
     if at_byte(src, i, stop) == 37 {                 // '%'
@@ -272,7 +272,7 @@ function (mutable self: Unit) scan_number(src: String, from: Int, stop: Int) -> 
         // A percent is the number divided by a hundred: two more places, exactly.
         if scale + 2 > 18 && scale <= 18 {
             print("error: this decimal literal has " + to_string(scale + 2)
-                + " fractional digits, but Decimal supports at most 18 — a scaled i64 holds no more");
+                    + " fractional digits, but Decimal supports at most 18 — a scaled i64 holds no more");
             self.errors += 1;
         }
         let n: Int = self.emit_number(3, from, i - from, value, scale + 2);
@@ -311,7 +311,7 @@ function (mutable self: Unit) scan_string(src: String, from: Int, stop: Int) -> 
         // ceiling fall.
         if b == 0 {
             print("error: a raw NUL byte cannot appear in a string literal — Burxt "
-                + "strings are NUL-terminated");
+                    + "strings are NUL-terminated");
             self.errors += 1;
             i += 1;
             continue;
@@ -331,15 +331,15 @@ function (mutable self: Unit) scan_string(src: String, from: Int, stop: Int) -> 
             // "unknown escape" for it would send the reader hunting the wrong thing.
             if after == 10 {
                 print("error: unterminated string literal — close it with `\"` before the "
-                    + "end of the line");
+                        + "end of the line");
                 self.errors += 1;
                 break;
             }
             // The set stage-0 accepts, and nothing else: `\\ \" \n \r \t \0 \{ \}`.
             if after != 92 && after != 34 && after != 110 && after != 114 && after != 116
-               && after != 48 && after != 123 && after != 125 {
+                    && after != 48 && after != 123 && after != 125 {
                 print("error: unknown escape `\\" + substring(src, i + 1, 1)
-                    + "` — Burxt strings support \\\\, \\\", \\n, \\r, \\t, \\0, \\\{ and \\\}");
+                        + "` — Burxt strings support \\\\, \\\", \\n, \\r, \\t, \\0, \\\{ and \\\}");
                 self.errors += 1;
             }
             i += 2;
@@ -360,7 +360,7 @@ function (mutable self: Unit) scan_string(src: String, from: Int, stop: Int) -> 
             // bracket, refused for the same reason: brackets a reader can see, with nothing in them.
             if i + 1 < stop && byte_at(src, i + 1) == 125 {
                 print("error: empty interpolation `\{\}` — put an expression inside it, or write "
-                    + "`\\\{` and `\\\}` for literal braces");
+                        + "`\\\{` and `\\\}` for literal braces");
                 self.errors += 1;
             }
             interpolated = true;
@@ -371,7 +371,7 @@ function (mutable self: Unit) scan_string(src: String, from: Int, stop: Int) -> 
         if b == 125 {                                // '}'
             if !in_interpolation {
                 print("error: a literal `\}` in a string must be written `\\\}` — a bare `\}` only "
-                    + "closes a `\{expr\}` interpolation");
+                        + "closes a `\{expr\}` interpolation");
                 self.errors += 1;
             }
             in_interpolation = false;
@@ -384,7 +384,7 @@ function (mutable self: Unit) scan_string(src: String, from: Int, stop: Int) -> 
             // change — an unescaped `{` is what started this.
             if in_interpolation {
                 print("error: a literal `\{` in a string must be written `\\\{` — an unescaped "
-                    + "`\{` starts a `\{expr\}` interpolation");
+                        + "`\{` starts a `\{expr\}` interpolation");
                 self.errors += 1;
             }
             i += 1;
@@ -432,7 +432,7 @@ function (mutable self: Unit) scan_punct(src: String, from: Int, stop: Int) -> I
         let three: Int = at_byte(src, from + 2, stop);
         if three == 61 || three == 46 {              // '=' or '.'
             print("error: a Burxt range is exclusive and spelled `..` — there is no `..=` or "
-                + "`...`. `0..3` is 0, 1, 2; for 0 through 3 write `0..4`.");
+                    + "`...`. `0..3` is 0, 1, 2; for 0 through 3 write `0..4`.");
             self.errors += 1;
             return from + 3;
         }
@@ -492,13 +492,13 @@ function (mutable self: Unit) scan_punct(src: String, from: Int, stop: Int) -> I
     // remember is the opposite of what this language is for.
     if one == 38 {
         print("error: Burxt has no bitwise `&` — write `bit_and(a, b)`, or did you mean `&&` "
-            + "(logical and)?");
+                + "(logical and)?");
         self.errors += 1;
         return from + 1;
     }
     if one == 124 {
         print("error: Burxt has no bitwise `|` — write `bit_or(a, b)`, or did you mean `||` "
-            + "(logical or)?");
+                + "(logical or)?");
         self.errors += 1;
         return from + 1;
     }

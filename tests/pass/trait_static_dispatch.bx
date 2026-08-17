@@ -3,8 +3,8 @@
 // method shapes happening to match.
 interface HasBalance {
     function balance_of(self) -> Decimal<2>
-    function label(self) -> Int
-}
+            function label(self) -> Int
+        }
 
 class Account { balance: Decimal<2>, id: Int }
 

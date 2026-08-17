@@ -299,9 +299,9 @@ function combine(op: Int, left: Type, right: Type, declared: Type) -> Type {
         if is_decimal(left) && is_decimal(right) {
             if !decimal_has_contract(declared) {
                 print("  `*` on " + ty_name(left) + " and " + ty_name(right)
-                      + " needs a rounding contract on the result: the exact product "
-                      + "has " + to_string(decimal_scale(left) + decimal_scale(right))
-                      + " decimal places");
+                            + " needs a rounding contract on the result: the exact product "
+                            + "has " + to_string(decimal_scale(left) + decimal_scale(right))
+                        + " decimal places");
                 return Type.Unknown;
             }
             return declared;
@@ -317,7 +317,7 @@ function combine(op: Int, left: Type, right: Type, declared: Type) -> Type {
     // `+` and `-` combine like quantities, so the types must match exactly.
     if !ty_eq(left, right) {
         print("  cannot apply `+` to " + ty_name(left) + " and " + ty_name(right)
-              + ": addition combines like quantities, so the scales must match");
+                + ": addition combines like quantities, so the scales must match");
         return Type.Unknown;
     }
     return left;
@@ -365,7 +365,7 @@ function (mutable self: Table) check_let(src: String, from: Int) -> Int {
     // One report per mistake: an expression that already failed says nothing more.
     if !ty_eq(found, declared.ty) && !is_unknown(found) {
         print("  type mismatch: declared " + ty_name(declared.ty)
-              + ", but the expression has type " + ty_name(found));
+                + ", but the expression has type " + ty_name(found));
     }
     push(self.rows, Binding { name: name, ty: declared.ty });
     return cursor;

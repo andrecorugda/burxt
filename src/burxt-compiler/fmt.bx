@@ -27,11 +27,9 @@
 //      line.
 //   2. An opener ending a line has already moved the depth, so the next line is a member at depth
 //      rather than a continuation — otherwise it gains a level.
-//   3. A hand-aligned continuation keeps the indentation it was written with. Where a wrapped
-//      expression lines up is a judgement no rule reproduces, and this is what makes the formatter a
-//      no-op on code its authors were happy with rather than a reformatter of the world.
-//   4. Rule 3 subsumes the signature-brace case: a `{` alone on a line after a `requires` is a
-//      continuation, so it keeps its written column and needs no rule of its own.
+//   3. A continuation is indented TWO levels. One level would put it in the same column as the
+//      block body it precedes, and aligning to the opening bracket — what a person does by eye —
+//      depends on the width of the name to its left, so renaming a function reflows a paragraph.
 // ============================================================================
 
 // The token kinds this needs, from `lexer.bx`: ( ) { } [ ] ; ,
@@ -200,15 +198,17 @@ function fmt_render(src: String, tokens: [Token]) -> String allocates {
             // an empty line are invisible in review and loud in a diff, which is the wrong way round.
             pending = pending + "\n";
         } else {
+            // A continuation is indented TWO levels, always. The second level is not decoration:
+            // at one level a continuation is indistinguishable from the block body it precedes.
+            // See `fmt.rs` for the full argument — one spelling per concept, applied to layout.
+            let mutable level: Int = depth + dip;
             if continued {
-                pending = pending + fmt_leading(src, at, stop) + body + "\n";
-            } else {
-                let mutable level: Int = depth + dip;
-                if level < 0 {
-                    level = 0;
-                }
-                pending = pending + fmt_indent(level) + body + "\n";
+                level += 2;
             }
+            if level < 0 {
+                level = 0;
+            }
+            pending = pending + fmt_indent(level) + body + "\n";
         }
         if len(pending) > 512 {
             let flushed: Int = push(chunks, pending);

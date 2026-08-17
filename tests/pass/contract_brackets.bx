@@ -32,8 +32,8 @@
 // A parameter bracket, and a second clause in the same brackets — each comma is a separate clause,
 // so a failure can name the one that broke.
 function withdraw(balance: Decimal<2> [> $0.00, < $1000000.00], amount: Decimal<2>)
-    -> Decimal<2> [>= $0.00]
-{
+        -> Decimal<2> [>= $0.00]
+        {
     return balance - amount;
 }
 
@@ -98,9 +98,9 @@ function it_is_free() -> Int {
 // Brackets and written clauses together on one function, in the order they are checked: brackets
 // first, then what was written below.
 function fee(amount: Decimal<2> [> $0.00]) -> Decimal<2>
-    requires amount < $100.00
-    ensures result >= $0.00
-{
+        requires amount < $100.00
+        ensures result >= $0.00
+        {
     return amount;
 }
 

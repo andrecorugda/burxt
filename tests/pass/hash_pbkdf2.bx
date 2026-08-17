@@ -37,22 +37,22 @@ function vector(label: String, actual: String, expected: String) -> Bool {
 
 // ---- published: password / salt, the RFC 6070 tuples with SHA-256 answers ----
 vector("published, password+salt, 1 iterations, 32 bytes",
-       hash_hex(pbkdf2_sha256_text("password", "salt", 1, 32)),
-       "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b");
+            hash_hex(pbkdf2_sha256_text("password", "salt", 1, 32)),
+        "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b");
 vector("published, password+salt, 2 iterations, 32 bytes",
-       hash_hex(pbkdf2_sha256_text("password", "salt", 2, 32)),
-       "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43");
+            hash_hex(pbkdf2_sha256_text("password", "salt", 2, 32)),
+        "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43");
 vector("published, password+salt, 4096 iterations, 32 bytes",
-       hash_hex(pbkdf2_sha256_text("password", "salt", 4096, 32)),
-       "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a");
+            hash_hex(pbkdf2_sha256_text("password", "salt", 4096, 32)),
+        "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a");
 
 // ---- published: a 24-byte password, a 36-byte salt, and 40 bytes out ----
 // **40 bytes is two blocks**, so this is the case that proves the outer loop and the
 // big-endian block index appended to the salt. A wrong byte order there produces a first
 // block that is right and a second that is not.
 vector("published, long password and salt, 4096 iterations, 40 bytes",
-       hash_hex(pbkdf2_sha256_text("passwordPASSWORDpassword", "saltSALTsaltSALTsaltSALTsaltSALTsalt", 4096, 40)),
-       "348c89dbcbd32b2f32d814b8116e84cf2b17347ebc1800181c4e2a1fb8dd53e1c635518c7dac47e9");
+            hash_hex(pbkdf2_sha256_text("passwordPASSWORDpassword", "saltSALTsaltSALTsaltSALTsaltSALTsalt", 4096, 40)),
+        "348c89dbcbd32b2f32d814b8116e84cf2b17347ebc1800181c4e2a1fb8dd53e1c635518c7dac47e9");
 
 // ---- published: embedded NUL bytes, and 16 bytes out ----
 // A NUL inside a password is where a library that hands its input to C quietly truncates.
@@ -61,8 +61,8 @@ vector("published, long password and salt, 4096 iterations, 40 bytes",
 // final 32-byte block.
 print("the NUL password is " + to_string(len("pass\0word")) + " bytes and the salt is " + to_string(len("sa\0lt")));
 vector("published, NUL in password and salt, 4096 iterations, 16 bytes",
-       hash_hex(pbkdf2_sha256_text("pass\0word", "sa\0lt", 4096, 16)),
-       "89b69d0516f829893c696226650a8687");
+            hash_hex(pbkdf2_sha256_text("pass\0word", "sa\0lt", 4096, 16)),
+        "89b69d0516f829893c696226650a8687");
 
 // ---- by definition: one iteration IS one HMAC ----
 // `T1 = HMAC(P, S || INT(1))`, and with c = 1 that is the whole answer. Built here from
@@ -104,11 +104,11 @@ print(len(short_key));
 
 // ---- by definition: more iterations is a different key, not a longer computation of the same ----
 print(hash_equals_constant_time(pbkdf2_sha256_text("password", "salt", 1, 32),
-                               pbkdf2_sha256_text("password", "salt", 2, 32)));
+        pbkdf2_sha256_text("password", "salt", 2, 32)));
 print(hash_equals_constant_time(pbkdf2_sha256_text("password", "salt", 1, 32),
-                               pbkdf2_sha256_text("password", "pepper", 1, 32)));
+        pbkdf2_sha256_text("password", "pepper", 1, 32)));
 
 // ---- a 41-byte output: not a multiple of the digest, so the last block is cut mid-way ----
 vector("by definition check on a 41-byte output",
-       hash_hex(pbkdf2_sha256_text("password", "salt", 10, 41)),
-       "653cc888d937efe22810a5cbdb25a5bd82e2ebb27a800f85cfa360a6d925198e8badf3162ba1be51a8");
+            hash_hex(pbkdf2_sha256_text("password", "salt", 10, 41)),
+        "653cc888d937efe22810a5cbdb25a5bd82e2ebb27a800f85cfa360a6d925198e8badf3162ba1be51a8");

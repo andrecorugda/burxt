@@ -3,8 +3,8 @@
 // an interface with five methods it was the type written six times.
 interface Priced {
     function price(self) -> Decimal<2>
-    function label(self) -> String
-}
+            function label(self) -> String
+        }
 
 class Book { title: String, cost: Decimal<2> }
 

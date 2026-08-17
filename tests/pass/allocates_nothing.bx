@@ -19,13 +19,13 @@ function total(a: Int, b: Int) -> Int allocates nothing {
     return a + b;
 }
 function tax(subtotal: Decimal<2>, rate: Decimal<4, RoundHalfEven>) -> Decimal<2, RoundHalfEven>
-    allocates nothing
-{
+        allocates nothing
+        {
     return subtotal * rate;
 }
 function widest(xs: [Int]) -> Int allocates nothing
-    requires len(xs) > 0
-{
+        requires len(xs) > 0
+        {
     let mutable best: Int = xs[0];
     let mutable i: Int = 1;
     while i < len(xs) {
@@ -55,7 +55,7 @@ function quadruple(n: Int) -> Int allocates nothing { return double(double(n)); 
 // DISCRIMINATES rather than refusing every interface call.
 interface Counted {
     function count(self) -> Int
-}
+        }
 class Basket { items: Int }
 implement Counted for Basket {
     function (self) count() -> Int { return self.items; }

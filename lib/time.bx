@@ -144,14 +144,14 @@ pure function duration_seconds(count: Int) -> Duration {
 }
 
 pure function duration_minutes(count: Int) -> Duration
-    requires !math_mul_overflows(count, SECONDS_PER_MINUTE)
-{
+        requires !math_mul_overflows(count, SECONDS_PER_MINUTE)
+        {
     return Duration { seconds: count * SECONDS_PER_MINUTE };
 }
 
 pure function duration_hours(count: Int) -> Duration
-    requires !math_mul_overflows(count, SECONDS_PER_HOUR)
-{
+        requires !math_mul_overflows(count, SECONDS_PER_HOUR)
+        {
     return Duration { seconds: count * SECONDS_PER_HOUR };
 }
 
@@ -159,8 +159,8 @@ pure function duration_hours(count: Int) -> Duration
 // a human would call "the same time tomorrow", that is the same thing, because UTC has no daylight
 // saving. It is only different from a civil day in a timezone that shifts, and there are none here.
 pure function duration_days(count: Int) -> Duration
-    requires !math_mul_overflows(count, SECONDS_PER_DAY)
-{
+        requires !math_mul_overflows(count, SECONDS_PER_DAY)
+        {
     return Duration { seconds: count * SECONDS_PER_DAY };
 }
 
@@ -190,16 +190,16 @@ pure function duration_total_days(span: Duration) -> Int {
 // A unix timestamp `span` later. Refuses rather than wraps: a date library that answered the year
 // -292277022657 for "a century after now" would be worse than one that stopped.
 pure function time_add(unix_seconds: Int, span: Duration) -> Int
-    requires !math_add_overflows(unix_seconds, span.seconds)
-{
+        requires !math_add_overflows(unix_seconds, span.seconds)
+        {
     return unix_seconds + span.seconds;
 }
 
 // How long from `from_unix` to `to_unix`. **Negative when the second is earlier**, which is the
 // honest answer rather than an absolute value: the caller asked a directed question.
 pure function time_between(from_unix: Int, to_unix: Int) -> Duration
-    requires !math_sub_overflows(to_unix, from_unix)
-{
+        requires !math_sub_overflows(to_unix, from_unix)
+        {
     return Duration { seconds: to_unix - from_unix };
 }
 
@@ -220,8 +220,8 @@ pure function time_between(from_unix: Int, to_unix: Int) -> Duration
 // to a value in `(-by, 0]` lands in `(0, by]`. Total for every `Int`, which is what the two callers
 // below promise.
 pure function time_floor_mod(value: Int, by: Int) -> Int
-    requires by > 0
-{
+        requires by > 0
+        {
     let rest: Int = remainder(value, by);
     if rest < 0 {
         return rest + by;
@@ -245,9 +245,9 @@ pure function time_is_leap_year(year: Int) -> Bool {
 // 28, 29, 30 or 31. A table would be four lines shorter and would need `from_bytes` to be indexed
 // by anything but a chain of comparisons, so the comparisons are written out.
 pure function time_days_in_month(year: Int, month: Int) -> Int
-    requires month >= 1
-    requires month <= 12
-{
+        requires month >= 1
+        requires month <= 12
+        {
     if month == 2 {
         if time_is_leap_year(year) {
             return 29;
@@ -269,11 +269,11 @@ pure function time_days_in_month(year: Int, month: Int) -> Int
 // The March shift is the whole trick — see the file header. `m <= 2` borrows a year so that February
 // is last, which puts the leap day at the end where it disturbs nothing.
 pure function time_days_from_civil(year: Int, month: Int, day: Int) -> Int
-    requires month >= 1
-    requires month <= 12
-    requires day >= 1
-    requires day <= 31
-{
+        requires month >= 1
+        requires month <= 12
+        requires day >= 1
+        requires day <= 31
+        {
     let mutable y: Int = year;
     if month <= 2 {
         y -= 1;
@@ -301,7 +301,7 @@ pure function time_civil_from_days(days: Int) -> DateTime {
     let era: Int = divide_floor(z, 146097);
     let doe: Int = z - era * 146097;                     // 0..146096
     let yoe: Int = divide_floor(
-        doe - divide_floor(doe, 1460) + divide_floor(doe, 36524) - divide_floor(doe, 146096), 365);
+            doe - divide_floor(doe, 1460) + divide_floor(doe, 36524) - divide_floor(doe, 146096), 365);
     let doy: Int = doe - (365 * yoe + divide_floor(yoe, 4) - divide_floor(yoe, 100));
     let mp: Int = divide_floor(5 * doy + 2, 153);        // 0..11, March-based
     let day: Int = doy - divide_floor(153 * mp + 2, 5) + 1;
@@ -337,7 +337,7 @@ pure function time_from_unix(unix_seconds: Int) -> DateTime {
         hour: divide_floor(rest, SECONDS_PER_HOUR),
         minute: divide_floor(time_floor_mod(rest, SECONDS_PER_HOUR), SECONDS_PER_MINUTE),
         second: time_floor_mod(rest, SECONDS_PER_MINUTE)
-    };
+            };
 }
 
 // Is this a real instant? Every field in range, and the day within the month's actual length — so
@@ -369,13 +369,13 @@ pure function time_is_valid(when: DateTime) -> Bool {
 // program that built a date wrong, not input that happened to be bad — and `time_parse_iso` is the
 // one that takes input and it answers `Option`. Same split `char_at` and `string_parse_int` make.
 pure function time_to_unix(when: DateTime) -> Int
-    requires time_is_valid(when)
-{
+        requires time_is_valid(when)
+        {
     let days: Int = time_days_from_civil(when.year, when.month, when.day);
     return days * SECONDS_PER_DAY
-         + when.hour * SECONDS_PER_HOUR
-         + when.minute * SECONDS_PER_MINUTE
-         + when.second;
+            + when.hour * SECONDS_PER_HOUR
+            + when.minute * SECONDS_PER_MINUTE
+            + when.second;
 }
 
 // ISO-8601 weekday: **Monday is 1 and Sunday is 7.**
@@ -388,18 +388,18 @@ pure function time_to_unix(when: DateTime) -> Int
 // `time_floor_mod` and not `remainder`: for any date before 1970 the day index is negative, and a
 // remainder that kept that sign would answer a weekday of -2.
 pure function time_weekday(when: DateTime) -> Int
-    requires time_is_valid(when)
-{
+        requires time_is_valid(when)
+        {
     let days: Int = time_days_from_civil(when.year, when.month, when.day);
     return time_floor_mod(days + 3, 7) + 1;
 }
 
 // Day of the year, 1..366. 1 January is 1.
 pure function time_day_of_year(when: DateTime) -> Int
-    requires time_is_valid(when)
-{
+        requires time_is_valid(when)
+        {
     return time_days_from_civil(when.year, when.month, when.day)
-         - time_days_from_civil(when.year, 1, 1) + 1;
+            - time_days_from_civil(when.year, 1, 1) + 1;
 }
 
 // ---- ISO-8601 ----------------------------------------------------------------------------
@@ -409,9 +409,9 @@ pure function time_day_of_year(when: DateTime) -> Int
 // corruption this file is written to avoid. `time_format_iso`'s contract is what keeps that from
 // arising there.
 pure function time_pad(value: Int, width: Int) -> String allocates
-    requires value >= 0
-    requires width >= 1
-{
+        requires value >= 0
+        requires width >= 1
+        {
     let mutable out: String = to_string(value);
     while len(out) < width {
         out = "0" + out;
@@ -429,22 +429,22 @@ pure function time_pad(value: Int, width: Int) -> String allocates
 // a default. `time_to_unix` and `time_from_unix` have the full range; only the text form is narrow,
 // and the contract says where the narrowing is.
 pure function time_format_iso(when: DateTime) -> String allocates
-    requires time_is_valid(when)
-    requires when.year >= 0
-    requires when.year <= 9999
-{
+        requires time_is_valid(when)
+        requires when.year >= 0
+        requires when.year <= 9999
+        {
     return time_pad(when.year, 4) + "-" + time_pad(when.month, 2) + "-" + time_pad(when.day, 2)
-         + "T" + time_pad(when.hour, 2) + ":" + time_pad(when.minute, 2) + ":"
-         + time_pad(when.second, 2) + "Z";
+            + "T" + time_pad(when.hour, 2) + ":" + time_pad(when.minute, 2) + ":"
+            + time_pad(when.second, 2) + "Z";
 }
 
 // Just the date: `2026-08-01`. The other ISO-8601 form a program is handed, and the one a CSV
 // column usually holds.
 pure function time_format_date(when: DateTime) -> String allocates
-    requires time_is_valid(when)
-    requires when.year >= 0
-    requires when.year <= 9999
-{
+        requires time_is_valid(when)
+        requires when.year >= 0
+        requires when.year <= 9999
+        {
     return time_pad(when.year, 4) + "-" + time_pad(when.month, 2) + "-" + time_pad(when.day, 2);
 }
 
@@ -517,7 +517,7 @@ pure function time_parse_iso(text: String) -> Option<DateTime> {
     }
     let when: DateTime = DateTime {
         year: year, month: month, day: day, hour: hour, minute: minute, second: second
-    };
+            };
     // The last gate, and the one that rejects 2023-02-29 after its digits read perfectly well.
     if !time_is_valid(when) {
         return Option.None;
@@ -566,8 +566,8 @@ external function malloc(size: Int) -> CPointer;
 // "the i64 at this offset" — the pointer wall hands over bytes and nothing else, which is what
 // makes it a wall.
 pure function time_i64_at(bytes: [Int], from: Int) -> Int
-    requires from >= 0
-{
+        requires from >= 0
+        {
     let mutable value: Int = 0;
     let mutable shift: Int = 0;
     let mutable i: Int = 0;

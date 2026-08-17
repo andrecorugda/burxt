@@ -19,10 +19,10 @@ print(remainder(255, 16));
 
 // Composes with everything else on a signature.
 pure function midpoint(a: Int, b: Int) -> Int
-    requires a <= b
-    ensures result >= a
-    ensures result <= b
-{
+        requires a <= b
+        ensures result >= a
+        ensures result <= b
+        {
     return divide_floor(a + b, 2);
 }
 print(midpoint(4, 9));

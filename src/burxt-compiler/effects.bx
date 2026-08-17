@@ -173,7 +173,7 @@ function effects_collect(unit: Unit, src: String, mutable into: Graph) -> Int {
                 let clauses: Node = unit.nodes[method.c];
                 let owner: Token = unit.tokens[clauses.value];
                 push(into.names, substring(src, owner.start, owner.length) + "."
-                    + substring(src, named.start, named.length));
+                        + substring(src, named.start, named.length));
                 push(into.masks, flag_effects(method.value));
                 push(into.bodies, method.b);
                 j += 1;
@@ -185,7 +185,7 @@ function effects_collect(unit: Unit, src: String, mutable into: Graph) -> Int {
             let clauses: Node = unit.nodes[item.c];
             let owner: Token = unit.tokens[clauses.value];
             push(into.names, substring(src, owner.start, owner.length) + "."
-                + substring(src, named.start, named.length));
+                    + substring(src, named.start, named.length));
             push(into.masks, flag_effects(item.value));
             push(into.bodies, item.b);
         }
@@ -221,7 +221,7 @@ function effects_collect(unit: Unit, src: String, mutable into: Graph) -> Int {
 // the first declarer as a fallback for the case where no leaf is reachable, which should not
 // happen and is not worth being silently wrong about if it ever does.
 function effects_walk(unit: Unit, src: String, mutable graph: Graph,
-                      mutable found: [Reach]) -> Int {
+        mutable found: [Reach]) -> Int {
     let mutable frontier: [String] = [];
     let mutable trails: [String] = [];
     let mutable seen: [String] = [];
@@ -448,7 +448,7 @@ function effects_report(path: String, allow: String, gated: Bool, want_json: Boo
         allowed = effects_allowed(allow);
         if allowed < 0 {
             print_error("error: `" + allow + "` names something that is not an effect. The "
-                + "vocabulary is closed on purpose: files, commands, clock, input, network, model");
+                    + "vocabulary is closed on purpose: files, commands, clock, input, network, model");
             return 2;
         }
     }
@@ -555,7 +555,7 @@ function effects_print_json(path: String, found: [Reach], allowed: Int, gated: B
     while i < len(found) {
         let r: Reach = found[i];
         let mutable line: String = "    \{ \"effect\": \"" + effect_name(r.bit)
-            + "\", \"via\": \"" + r.via + "\" \}";
+                + "\", \"via\": \"" + r.via + "\" \}";
         if i + 1 < len(found) {
             line = line + ",";
         }

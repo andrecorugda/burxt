@@ -160,19 +160,19 @@ function blank_imports(text: String) -> String {
 // never grew it — because until `burxt check` learned to print a position at all, nothing on this
 // side ever asked which file an offset fell in.
 class Loader { seen: [String], buffer: String, paths: [String], starts: [Int], lengths: [Int],
-               package: Package,
-               // C2b. Where `use "std/…"` resolves to, decided ONCE by the caller and carried in
-               // rather than read here.
-               //
-               // **The effects system is what chose this shape.** Calling `getenv` inside the
-               // loader made `Loader.load` touch `input`, and the effect propagated to eight
-               // functions across five files — `file_at_offset`, `mcp_schema`, `review`,
-               // `effects_report`, `layout` — none of which reads anything. The signature was
-               // telling the truth: resolution was reaching the environment, so everything that
-               // resolved a module was too. Resolving once where `touches input` already lives
-               // (`main.bx`, beside `llc_command`) confines it to the one place that genuinely
-               // asks the environment a question.
-               std_roots: String }
+            package: Package,
+            // C2b. Where `use "std/…"` resolves to, decided ONCE by the caller and carried in
+            // rather than read here.
+            //
+            // **The effects system is what chose this shape.** Calling `getenv` inside the
+            // loader made `Loader.load` touch `input`, and the effect propagated to eight
+            // functions across five files — `file_at_offset`, `mcp_schema`, `review`,
+            // `effects_report`, `layout` — none of which reads anything. The signature was
+            // telling the truth: resolution was reaching the environment, so everything that
+            // resolved a module was too. Resolving once where `touches input` already lives
+            // (`main.bx`, beside `llc_command`) confines it to the one place that genuinely
+            // asks the environment a question.
+        std_roots: String }
 
 function (mutable self: Loader) load(path: String) -> Int touches files {
     for seen in self.seen {
@@ -217,7 +217,7 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
                         print_error("error: `use \"" + named + "\"` in " + path
                                     + " could mean two things: the standard library, or the file at "
                                     + relative + ". Rename one of them — `std/` is reserved for the "
-                                    + "library that ships with the compiler.");
+                                + "library that ships with the compiler.");
                         exit(2);
                     }
                     // First match wins, across every root — the same walk as `stdlib_roots` in
@@ -260,11 +260,11 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
                     if len(found) == 0 {
                         if len(present_files) > 0 {
                             print_error("error: `use \"" + named + "\"` — the standard library has no `"
-                                        + rest + "`. Looked in:\n" + present_files);
+                                    + rest + "`. Looked in:\n" + present_files);
                         } else {
                             print_error("error: `use \"" + named + "\"` — no standard library found. "
                                         + "Looked in:\n" + every_root + "\nSet BURXT_LIB to the "
-                                        + "directory holding the library's .bx files.");
+                                    + "directory holding the library's .bx files.");
                         }
                         exit(2);
                     }
@@ -284,7 +284,7 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
                                     + " could mean two things: the dependency declared in "
                                     + "burxt.package, or the file at " + relative
                                     + ". Rename one of them — a dependency's name is the first "
-                                    + "segment of every import that reaches it.");
+                                + "segment of every import that reaches it.");
                         exit(2);
                     }
                     target = via_package;
@@ -320,7 +320,7 @@ function load_program(path: String, std_roots: String) -> String touches files {
     // the two would let a nested package rebind a name its parent had already bound.
     let package: Package = manifest_discover(path);
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: package, std_roots: std_roots };
+            package: package, std_roots: std_roots };
     let done: Int = loader.load(path);
     return loader.buffer;
 }
@@ -342,7 +342,7 @@ function load_program(path: String, std_roots: String) -> String touches files {
 // model's own terms.
 function file_at_offset(root: String, offset: Int, std_roots: String) -> String touches files {
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: manifest_discover(root), std_roots: std_roots };
+            package: manifest_discover(root), std_roots: std_roots };
     let done: Int = loader.load(root);
     let mutable i: Int = 0;
     while i < len(loader.paths) {
@@ -357,7 +357,7 @@ function file_at_offset(root: String, offset: Int, std_roots: String) -> String 
 // The same offset, measured from the start of the file it fell in.
 function offset_within_file(root: String, offset: Int, std_roots: String) -> Int touches files {
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: manifest_discover(root), std_roots: std_roots };
+            package: manifest_discover(root), std_roots: std_roots };
     let done: Int = loader.load(root);
     let mutable i: Int = 0;
     while i < len(loader.paths) {
@@ -385,7 +385,7 @@ function (mutable self: Unit) note_package_ranges(root: String, std_roots: Strin
         return 0;
     }
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: package, std_roots: std_roots };
+            package: package, std_roots: std_roots };
     let done: Int = loader.load(root);
     let mutable i: Int = 0;
     let mutable noted: Int = 0;
@@ -399,8 +399,8 @@ function (mutable self: Unit) note_package_ranges(root: String, std_roots: Strin
         while d < len(package.names) {
             let dependency_root: String = package.roots[d];
             if len(path) >= len(dependency_root)
-                && substring(path, 0, len(dependency_root)) == dependency_root
-                && len(dependency_root) > best_length {
+                    && substring(path, 0, len(dependency_root)) == dependency_root
+                    && len(dependency_root) > best_length {
                 best = d;
                 best_length = len(dependency_root);
             }

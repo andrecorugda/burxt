@@ -30,12 +30,12 @@ print(html_render(html_element("img", [html_attr("src", "a.png")], [])));
 
 // 6. Nesting, and the shape M15 measured on the release binary at v0.0.264.
 print(html_render(html_element("div", [], [
-    html_element("p", [html_attr("class", "sku")], [html_text("Rice")]),
+                html_element("p", [html_attr("class", "sku")], [html_text("Rice")]),
 ])));
 
 // 7. A document carries the doctype, because without it a browser is in quirks mode.
 print(html_document(html_element("html", [], [
-    html_element("body", [], [html_text("hi")]),
+                html_element("body", [], [html_text("hi")]),
 ])));
 
 // 8. Empty text is an empty answer, not a missing one — and an element with no children is
@@ -48,5 +48,5 @@ print(html_render(html_element("div", [], [])));
 //    is no float anywhere between the till and the tag.
 let price: Decimal<2> = 19.99;
 print(html_render(html_element("span", [html_attr("class", "price")], [
-    html_text(to_string(price * 3)),
+                html_text(to_string(price * 3)),
 ])));

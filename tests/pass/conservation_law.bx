@@ -3,10 +3,10 @@
 class Ledger { checking: Decimal<2>, savings: Decimal<2> }
 
 function (mutable self: Ledger) move_to_savings(amount: Decimal<2>) -> Int
-    requires amount > $0.00
-    requires amount <= self.checking
-    ensures self.checking + self.savings == old(self.checking + self.savings)
-{
+        requires amount > $0.00
+        requires amount <= self.checking
+        ensures self.checking + self.savings == old(self.checking + self.savings)
+        {
     self.checking = self.checking - amount;
     self.savings = self.savings + amount;
     return 0;
@@ -14,10 +14,10 @@ function (mutable self: Ledger) move_to_savings(amount: Decimal<2>) -> Int
 
 // `old` of a single field works too, and so does more than one `old` in a clause.
 function (mutable self: Ledger) deposit(amount: Decimal<2>) -> Int
-    requires amount > $0.00
-    ensures self.checking == old(self.checking) + amount
-    ensures self.savings == old(self.savings)
-{
+        requires amount > $0.00
+        ensures self.checking == old(self.checking) + amount
+        ensures self.savings == old(self.savings)
+        {
     self.checking = self.checking + amount;
     return 0;
 }

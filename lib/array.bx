@@ -131,8 +131,8 @@ pure function array_is_sorted<T: Ordered>(xs: [T]) -> Bool {
 // methods resolve it correctly but because they never enter the state that broke free functions. There
 // was no working path to copy.)
 pure function array_min<T: Ordered>(xs: [T]) -> T
-    requires len(xs) > 0
-{
+        requires len(xs) > 0
+        {
     let mutable best: T = xs[0];
     let mutable i: Int = 1;
     while i < len(xs) {
@@ -145,8 +145,8 @@ pure function array_min<T: Ordered>(xs: [T]) -> T
 }
 
 pure function array_max<T: Ordered>(xs: [T]) -> T
-    requires len(xs) > 0
-{
+        requires len(xs) > 0
+        {
     let mutable best: T = xs[0];
     let mutable i: Int = 1;
     while i < len(xs) {
@@ -159,14 +159,14 @@ pure function array_max<T: Ordered>(xs: [T]) -> T
 }
 
 pure function array_first<T>(xs: [T]) -> T
-    requires len(xs) > 0
-{
+        requires len(xs) > 0
+        {
     return xs[0];
 }
 
 pure function array_last<T>(xs: [T]) -> T
-    requires len(xs) > 0
-{
+        requires len(xs) > 0
+        {
     return xs[len(xs) - 1];
 }
 
@@ -205,11 +205,11 @@ pure function array_sum_money(xs: [Decimal<2>]) -> Decimal<2> {
 // having by name — and the precondition is not defensive: an index outside the array has no element
 // to exchange, and answering anyway is how a swap silently corrupts a neighbour.
 function array_swap<T>(mutable xs: [T], i: Int, j: Int) -> Int
-    requires i >= 0
-    requires i < len(xs)
-    requires j >= 0
-    requires j < len(xs)
-{
+        requires i >= 0
+        requires i < len(xs)
+        requires j >= 0
+        requires j < len(xs)
+        {
     let held: T = xs[i];
     xs[i] = xs[j];
     xs[j] = held;
@@ -283,9 +283,9 @@ function array_extend<T>(mutable xs: [T], from: [T]) -> Int {
 // than swapping the last element into the hole — a faster removal that reorders is a different
 // function and would need a different name to say so.
 function array_remove_at<T>(mutable xs: [T], at: Int) -> Int
-    requires at >= 0
-    requires at < len(xs)
-{
+        requires at >= 0
+        requires at < len(xs)
+        {
     let mutable i: Int = at;
     while i < len(xs) - 1 {
         xs[i] = xs[i + 1];
@@ -333,10 +333,10 @@ pure function array_copy<T>(xs: [T]) -> [T] {
 // nothing should not have to special-case its last step. `from > to` is not legal, because that is a
 // reversed range rather than an empty one, and answering `[]` would hide the caller's arithmetic bug.
 pure function array_slice<T>(xs: [T], from: Int, to: Int) -> [T]
-    requires from >= 0
-    requires to >= from
-    requires to <= len(xs)
-{
+        requires from >= 0
+        requires to >= from
+        requires to <= len(xs)
+        {
     let mutable out: [T] = [];
     let mutable i: Int = from;
     while i < to {
@@ -367,9 +367,9 @@ pure function array_concat<T>(first: [T], second: [T]) -> [T] {
 // precondition is `<=` and not `<` — inserting at the end is the ordinary case of a loop that inserts
 // in order, not an edge to be refused.
 function array_insert_at<T>(mutable xs: [T], at: Int, value: T) -> Int
-    requires at >= 0
-    requires at <= len(xs)
-{
+        requires at >= 0
+        requires at <= len(xs)
+        {
     push(xs, value);                 // grow by one; if `at` is the end this is already the answer
     let mutable i: Int = len(xs) - 1;
     while i > at {
@@ -645,7 +645,7 @@ function array_retain<T>(mutable xs: [T], keep: dynamic Predicate<T>) -> Int {
 // the negation of an arbitrary `Predicate` without declaring another class, and calling the predicate
 // twice per element would double the vtable cost for an answer already in hand.
 pure function array_partition<T>(xs: [T], keep: dynamic Predicate<T>) -> ([T], [T])
-{
+        {
     let mutable passing: [T] = [];
     let mutable failing: [T] = [];
     let mutable i: Int = 0;

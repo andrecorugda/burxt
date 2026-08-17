@@ -30,9 +30,9 @@ pure function (self: Point) doubled() -> Int { return self.sum() * 2; }
 // The payoff: a clause that calls a method. Both `requires` and the body reach `sum`, and the
 // clause is the half that was impossible before A4.
 function (self: Point) grown() -> Int
-    requires self.sum() > 0
-    ensures result > 0
-{
+        requires self.sum() > 0
+        ensures result > 0
+        {
     return self.doubled() + self.sum();
 }
 

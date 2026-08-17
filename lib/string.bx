@@ -530,9 +530,9 @@ pure function next_char(text: String, at: Int) -> Int {
 //
 // O(n) in `i`, so a loop counting up through it is O(n²). Use `next_char` to walk.
 pure function char_at(text: String, i: Int) -> String
-    requires i >= 0
-    requires i < char_count(text)
-{
+        requires i >= 0
+        requires i < char_count(text)
+        {
     let mutable at: Int = 0;
     let mutable seen: Int = 0;
     while seen < i {
@@ -651,9 +651,9 @@ pure function is_continuation(byte: Int) -> Bool {
 //
 // O(n) in `i` for the same reason `char_at` is. Walk with `next_char` if you want all of them.
 pure function codepoint_at(text: String, i: Int) -> Int
-    requires i >= 0
-    requires i < char_count(text)
-{
+        requires i >= 0
+        requires i < char_count(text)
+        {
     let mutable at: Int = 0;
     let mutable seen: Int = 0;
     while seen < i {
@@ -671,17 +671,17 @@ pure function codepoint_at(text: String, i: Int) -> Int
     // keeps 3.
     if width == 2 {
         return shift_left(bit_and(leading, 31), 6)
-             + bit_and(byte_at(text, at + 1), 63);
+                + bit_and(byte_at(text, at + 1), 63);
     }
     if width == 3 {
         return shift_left(bit_and(leading, 15), 12)
-             + shift_left(bit_and(byte_at(text, at + 1), 63), 6)
-             + bit_and(byte_at(text, at + 2), 63);
+                + shift_left(bit_and(byte_at(text, at + 1), 63), 6)
+                + bit_and(byte_at(text, at + 2), 63);
     }
     return shift_left(bit_and(leading, 7), 18)
-         + shift_left(bit_and(byte_at(text, at + 1), 63), 12)
-         + shift_left(bit_and(byte_at(text, at + 2), 63), 6)
-         + bit_and(byte_at(text, at + 3), 63);
+            + shift_left(bit_and(byte_at(text, at + 1), 63), 12)
+            + shift_left(bit_and(byte_at(text, at + 2), 63), 6)
+            + bit_and(byte_at(text, at + 3), 63);
 }
 
 // Every byte, as numbers. §D1p asks for it, and `from_bytes` at the bottom of this file is the
@@ -926,10 +926,10 @@ pure function string_to_lower_ascii(text: String) -> String {
 // `requires` rather than a fallback: a code outside the two letter runs is a caller mistake, and
 // answering `"?"` for it is how `os_byte_as_string` came to destroy data silently (roadmap §B2).
 pure function ascii_letter(code: Int) -> String
-    requires code >= 65
-    requires code <= 122
-    requires code <= 90 || code >= 97
-{
+        requires code >= 65
+        requires code <= 122
+        requires code <= 90 || code >= 97
+        {
     return byte_as_string(code);
 }
 
@@ -1028,26 +1028,26 @@ pure function is_alpha(text: String) -> Bool {
 // every branch appends all of its bytes or the contract refuses before any of them. A caller
 // assembling text one codepoint at a time therefore cannot produce a truncated character.
 pure function from_codepoint(code: Int) -> String allocates
-    requires code >= 0
-    requires code <= 1114111
-    requires code < 55296 || code > 57343
-{
+        requires code >= 0
+        requires code <= 1114111
+        requires code < 55296 || code > 57343
+        {
     if code < 128 {
         return byte_as_string(code);
     }
     if code < 2048 {
         return byte_as_string(192 + shift_right_zeros(code, 6))
-             + byte_as_string(128 + bit_and(code, 63));
+                + byte_as_string(128 + bit_and(code, 63));
     }
     if code < 65536 {
         return byte_as_string(224 + shift_right_zeros(code, 12))
-             + byte_as_string(128 + bit_and(shift_right_zeros(code, 6), 63))
-             + byte_as_string(128 + bit_and(code, 63));
+                + byte_as_string(128 + bit_and(shift_right_zeros(code, 6), 63))
+                + byte_as_string(128 + bit_and(code, 63));
     }
     return byte_as_string(240 + shift_right_zeros(code, 18))
-         + byte_as_string(128 + bit_and(shift_right_zeros(code, 12), 63))
-         + byte_as_string(128 + bit_and(shift_right_zeros(code, 6), 63))
-         + byte_as_string(128 + bit_and(code, 63));
+            + byte_as_string(128 + bit_and(shift_right_zeros(code, 12), 63))
+            + byte_as_string(128 + bit_and(shift_right_zeros(code, 6), 63))
+            + byte_as_string(128 + bit_and(code, 63));
 }
 
 // Bytes back into a String, the exact inverse of `to_bytes`. `from_bytes(to_bytes(s)) == s` for
@@ -1421,8 +1421,8 @@ pure function string_replace_first(text: String, from: String, to: String) -> St
 // of columns and no odd one), so there is no correct answer to give and refusing at the call is the
 // only honest option.
 pure function string_pad_start(text: String, width: Int, fill: String) -> String
-    requires char_count(fill) == 1
-{
+        requires char_count(fill) == 1
+        {
     let have: Int = char_count(text);
     if have >= width {
         return text;
@@ -1433,8 +1433,8 @@ pure function string_pad_start(text: String, width: Int, fill: String) -> String
 // `fill` repeated on the RIGHT until the text is `width` codepoints wide. Same contract as
 // `string_pad_start`.
 pure function string_pad_end(text: String, width: Int, fill: String) -> String
-    requires char_count(fill) == 1
-{
+        requires char_count(fill) == 1
+        {
     let have: Int = char_count(text);
     if have >= width {
         return text;
@@ -1632,7 +1632,7 @@ pure function string_split_once(text: String, separator: String) -> Option<(Stri
     }
     let after: Int = at + width;
     return Option.Some((substring(text, 0, at),
-                        substring(text, after, len(text) - after)));
+            substring(text, after, len(text) - after)));
 }
 
 // `string_split`, scanned from the RIGHT, pieces answered last-first.
@@ -1743,8 +1743,8 @@ pure function string_is_lower(byte: Int) -> Bool {
 // `0`..`9`, `a`..`f` or `A`..`F`.
 pure function string_is_hex_digit(byte: Int) -> Bool {
     return string_is_digit(byte)
-        || (byte >= 97 && byte <= 102)
-        || (byte >= 65 && byte <= 70);
+            || (byte >= 97 && byte <= 102)
+            || (byte >= 65 && byte <= 70);
 }
 
 // The value of a digit byte in base 36: `0`..`9` is 0..9, `a`/`A` is 10, `z`/`Z` is 35, and
@@ -1852,9 +1852,9 @@ pure function all_hex_digits(text: String) -> Bool {
 // whitespace tolerance — `string_trim` is one call and doing it silently would make `" 1 2"` a
 // question this function has to have an opinion about.
 pure function string_parse_int_base(text: String, base: Int) -> Option<Int>
-    requires base >= 2
-    requires base <= 36
-{
+        requires base >= 2
+        requires base <= 36
+        {
     let stop: Int = len(text);
     if stop == 0 {
         return Option.None;
@@ -1923,7 +1923,7 @@ pure function string_parse_hex(text: String) -> Option<Int> {
         at = 1;
     }
     if stop >= at + 2 && byte_at(text, at) == 48
-        && (byte_at(text, at + 1) == 120 || byte_at(text, at + 1) == 88) {
+            && (byte_at(text, at + 1) == 120 || byte_at(text, at + 1) == 88) {
         let from: Int = at + 2;
         let body: String = substring(text, from, stop - from);
         // **The digits after the prefix must be digits and nothing else.** Handing the body
@@ -1956,9 +1956,9 @@ pure function string_parse_hex(text: String) -> Option<Int> {
 // and not the bound: **the digit count is at most 64**, at base 2, for any Int. So the total copied
 // is at most 64*65/2 = 2,080 bytes, whatever the value. It is a constant, not a growth rate.
 pure function string_int_to_base(value: Int, base: Int) -> String
-    requires base >= 2
-    requires base <= 36
-{
+        requires base >= 2
+        requires base <= 36
+        {
     if value == 0 {
         return "0";
     }

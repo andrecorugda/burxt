@@ -121,8 +121,8 @@ pure function math_max<T: Ordered>(a: T, b: T) -> T {
 // inside it, so every possible answer is wrong, and returning one anyway is how a clamp silently
 // reports a bound the caller never meant. A contract on a generic function, which works.
 pure function math_clamp<T: Ordered>(x: T, low: T, high: T) -> T
-    requires low <= high
-{
+        requires low <= high
+        {
     if x < low {
         return low;
     }
@@ -146,8 +146,8 @@ pure function math_clamp<T: Ordered>(x: T, low: T, high: T) -> T
 // For untrusted input there is no separate `checked_abs`: `math_checked_sub(0, x)` is the checked
 // negation and `math_saturating_sub(0, x)` the saturating one, both already here.
 pure function math_abs(x: Int) -> Int
-    requires x > INT_MIN
-{
+        requires x > INT_MIN
+        {
     if x < 0 {
         return -x;
     }
@@ -405,8 +405,8 @@ pure function math_wrapping_mul(a: Int, b: Int) -> Int {
 // doubling leaves the range. So squaring is deliberately not done: it would turn 62 multiplications
 // into 6, on a function whose entire range is 62, and the bit-walking costs a reader more than it saves.
 pure function math_pow(base: Int, exponent: Int) -> Int
-    requires exponent >= 0
-{
+        requires exponent >= 0
+        {
     if base == 1 {
         return 1;
     }
@@ -461,8 +461,8 @@ pure function math_pow(base: Int, exponent: Int) -> Int
 // root from there, so `n/guess + guess` stays bounded — verified across the whole range including
 // `math_isqrt(INT_MAX) == 3037000499` rather than argued.
 pure function math_isqrt(n: Int) -> Int
-    requires n >= 0
-{
+        requires n >= 0
+        {
     if n < 1 {
         return 0;
     }
@@ -498,9 +498,9 @@ pure function math_isqrt(n: Int) -> Int
 // (`remainder(-7, 3)` is -1), and Euclid does not care about the sign of the remainder because the
 // magnitudes still descend. Both arguments are already non-negative by the time the loop runs anyway.
 pure function math_gcd(a: Int, b: Int) -> Int
-    requires a > INT_MIN
-    requires b > INT_MIN
-{
+        requires a > INT_MIN
+        requires b > INT_MIN
+        {
     let mutable x: Int = math_abs(a);
     let mutable y: Int = math_abs(b);
     while y != 0 {
@@ -522,9 +522,9 @@ pure function math_gcd(a: Int, b: Int) -> Int
 // "the least common multiple of 0 and anything is 0" is the mathematical fact, and testing `g == 0`
 // would express it as an accident of the implementation.
 pure function math_lcm(a: Int, b: Int) -> Int
-    requires a > INT_MIN
-    requires b > INT_MIN
-{
+        requires a > INT_MIN
+        requires b > INT_MIN
+        {
     if a == 0 || b == 0 {
         return 0;
     }

@@ -115,7 +115,7 @@ function check_money(mutable t: Tests, what: String, got: Decimal<2>, want: Deci
 // with a DIFFERENT contract — `RoundHalfUp` — has neither, and uses `check_that` with its own `==`,
 // which is allowed because comparing never rounds.
 function check_money_half_even(mutable t: Tests, what: String, got: Decimal<2, RoundHalfEven>,
-                               want: Decimal<2, RoundHalfEven>) -> Bool {
+        want: Decimal<2, RoundHalfEven>) -> Bool {
     if got == want {
         return test_passed(t, what);
     }
@@ -126,7 +126,7 @@ function check_money_half_even(mutable t: Tests, what: String, got: Decimal<2, R
 // one. Seven places is what `lib/vector.bx` works in; add a wrapper for any other, since `to_string`
 // already renders every scale.
 function check_decimal7(mutable t: Tests, what: String, got: Decimal<7>,
-                        want: Decimal<7>) -> Bool {
+        want: Decimal<7>) -> Bool {
     if got == want {
         return test_passed(t, what);
     }

@@ -157,17 +157,17 @@ function net_uses_bsd_sockaddr() -> Bool touches network {
 // is a different rule. The shape here stands on its own merits; the constraint it was attributed to
 // does not exist.
 function write_sockaddr_in(where: CPointer, port: Int, a: Int, b: Int, c: Int, d: Int) -> Int touches network
-    requires port >= 1
-    requires port <= 65535
-    requires a >= 0
-    requires a <= 255
-    requires b >= 0
-    requires b <= 255
-    requires c >= 0
-    requires c <= 255
-    requires d >= 0
-    requires d <= 255
-{
+        requires port >= 1
+        requires port <= 65535
+        requires a >= 0
+        requires a <= 255
+        requires b >= 0
+        requires b <= 255
+        requires c >= 0
+        requires c <= 255
+        requires d >= 0
+        requires d <= 255
+        {
     let high: Int = divide_floor(port, 256);
     let low: Int = port - high * 256;
     if net_uses_bsd_sockaddr() {
@@ -190,10 +190,10 @@ function write_sockaddr_in(where: CPointer, port: Int, a: Int, b: Int, c: Int, d
 // Answers `None` when the socket cannot be made, bound or listened on. The commonest reason by a
 // long way is that something else already has the port.
 function net_listen(port: Int, backlog: Int) -> Option<Int> touches network, input
-    requires port >= 1
-    requires port <= 65535
-    requires backlog >= 1
-{
+        requires port >= 1
+        requires port <= 65535
+        requires backlog >= 1
+        {
     let fd: Int = socket(2, 1, 0);              // AF_INET, SOCK_STREAM
     if fd < 0 {
         return Option.None;
@@ -241,17 +241,17 @@ function net_accept(server: Int) -> Option<Int> touches network, input {
 // reading a pointer out of C's memory is a door that is still shut, and a function called
 // `net_connect` that only worked for addresses would be a promise this cannot keep.
 function net_connect_ipv4(a: Int, b: Int, c: Int, d: Int, port: Int) -> Option<Int> touches network, input
-    requires port >= 1
-    requires port <= 65535
-    requires a >= 0
-    requires a <= 255
-    requires b >= 0
-    requires b <= 255
-    requires c >= 0
-    requires c <= 255
-    requires d >= 0
-    requires d <= 255
-{
+        requires port >= 1
+        requires port <= 65535
+        requires a >= 0
+        requires a <= 255
+        requires b >= 0
+        requires b <= 255
+        requires c >= 0
+        requires c <= 255
+        requires d >= 0
+        requires d <= 255
+        {
     let fd: Int = socket(2, 1, 0);
     if fd < 0 {
         return Option.None;
@@ -278,8 +278,8 @@ function net_connect_ipv4(a: Int, b: Int, c: Int, d: Int, port: Int) -> Option<I
 // a caller that treats one `net_read` as the whole request works perfectly on localhost and fails
 // against a real client. Reading until a terminator is the caller's job, and it is a real job.
 function net_read(fd: Int, limit: Int) -> Option<String> touches network
-    requires limit >= 1
-{
+        requires limit >= 1
+        {
     let buffer: CPointer = malloc(limit);
     let got: Int = recv(fd, buffer, limit, 0);
     if got < 0 {
@@ -344,8 +344,8 @@ function net_close(fd: Int) -> Bool touches network {
 // comment in that fixture predicted it and the fixed port was kept anyway, because the alternative
 // looked bigger than the test. It was about twenty lines.
 function net_listen_any_port(backlog: Int) -> Option<Int> touches network, input
-    requires backlog >= 1
-{
+        requires backlog >= 1
+        {
     let fd: Int = socket(2, 1, 0);
     if fd < 0 {
         return Option.None;

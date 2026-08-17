@@ -2,26 +2,26 @@
 // infinite loop in a payment processor is a real failure mode, and nothing else
 // checks for it.
 function sum_to(n: Int, acc: Int) -> Int
-    decreases n
-{
+        decreases n
+        {
     if n <= 0 { return acc; }
     return tail sum_to(n - 1, acc + n);
 }
 
 // Non-tail recursion, and all four signature markers on one function.
 pure function countdown(n: Int) -> Int
-    requires n >= 0
-    ensures result == 0
-    decreases n
-{
+        requires n >= 0
+        ensures result == 0
+        decreases n
+        {
     if n == 0 { return 0; }
     return countdown(n - 1);
 }
 
 // The measure can be an expression over the parameters, not just one of them.
 function walk(from: Int, to: Int) -> Int
-    decreases to - from
-{
+        decreases to - from
+        {
     if from >= to { return from; }
     return walk(from + 1, to);
 }

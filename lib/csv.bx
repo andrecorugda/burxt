@@ -241,7 +241,7 @@ function (mutable self: CsvReader) quoted_field() -> Result<String, String> {
     while !closed {
         if self.at >= len(self.text) {
             return Result.Error("a quoted field opened at byte " + to_string(opened)
-                        + " was never closed");
+                    + " was never closed");
         }
         if byte_at(self.text, self.at) == CSV_QUOTE {
             let kept: Int = push(chunks, substring(self.text, from, self.at - from));
@@ -275,12 +275,12 @@ function csv_parse(text: String) -> Result<[CsvRow], String> {
 //
 // Ragged records are kept as they are: see `csv_parse_rectangular`.
 function csv_parse_delimited(text: String, delimiter: Int) -> Result<[CsvRow], String>
-    requires delimiter > 0
-    requires delimiter < 128
-    requires delimiter != CSV_QUOTE
-    requires delimiter != CSV_CR
-    requires delimiter != CSV_LF
-{
+        requires delimiter > 0
+        requires delimiter < 128
+        requires delimiter != CSV_QUOTE
+        requires delimiter != CSV_CR
+        requires delimiter != CSV_LF
+        {
     let mutable reader: CsvReader = CsvReader { text: text, at: 0, delimiter: delimiter };
     // The BOM, and only at the very start. Three bytes: EF BB BF.
     if len(text) >= 3 && byte_at(text, 0) == 0xEF && byte_at(text, 1) == 0xBB
@@ -320,7 +320,7 @@ function csv_parse_delimited(text: String, delimiter: Int) -> Result<[CsvRow], S
                         // Only reachable after a closing quote: an unquoted field stops at
                         // nothing else. `"a"b` lands here.
                         return Result.Error("unexpected text after a quoted field, at byte "
-                                    + to_string(reader.at));
+                                + to_string(reader.at));
                     }
                 }
             }
@@ -353,7 +353,7 @@ pure function csv_widths_agree(rows: [CsvRow]) -> Option<String> {
         if rows[i].count() != wide {
             return Option.Some("record " + to_string(i + 1) + " (at byte "
                         + to_string(rows[i].offset) + ") has " + to_string(rows[i].count())
-                        + " fields where record 1 has " + to_string(wide));
+                    + " fields where record 1 has " + to_string(wide));
         }
         i += 1;
     }
@@ -381,12 +381,12 @@ function csv_parse_rectangular(text: String) -> Result<[CsvRow], String> {
 
 function csv_parse_rectangular_delimited(text: String, delimiter: Int)
         -> Result<[CsvRow], String>
-    requires delimiter > 0
-    requires delimiter < 128
-    requires delimiter != CSV_QUOTE
-    requires delimiter != CSV_CR
-    requires delimiter != CSV_LF
-{
+        requires delimiter > 0
+        requires delimiter < 128
+        requires delimiter != CSV_QUOTE
+        requires delimiter != CSV_CR
+        requires delimiter != CSV_LF
+        {
     match csv_parse_delimited(text, delimiter) {
         Error(why) => { return Result.Error(why); }
         Ok(rows) => {
@@ -497,12 +497,12 @@ pure function csv_render(rows: [CsvRow]) -> String {
 // §D0 throughout: a pending piece flushed into a `[String]` at `CSV_CHUNK`, joined pairwise. Never
 // `out = out + row`.
 pure function csv_render_delimited(rows: [CsvRow], delimiter: Int, crlf: Bool) -> String
-    requires delimiter > 0
-    requires delimiter < 128
-    requires delimiter != CSV_QUOTE
-    requires delimiter != CSV_CR
-    requires delimiter != CSV_LF
-{
+        requires delimiter > 0
+        requires delimiter < 128
+        requires delimiter != CSV_QUOTE
+        requires delimiter != CSV_CR
+        requires delimiter != CSV_LF
+        {
     let separator: String = byte_as_string(delimiter);
     let mutable ending: String = "\n";
     if crlf {

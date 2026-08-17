@@ -64,7 +64,7 @@ print(log.describe());
 //         here. It found nothing to refuse then, and there is nothing to refuse now.
 interface Describable {
     function describe(self) -> String
-}
+        }
 class Tag { id: Int }
 implement Describable for Tag {
     function (self) describe() -> String {

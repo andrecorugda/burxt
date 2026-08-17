@@ -18,15 +18,15 @@ region r {
     print(small.first + small.second);
 
     let wide: Pair<Point> = Pair { first: Point { x: 1, y: 2 },
-                                   second: Point { x: 10, y: 20 } };
+            second: Point { x: 10, y: 20 } };
     print(wide.second.x + wide.first.y);
 
     // A generic inside a generic: `Nested<Point>.inner` is a `Pair<Point>`, so the argument has
     // to travel one level down. A single binding table resolved at each level does that; a
     // rewrite of the declaration would have had to invent a node for `Pair<Point>` to point at.
     let deep: Nested<Point> = Nested { inner: Pair { first: Point { x: 7, y: 8 },
-                                                     second: Point { x: 30, y: 40 } },
-                                       tag: 99 };
+                second: Point { x: 30, y: 40 } },
+            tag: 99 };
     print(deep.inner.second.y + deep.tag);
 
     // Copying is by value, and for an aggregate field that means cells and not a pointer: if

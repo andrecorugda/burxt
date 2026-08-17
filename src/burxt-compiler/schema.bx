@@ -255,7 +255,7 @@ function (self: Unit) schema_literal_digits(node: Int) -> String {
 // Schema's key for it, and a precondition that pins a parameter to one value is strange
 // enough that guessing what was meant is worse than saying nothing.
 function (self: Unit) schema_bound(src: String, name_start: Int, name_length: Int,
-                                  cond: Int) -> String {
+        cond: Int) -> String {
     if cond < 0 {
         return "";
     }
@@ -444,7 +444,7 @@ function (self: Unit) schema_tool(src: String, item: Int) -> String {
             required = required + ",";
         }
         properties = properties + schema_quote(substring(src, pname.start, pname.length))
-                     + ":" + entry;
+                + ":" + entry;
         // Every parameter is required, because Burxt has no optional ones and no defaults. A
         // schema that said otherwise would be describing a different language.
         required = required + schema_quote(substring(src, pname.start, pname.length));
@@ -456,11 +456,11 @@ function (self: Unit) schema_tool(src: String, item: Int) -> String {
     // there because a method item has five slots and six things to say, and this is the one
     // that cost nothing.
     let description: String = name + " -> "
-        + self.show_type(src, self.declared_type(src, clauses.c));
+            + self.show_type(src, self.declared_type(src, clauses.c));
     return "\{\"name\":" + schema_quote(name)
-        + ",\"description\":" + schema_quote(description)
-        + ",\"inputSchema\":\{\"type\":\"object\",\"properties\":\{" + properties
-        + "\},\"required\":[" + required + "]\}\}";
+            + ",\"description\":" + schema_quote(description)
+            + ",\"inputSchema\":\{\"type\":\"object\",\"properties\":\{" + properties
+            + "\},\"required\":[" + required + "]\}\}";
 }
 
 // ---- what could not be expressed --------------------------------------------------------
@@ -558,9 +558,9 @@ function (self: Unit) mcp_skipped_count(src: String, own_start: Int, own_length:
 // drift this tool exists to prevent.
 function schema_note(count: Int) -> String {
     return "note: " + to_string(count)
-        + " precondition(s) could not be expressed as JSON Schema and were left out."
-        + " A clause relating two parameters — `requires amount <= balance` — has no key in"
-        + " JSON Schema, and the function still enforces it.";
+            + " precondition(s) could not be expressed as JSON Schema and were left out."
+            + " A clause relating two parameters — `requires amount <= balance` — has no key in"
+            + " JSON Schema, and the function still enforces it.";
 }
 
 // ---- the command -----------------------------------------------------------------------

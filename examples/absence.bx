@@ -14,12 +14,12 @@
 enum Option<T> {
     None,
     Some(T)
-}
+        }
 
 enum Result<T, E> {
     Ok(T),
     Error(E)
-}
+        }
 
 // A function that might not find anything says so in its type. There is no
 // sentinel to document, no -1 to remember, and no way for a caller to forget.

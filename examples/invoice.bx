@@ -8,7 +8,7 @@ class Line {
     label: String,
     unit: Decimal<2>,
     quantity: Int
-}
+        }
 
 // Money times a count is exact — no contract needed, because no rounding can happen.
 // Note what this signature does NOT have to say: `unit` is a plain Decimal<2>, and the
@@ -21,18 +21,18 @@ function (self: Line) amount() -> Decimal<2> {
 
 function (self: Line) render() -> String {
     return self.label + " x" + to_string(self.quantity)
-         + " @ " + to_string(self.unit)
-         + " = " + to_string(self.amount());
+            + " @ " + to_string(self.unit)
+            + " = " + to_string(self.amount());
 }
 
 // A tax rate is finer than money — `8.25%` IS 0.0825, a Decimal<4> — so the
 // product's exact value has 6 decimal places and MUST be told how to land on 2.
 // That is the rounding contract, and it is checked at compile time.
 function tax_on(subtotal: Decimal<2>, rate: Decimal<4>)
-    -> Decimal<2, RoundHalfEven>
-    requires rate >= 0.0000
-    ensures result >= $0.00
-{
+        -> Decimal<2, RoundHalfEven>
+        requires rate >= 0.0000
+        ensures result >= $0.00
+        {
     return subtotal * rate;
 }
 

@@ -14,16 +14,16 @@ class Account {
 
     // The only way to make one. No `self` — it makes one.
     function open(owner: String, opening: Decimal<2>) -> Account
-        requires opening >= $0.00
-    {
+            requires opening >= $0.00
+            {
         return Account { owner: owner, balance: opening };
     }
 
     // The only way to change it, and it cannot go below zero.
     function (self) withdraw(amount: Decimal<2>) -> Account
-        requires amount > $0.00
-        requires amount <= self.balance
-    {
+            requires amount > $0.00
+            requires amount <= self.balance
+            {
         return Account { owner: self.owner, balance: self.balance - amount };
     }
 

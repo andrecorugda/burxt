@@ -9,8 +9,8 @@
 // Familiarity is a property of the review surface.
 interface Priced {
     function price(self) -> Decimal<2>
-    function label(self) -> String
-}
+            function label(self) -> String
+        }
 
 class Book implements Priced {
     title: String,

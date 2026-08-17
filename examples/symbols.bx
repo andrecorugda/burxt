@@ -81,8 +81,8 @@ function (self: Table) find(name: String) -> Int {
 }
 
 function (mutable self: Table) declare(name: String, type_name: String, at: Int) -> Int
-    ensures len(self.entries) >= old(len(self.entries))
-{
+        ensures len(self.entries) >= old(len(self.entries))
+        {
     push(self.entries, Symbol { name: name, type_name: type_name, at: at });
     return len(self.entries);
 }
@@ -129,7 +129,7 @@ function (mutable self: Table) collect(src: String, from: Int) -> Int {
     let seen: Int = self.find(name);
     if seen >= 0 {
         print("redeclared: `" + name + "` was already declared at offset "
-              + to_string(self.entries[seen].at));
+                + to_string(self.entries[seen].at));
     } else {
         let count: Int = self.declare(name, type_name, cursor);
         print("declared `" + name + "` : " + type_name);

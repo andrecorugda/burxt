@@ -26,6 +26,6 @@ region r {
     // four rather than three.
     let mutable places: [Entry<String, Point>] = [];
     let put: Int = push(places, Entry { key: "origin", value: Point { x: 3, y: 4 },
-                                        used: true });
+            used: true });
     print(places[0].value.x + places[0].value.y);
 }

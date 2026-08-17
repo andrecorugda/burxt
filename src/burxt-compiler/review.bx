@@ -403,30 +403,30 @@ function (self: Unit) promise_render(src: String, node: Int, params: Int) -> Str
     if n.kind == 7 { return "!(" + self.promise_render(src, n.a, params) + ")"; }
     if n.kind == 8 {
         return "(" + self.promise_render(src, n.a, params) + " " + review_binary_op(n.value)
-               + " " + self.promise_render(src, n.b, params) + ")";
+                + " " + self.promise_render(src, n.b, params) + ")";
     }
     if n.kind == 9 {
         return "(" + self.promise_render(src, n.a, params) + " " + review_compare_op(n.value)
-               + " " + self.promise_render(src, n.b, params) + ")";
+                + " " + self.promise_render(src, n.b, params) + ")";
     }
     if n.kind == 10 {
         return "(" + self.promise_render(src, n.a, params) + " " + review_logical_op(n.value)
-               + " " + self.promise_render(src, n.b, params) + ")";
+                + " " + self.promise_render(src, n.b, params) + ")";
     }
     if n.kind == 11 {
         return self.promise_render(src, n.a, params) + "." + self.review_token_text(src, n.token);
     }
     if n.kind == 12 {
         return self.promise_render(src, n.a, params) + "["
-               + self.promise_render(src, n.b, params) + "]";
+                + self.promise_render(src, n.b, params) + "]";
     }
     if n.kind == 13 {
         return self.review_token_text(src, n.token) + "("
-               + self.promise_render_args(src, n.a, params) + ")";
+                + self.promise_render_args(src, n.a, params) + ")";
     }
     if n.kind == 14 {
         return self.promise_render(src, n.a, params) + "." + self.review_token_text(src, n.token)
-               + "(" + self.promise_render_args(src, n.b, params) + ")";
+                + "(" + self.promise_render_args(src, n.b, params) + ")";
     }
     if n.kind == 17 {
         return "[" + self.promise_render_items(src, n.a, n.b, params) + "]";
@@ -442,7 +442,7 @@ function (self: Unit) promise_render(src: String, node: Int, params: Int) -> Str
         while i < n.b {
             let pair: Node = self.nodes[self.children[n.a + i]];
             push(fields, self.review_token_text(src, pair.token) + ": "
-                         + self.promise_render(src, pair.a, params));
+                    + self.promise_render(src, pair.a, params));
             i += 1;
         }
         let ordered: Int = review_sort_texts(fields);
@@ -473,7 +473,7 @@ function (self: Unit) promise_render_args(src: String, list: Int, params: Int) -
 }
 
 function (self: Unit) promise_render_items(src: String, start: Int, count: Int,
-                                          params: Int) -> String {
+        params: Int) -> String {
     let mutable out: String = "";
     let mutable i: Int = 0;
     while i < count {
@@ -510,7 +510,7 @@ function (self: Unit) promise_clause_text(src: String, clause: Node) -> String {
 // ARRIVES rather than what the answer is, and losing one is a termination question that a
 // signature comparison has nothing useful to say about.
 function (mutable self: Promises) gather_clauses(unit: Unit, src: String, clauses: Int,
-                                               params: Int, which: Int) -> Int {
+        params: Int, which: Int) -> Int {
     if clauses < 0 {
         return 0;
     }
@@ -612,10 +612,10 @@ function (mutable self: Promises) collect(unit: Unit, src: String) -> Int {
         let ensures_at: Int = len(self.shapes);
         let ensures_count: Int = self.gather_clauses(unit, src, n.c, n.a, 127);
         push(self.promises, Promise { name: name, kind: kind,
-                    shape: unit.promise_shape(src, n.a, clauses.c),
-                    requires_at: requires_at, requires_count: requires_count,
-                    ensures_at: ensures_at, ensures_count: ensures_count,
-                    is_pure: is_pure, is_private: is_private, touches: flag_effects(n.value) });
+                        shape: unit.promise_shape(src, n.a, clauses.c),
+                        requires_at: requires_at, requires_count: requires_count,
+                        ensures_at: ensures_at, ensures_count: ensures_count,
+                is_pure: is_pure, is_private: is_private, touches: flag_effects(n.value) });
         i += 1;
     }
 
@@ -629,25 +629,25 @@ function (mutable self: Promises) collect(unit: Unit, src: String) -> Int {
             // type is its own promise, one entry below, so saying it twice would double every
             // finding about a class.
             push(self.promises, Promise { name: name, kind: "class",
-                        shape: to_string(n.b) + " field(s)",
-                        requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
-                        is_pure: 0, is_private: 0, touches: 0 });
+                            shape: to_string(n.b) + " field(s)",
+                            requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
+                    is_pure: 0, is_private: 0, touches: 0 });
             let mutable j: Int = 0;
             while j < n.b {
                 let field: Node = unit.nodes[unit.children[n.a + j]];
                 push(self.promises, Promise { name: name + "." + unit.review_token_text(src, field.token),
-                            kind: "field",
-                            shape: unit.show_type(src, unit.declared_type(src, field.a)),
-                            requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
-                            is_pure: 0, is_private: field.value, touches: 0 });
+                                kind: "field",
+                                shape: unit.show_type(src, unit.declared_type(src, field.a)),
+                                requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
+                        is_pure: 0, is_private: field.value, touches: 0 });
                 j += 1;
             }
         }
         if n.kind == 84 {
             push(self.promises, Promise { name: unit.review_token_text(src, n.token), kind: "interface",
-                        shape: to_string(n.b) + " method(s)",
-                        requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
-                        is_pure: 0, is_private: 0, touches: 0 });
+                            shape: to_string(n.b) + " method(s)",
+                            requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
+                    is_pure: 0, is_private: 0, touches: 0 });
         }
         // A `const`, and its VALUE is part of the shape — which is unusual for this file and
         // has a reason. Everywhere else the value is none of the tool's business: a body may
@@ -666,10 +666,10 @@ function (mutable self: Promises) collect(unit: Unit, src: String) -> Int {
         // noisier than the rest of the file, named rather than hidden.
         if n.kind == 73 {
             push(self.promises, Promise { name: unit.review_token_text(src, n.token), kind: "const",
-                        shape: unit.show_type(src, unit.declared_type(src, n.a)) + " = "
-                               + unit.promise_render(src, n.b, 0 - 1),
-                        requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
-                        is_pure: 0, is_private: 0, touches: 0 });
+                            shape: unit.show_type(src, unit.declared_type(src, n.a)) + " = "
+                            + unit.promise_render(src, n.b, 0 - 1),
+                            requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
+                    is_pure: 0, is_private: 0, touches: 0 });
         }
         i += 1;
     }
@@ -808,41 +808,41 @@ function review_has_clause(shapes: [String], at: Int, count: Int, shape: String)
 // exactly the order they are pushed here. It is `review.rs`'s order, deliberately: lost
 // clauses, gained clauses, gained effects, lost effects, purity, privacy, shape.
 function compare_promises(was: Promise, before: Promises, now: Promise, after: Promises,
-                          mutable out: [Finding]) -> Int {
+        mutable out: [Finding]) -> Int {
     // A contract that was there and is not is THE finding this tool exists for.
     let mutable i: Int = 0;
     while i < was.requires_count {
         if !review_has_clause(after.shapes, now.requires_at, now.requires_count,
-                       before.shapes[was.requires_at + i]) {
+                before.shapes[was.requires_at + i]) {
             push(out, Finding { verdict: WEAKENED, name: was.name,
-                        detail: "lost `requires " + before.texts[was.requires_at + i] + "`" });
+                    detail: "lost `requires " + before.texts[was.requires_at + i] + "`" });
         }
         i += 1;
     }
     i = 0;
     while i < was.ensures_count {
         if !review_has_clause(after.shapes, now.ensures_at, now.ensures_count,
-                       before.shapes[was.ensures_at + i]) {
+                before.shapes[was.ensures_at + i]) {
             push(out, Finding { verdict: WEAKENED, name: was.name,
-                        detail: "lost `ensures " + before.texts[was.ensures_at + i] + "`" });
+                    detail: "lost `ensures " + before.texts[was.ensures_at + i] + "`" });
         }
         i += 1;
     }
     i = 0;
     while i < now.requires_count {
         if !review_has_clause(before.shapes, was.requires_at, was.requires_count,
-                       after.shapes[now.requires_at + i]) {
+                after.shapes[now.requires_at + i]) {
             push(out, Finding { verdict: STRICTER, name: was.name,
-                        detail: "gained `requires " + after.texts[now.requires_at + i] + "`" });
+                    detail: "gained `requires " + after.texts[now.requires_at + i] + "`" });
         }
         i += 1;
     }
     i = 0;
     while i < now.ensures_count {
         if !review_has_clause(before.shapes, was.ensures_at, was.ensures_count,
-                       after.shapes[now.ensures_at + i]) {
+                after.shapes[now.ensures_at + i]) {
             push(out, Finding { verdict: STRICTER, name: was.name,
-                        detail: "gained `ensures " + after.texts[now.ensures_at + i] + "`" });
+                    detail: "gained `ensures " + after.texts[now.ensures_at + i] + "`" });
         }
         i += 1;
     }
@@ -857,7 +857,7 @@ function compare_promises(was: Promise, before: Promises, now: Promise, after: P
     while bit <= 32 {
         if bit_and(now.touches, bit) == bit && bit_and(was.touches, bit) == 0 {
             push(out, Finding { verdict: WEAKENED, name: was.name,
-                        detail: "now touches " + effect_name(bit) + " — it could not before" });
+                    detail: "now touches " + effect_name(bit) + " — it could not before" });
         }
         bit = bit * 2;
     }
@@ -865,32 +865,32 @@ function compare_promises(was: Promise, before: Promises, now: Promise, after: P
     while bit <= 32 {
         if bit_and(was.touches, bit) == bit && bit_and(now.touches, bit) == 0 {
             push(out, Finding { verdict: STRICTER, name: was.name,
-                        detail: "no longer touches " + effect_name(bit) });
+                    detail: "no longer touches " + effect_name(bit) });
         }
         bit = bit * 2;
     }
     if was.is_pure == 1 && now.is_pure == 0 {
         push(out, Finding { verdict: WEAKENED, name: was.name,
-                    detail: "no longer `pure` — its answer may now depend on more than its "
-                            + "arguments" });
+                        detail: "no longer `pure` — its answer may now depend on more than its "
+                + "arguments" });
     }
     if was.is_pure == 0 && now.is_pure == 1 {
         push(out, Finding { verdict: STRICTER, name: was.name,
-                    detail: "now `pure`" });
+                detail: "now `pure`" });
     }
     // Privacy is a promise about who may touch this. Opening it up is a weakening of exactly
     // the same kind as dropping a precondition: something that could not happen now can.
     if was.is_private == 1 && now.is_private == 0 {
         push(out, Finding { verdict: WEAKENED, name: was.name,
-                    detail: "no longer `private` — anything may now read it" });
+                detail: "no longer `private` — anything may now read it" });
     }
     if was.is_private == 0 && now.is_private == 1 {
         push(out, Finding { verdict: STRICTER, name: was.name,
-                    detail: "now `private`" });
+                detail: "now `private`" });
     }
     if was.shape != now.shape {
         push(out, Finding { verdict: CHANGED, name: was.name,
-                    detail: was.shape + " -> " + now.shape });
+                detail: was.shape + " -> " + now.shape });
     }
     return len(out);
 }
@@ -955,10 +955,10 @@ function review(old_path: String, new_path: String) -> Int touches files, input 
             // A removed declaration is a weakening only if something still calls it, which
             // this cannot know — so it is reported plainly and left to the reviewer.
             push(findings, Finding { verdict: REMOVED, name: was.name,
-                        detail: was.kind + " is gone" });
+                    detail: was.kind + " is gone" });
         } else {
             let compared: Int = compare_promises(was, before, after.promises[at], after,
-                                                findings);
+                    findings);
         }
         i += 1;
     }
@@ -971,7 +971,7 @@ function review(old_path: String, new_path: String) -> Int touches files, input 
                 detail = detail + ", private";
             }
             push(findings, Finding { verdict: ADDED, name: now.name,
-                        detail: detail });
+                    detail: detail });
         }
         i += 1;
     }
@@ -1006,7 +1006,7 @@ function review(old_path: String, new_path: String) -> Int touches files, input 
     print("");
     if weakened > 0 {
         print(to_string(weakened) + " weakened promise(s). A weakened contract is the one "
-              + "change that passes every test — the tests were failing BECAUSE of it.");
+                + "change that passes every test — the tests were failing BECAUSE of it.");
         // Non-zero, so this is usable as a gate in CI without parsing the output.
         return 1;
     }

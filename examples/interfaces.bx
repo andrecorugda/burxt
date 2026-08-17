@@ -8,8 +8,8 @@
 // describes behaviour, and behaviour is all it can describe.
 interface Priced {
     function price(self) -> Decimal<2>
-    function label(self) -> String
-}
+            function label(self) -> String
+        }
 // (In an interface the receiver is just `self`; inside an `implement` block it may be just
 //  `function (self)` too, because the header already said which type.)
 

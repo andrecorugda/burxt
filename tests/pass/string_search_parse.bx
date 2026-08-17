@@ -125,7 +125,7 @@ region r {
     print("[" + string_join(reversed_pieces(string_split("aaa", "aa")), "|") + "]");
     print("[" + string_join(string_rsplit("aaa", "aa"), "|") + "]");
     print(string_join(reversed_pieces(string_split("aaa", "aa")), "|")
-          == string_join(string_rsplit("aaa", "aa"), "|"));
+            == string_join(string_rsplit("aaa", "aa"), "|"));
     print("[" + string_join(string_split("aaaaa", "aa"), "|") + "]");
     print("[" + string_join(string_rsplit("aaaaa", "aa"), "|") + "]");
     // And on a separator that cannot overlap, where the two ARE each other reversed.

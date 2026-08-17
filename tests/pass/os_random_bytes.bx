@@ -35,8 +35,8 @@ external function getentropy(buffer: CPointer, length: Int) -> Int touches input
 // makes it unusable from a `pure` function or a contract, which is correct: a clause that checked a
 // random number would answer differently every time it ran.
 function os_random_bytes(count: Int) -> [Int] touches input
-    requires count > 0 && count <= 256
-{
+        requires count > 0 && count <= 256
+        {
     let buffer: CPointer = malloc(count);
     if c_is_null(buffer) {
         // Out of memory. An empty array rather than a partly-filled one: half a key is not a key.

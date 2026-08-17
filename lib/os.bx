@@ -161,7 +161,7 @@ function os_capture_status(command: String) -> Capture touches commands, files, 
                 output: read_file(out),
                 errors: read_file(err),
                 code: os_exit_code(status)
-            };
+                    };
             let dropped_out: Bool = file_delete(out);
             let dropped_err: Bool = file_delete(err);
             let dropped_dir: Bool = file_remove_directory(directory);
@@ -392,8 +392,8 @@ function os_platform() -> String touches commands, files, input {
 // retried, because "sleep at least this long" and "return when something happened" are different
 // intents and only the caller knows which one it had.
 function os_sleep(milliseconds: Int) -> Bool touches clock
-    requires milliseconds >= 0
-{
+        requires milliseconds >= 0
+        {
     let mutable remaining: Int = milliseconds;
     while remaining > 0 {
         let mutable slice: Int = remaining;
@@ -583,9 +583,9 @@ function os_rlimit_nproc() -> Int touches input {
 // privilege a sandboxed child does not have and should not be given. A limit you can undo is not
 // a limit.
 function os_set_limit(resource: Int, value: Int) -> Bool touches commands
-    requires resource >= 0
-    requires value >= 0
-{
+        requires resource >= 0
+        requires value >= 0
+        {
     let mutable bytes: [Int] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     let mutable remaining: Int = value;
     let mutable i: Int = 0;
@@ -610,8 +610,8 @@ function os_set_limit(resource: Int, value: Int) -> Bool touches commands
 // wall-clock — a child that sleeps for an hour spends no CPU and this will not stop it. That is
 // what `os_die_after` is for, and the two are not alternatives.
 function os_limit_cpu(seconds: Int) -> Bool touches commands
-    requires seconds >= 1
-{
+        requires seconds >= 1
+        {
     return os_set_limit(0, seconds);
 }
 
@@ -621,22 +621,22 @@ function os_limit_cpu(seconds: Int) -> Bool touches commands
 // a limit below the reservation means the program fails to start rather than failing partway, and
 // that is the better failure.
 function os_limit_memory(bytes: Int) -> Bool touches commands, input
-    requires bytes >= 1
-{
+        requires bytes >= 1
+        {
     return os_set_limit(os_rlimit_as(), bytes);
 }
 
 // Open file descriptors, and child processes. Both bound what a runaway can take from the machine
 // rather than from itself — a program that cannot fork cannot fork-bomb.
 function os_limit_files(count: Int) -> Bool touches commands, input
-    requires count >= 1
-{
+        requires count >= 1
+        {
     return os_set_limit(os_rlimit_nofile(), count);
 }
 
 function os_limit_processes(count: Int) -> Bool touches commands, input
-    requires count >= 0
-{
+        requires count >= 0
+        {
     return os_set_limit(os_rlimit_nproc(), count);
 }
 
@@ -650,7 +650,7 @@ function os_limit_processes(count: Int) -> Bool touches commands, input
 // `tests/pass/net_loopback.bx` calls this on itself for exactly that reason, after blocking a CI
 // runner for a full hour twice.
 function os_die_after(seconds: Int) -> Int touches clock
-    requires seconds >= 1
-{
+        requires seconds >= 1
+        {
     return alarm(seconds);
 }

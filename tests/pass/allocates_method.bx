@@ -7,8 +7,8 @@ class Row { id: Int }
 class Log { rows: [Row] }
 
 function (mutable self: Log) note(id: Int) -> String allocates
-    ensures len(self.rows) >= old(len(self.rows))
-{
+        ensures len(self.rows) >= old(len(self.rows))
+        {
     push(self.rows, Row { id: id });
     return "row " + to_string(id) + " of " + to_string(len(self.rows));
 }

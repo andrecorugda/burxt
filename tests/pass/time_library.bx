@@ -134,7 +134,7 @@ region main {
     print(option_or(time_parse_unix("1970-01-01T00:00:00Z"), 0 - 1));
     print(option_or(time_parse_unix("2026-08-01T12:34:56Z"), 0 - 1));
     let parsed: DateTime = option_or(time_parse_iso("2026-08-01T12:34:56Z"),
-                                     time_from_unix(0));
+            time_from_unix(0));
     print(to_string(parsed.hour) + ":" + to_string(parsed.minute) + ":" + to_string(parsed.second));
     // The date-only form, which a CSV column usually holds. Midnight is implied.
     print(time_format_iso(option_or(time_parse_iso("2026-08-01"), time_from_unix(0))));
@@ -205,13 +205,13 @@ region main {
     print(TIME_MIN_YEAR);
     print(TIME_MAX_YEAR);
     print(time_is_valid(DateTime { year: TIME_MAX_YEAR, month: 12, day: 31,
-                                   hour: 23, minute: 59, second: 59 }));
+            hour: 23, minute: 59, second: 59 }));
     print(time_is_valid(DateTime { year: TIME_MAX_YEAR + 1, month: 1, day: 1,
-                                   hour: 0, minute: 0, second: 0 }));
+            hour: 0, minute: 0, second: 0 }));
     print(time_is_valid(DateTime { year: TIME_MIN_YEAR, month: 1, day: 1,
-                                   hour: 0, minute: 0, second: 0 }));
+            hour: 0, minute: 0, second: 0 }));
     print(time_is_valid(DateTime { year: TIME_MIN_YEAR - 1, month: 12, day: 31,
-                                   hour: 0, minute: 0, second: 0 }));
+            hour: 0, minute: 0, second: 0 }));
     // `time_from_unix` is TOTAL — every Int is an instant, including the extremes.
     print(time_from_unix(INT_MAX).year);
     print(time_from_unix(INT_MIN).year);

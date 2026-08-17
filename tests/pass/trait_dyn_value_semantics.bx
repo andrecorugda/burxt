@@ -3,8 +3,8 @@
 // An interface method also cannot corrupt the caller: its receiver is read-only.
 interface Peek {
     function peek(self) -> Int
-    function copy_and_clobber(self) -> Int
-}
+            function copy_and_clobber(self) -> Int
+        }
 
 class Box2 { a: Int, b: Int }
 

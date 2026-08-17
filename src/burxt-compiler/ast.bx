@@ -231,7 +231,7 @@ class Type {
 // drop it while this binding is still there. -1 for a `dynamic` PARAMETER, whose source is in
 // another frame and is the caller's business.
 class Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth: Int,
-                in_region: Int, holds_region: Int, dyn_owner: Int }
+        in_region: Int, holds_region: Int, dyn_owner: Int }
 
 // ---- A12 / M14 slice 3: the two records the per-block release pass keeps -----------------------
 //

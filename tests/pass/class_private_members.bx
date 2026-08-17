@@ -45,8 +45,8 @@ class Account {
     // `balance` in a literal. That is what makes the `requires` below a real guarantee rather
     // than a suggestion.
     function open(owner: String, opening: Decimal<2>) -> Account
-        requires opening >= 0.00
-    {
+            requires opening >= 0.00
+            {
         return Account { owner: owner, balance: opening };
     }
 }

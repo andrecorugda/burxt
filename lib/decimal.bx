@@ -128,8 +128,8 @@ pure function decimal2_is_zero(value: Decimal<2>) -> Bool {
 // `decimal2_cents(value)`, which would run the sixty-three-step search on every call to say the
 // same thing. A contract clause is code and costs what code costs.
 pure function decimal2_abs(value: Decimal<2>) -> Decimal<2>
-    requires value > decimal2_from_cents(INT_MIN)
-{
+        requires value > decimal2_from_cents(INT_MIN)
+        {
     let zero: Decimal<2> = $0.00;
     if value < zero {
         return zero - value;
@@ -180,9 +180,9 @@ pure function decimal2_sign(value: Decimal<2>) -> Int {
 // the step and the leftover in the signature, and the trap already says the same thing at the same
 // moment with a better message.
 pure function decimal2_round_to(value: Decimal<2>, places: Int) -> Decimal<2>
-    requires places >= 0
-    requires places <= 2
-{
+        requires places >= 0
+        requires places <= 2
+        {
     if places == 2 {
         return value;
     }
@@ -257,8 +257,8 @@ pure function decimal2_percent_of(amount: Decimal<2>, rate: Decimal<4>) -> Decim
 //   * **`parts` of 0** is refused by `requires`. "Split this nought ways" has no answer, and
 //     `lib/array.bx`'s `array_min` records the same call for the same reason.
 pure function money_split(total: Decimal<2>, parts: Int) -> [Decimal<2>]
-    requires parts > 0
-{
+        requires parts > 0
+        {
     let cents: Int = decimal2_cents(total);
     // Truncating, so `extra` carries the sign of the total — see the note above.
     let share: Int = divide_toward_zero(cents, parts);
@@ -317,8 +317,8 @@ pure function decimal4_is_zero(value: Decimal<4>) -> Bool {
 }
 
 pure function decimal4_abs(value: Decimal<4>) -> Decimal<4>
-    requires value > decimal4_from_ticks(INT_MIN)
-{
+        requires value > decimal4_from_ticks(INT_MIN)
+        {
     let zero: Decimal<4> = 0.0000;
     if value < zero {
         return zero - value;
@@ -407,8 +407,8 @@ pure function decimal7_is_zero(value: Decimal<7>) -> Bool {
 }
 
 pure function decimal7_abs(value: Decimal<7>) -> Decimal<7>
-    requires value > decimal7_from_ticks(INT_MIN)
-{
+        requires value > decimal7_from_ticks(INT_MIN)
+        {
     let zero: Decimal<7> = 0.0000000;
     if value < zero {
         return zero - value;
@@ -451,8 +451,8 @@ pure function decimal7_sign(value: Decimal<7>) -> Int {
 // positive case. Half-even is symmetric about zero, and `tests/pass/decimal_helpers.bx` checks
 // that over every penny in a range rather than on the four examples above.
 pure function divide_round_half_even(n: Int, step: Int) -> Int
-    requires step > 0
-{
+        requires step > 0
+        {
     let quotient: Int = divide_floor(n, step);
     let leftover: Int = n - quotient * step;                  // always 0 <= leftover < step
     let doubled: Int = leftover * 2;

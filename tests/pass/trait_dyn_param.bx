@@ -2,7 +2,7 @@
 // not the concrete record. The same function serves both types.
 interface Priced {
     function price(self) -> Decimal<2>
-}
+        }
 
 class Book { cost: Decimal<2> }
 class Meal { cost: Decimal<2>, tip: Decimal<2> }

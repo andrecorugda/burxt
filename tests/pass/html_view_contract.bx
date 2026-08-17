@@ -23,24 +23,24 @@ use "../../lib/html.bx";
 class Line { sku: String, qty: Int, each: Decimal<2, RoundHalfEven> }
 
 pure function line_view(line: Line) -> Html
-    requires line.qty > 0
-    requires len(line.sku) > 0
-{
+        requires line.qty > 0
+        requires len(line.sku) > 0
+        {
     let total: Decimal<2, RoundHalfEven> = line.each * line.qty;
     return html_element("li", [html_attr("class", "line")], [
-        html_text(line.sku),
-        html_text(" x "),
-        html_text(to_string(line.qty)),
-        html_text(" = "),
-        html_text(to_string(total)),
+            html_text(line.sku),
+            html_text(" x "),
+            html_text(to_string(line.qty)),
+            html_text(" = "),
+            html_text(to_string(total)),
     ]);
 }
 
 // A receipt is the flagship example, on a page. The escaping still holds inside it: the second
 // line's name is hostile and comes out as characters.
 pure function receipt_view(lines: [Line]) -> Html
-    requires len(lines) > 0
-{
+        requires len(lines) > 0
+        {
     let mutable items: [Html] = [];
     let mutable i: Int = 0;
     while i < len(lines) {
@@ -53,6 +53,6 @@ pure function receipt_view(lines: [Line]) -> Html
 print(html_render(line_view(Line { sku: "Rice", qty: 3, each: 19.99 })));
 
 print(html_render(receipt_view([
-    Line { sku: "Rice", qty: 3, each: 19.99 },
-    Line { sku: "<script>", qty: 1, each: 0.05 },
+                Line { sku: "Rice", qty: 3, each: 19.99 },
+                Line { sku: "<script>", qty: 1, each: 0.05 },
 ])));

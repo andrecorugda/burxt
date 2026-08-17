@@ -158,7 +158,7 @@ region main {
     // Excel writes a UTF-8 BOM. Left in, it becomes part of the first header's name and
     // `csv_column(header, "id")` fails for a reason invisible in every listing of the file.
     show("leading utf-8 bom is stripped",
-         byte_as_string(0xEF) + byte_as_string(0xBB) + byte_as_string(0xBF) + "id,name\n1,x\n");
+            byte_as_string(0xEF) + byte_as_string(0xBB) + byte_as_string(0xBF) + "id,name\n1,x\n");
 
     // ---- reading: the two refusals ----
     show("unterminated quote", "\"abc\n");
@@ -169,14 +169,14 @@ region main {
         Error(why) => { print("semicolon -> REFUSED: " + why); }
         Ok(rows) => {
             print("semicolon -> " + to_string(rows[0].count()) + " fields, middle ["
-                        + rows[0].fields[1] + "]");
+                    + rows[0].fields[1] + "]");
         }
     }
     match csv_parse_delimited("a\tb,c\td\n", CSV_TAB) {
         Error(why) => { print("tab -> REFUSED: " + why); }
         Ok(rows) => {
             print("tab -> " + to_string(rows[0].count()) + " fields, middle ["
-                        + rows[0].fields[1] + "]");
+                    + rows[0].fields[1] + "]");
         }
     }
 
@@ -222,7 +222,7 @@ region main {
         Ok(back) => {
             print("and read back as " + to_string(len(back)) + " records, widths "
                         + to_string(back[0].count()) + " " + to_string(back[1].count()) + " "
-                        + to_string(back[2].count()));
+                    + to_string(back[2].count()));
         }
     }
 
@@ -262,7 +262,7 @@ region main {
             let mutable o: Int = 0;
             while o < len(placed) {
                 print("record " + to_string(o + 1) + " begins at byte "
-                            + to_string(placed[o].offset));
+                        + to_string(placed[o].offset));
                 o += 1;
             }
             // And the offset really does point at the record's first byte.

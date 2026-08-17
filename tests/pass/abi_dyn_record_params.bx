@@ -25,9 +25,9 @@ class Pair { lo: Int, hi: Int }
 
 interface Rule {
     function rate_for(self, item: Item) -> Decimal<4>
-    function fold(self, p: Pair) -> Int
-    function shift(self, p: Pair) -> Pair
-}
+            function fold(self, p: Pair) -> Int
+            function shift(self, p: Pair) -> Pair
+        }
 
 class Flat { rate: Decimal<4>, bias: Int }
 

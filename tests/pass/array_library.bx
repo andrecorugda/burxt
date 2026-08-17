@@ -31,7 +31,7 @@ region main {
     // ---- changing, which says so in the signature ----
     let n: Int = array_sort(xs);
     print(to_string(xs[0]) + " " + to_string(xs[1]) + " " + to_string(xs[2]) + " "
-          + to_string(xs[3]));
+            + to_string(xs[3]));
     print(array_is_sorted(xs));
 
     let r: Int = array_reverse(xs);

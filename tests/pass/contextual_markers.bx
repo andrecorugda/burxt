@@ -7,10 +7,10 @@
 // PHP solves the same problem with `$` on every variable, which taxes every use to
 // refund an occasional collision; a contextual keyword pays only at the collision.
 function label(n: Int) -> String allocates
-    requires n > 0
-    ensures len(result) > 0
-    decreases n
-{
+        requires n > 0
+        ensures len(result) > 0
+        decreases n
+        {
     if n <= 1 {
         return "one";
     }

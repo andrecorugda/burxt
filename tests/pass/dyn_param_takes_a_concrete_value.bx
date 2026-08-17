@@ -17,7 +17,7 @@
 // different code.
 interface Priced {
     function price(self) -> Decimal<2>
-}
+        }
 
 class Book implements Priced {
     cost: Decimal<2>,

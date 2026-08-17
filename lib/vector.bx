@@ -73,8 +73,8 @@ use "files.bx";
 // length have no dot product, and answering one anyway by stopping at the shorter is the class of
 // quiet nonsense that a precondition exists to refuse.
 pure function vector_dot(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>
-    requires len(a) == len(b)
-{
+        requires len(a) == len(b)
+        {
     let mutable total: Decimal<14> = 0.00000000000000;
     let mutable i: Int = 0;
     while i < len(a) {
@@ -88,8 +88,8 @@ pure function vector_dot(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>
 // distance ranks identically to distance. Every nearest-neighbour search that only needs an ORDER can
 // use this and stay exact.
 pure function vector_squared_distance(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>
-    requires len(a) == len(b)
-{
+        requires len(a) == len(b)
+        {
     let mutable total: Decimal<14> = 0.00000000000000;
     let mutable i: Int = 0;
     while i < len(a) {
@@ -202,8 +202,8 @@ pure function vector_is_unit(a: [Decimal<7>]) -> Bool {
 // rather than `vector_magnitude` because it is one dot product against thirty binary-search steps,
 // and it is exactly the right question: a vector is normalisable iff its squared magnitude is nonzero.
 pure function vector_normalise(a: [Decimal<7>]) -> [Decimal<7>]
-    requires vector_magnitude_squared(a) > 0.00000000000000
-{
+        requires vector_magnitude_squared(a) > 0.00000000000000
+        {
     let squared: Decimal<14> = vector_magnitude_squared(a);
 
     // Boost until the magnitude is at least 1, so that flooring it costs 1e-7 relative rather than
@@ -278,8 +278,8 @@ class Scored { at: Int, score: Decimal<14> }
 // Insertion into a kept list rather than sort-then-take, so nothing needs a generic `sort` — and
 // `xs[i] = v` does not work through a `[T]` today, which is what a generic sort would need.
 pure function vector_top_dot(rows: [Row], query: [Decimal<7>], count: Int) -> [Scored]
-    requires count > 0
-{
+        requires count > 0
+        {
     let mutable best: [Scored] = [];
     let mutable r: Int = 0;
     while r < len(rows) {
@@ -422,7 +422,7 @@ pure function vector_from_json(value: Json) -> Result<Row, String> {
                             None => {
                                 return Result.Error("row `" + id + "` component "
                                             + to_string(i + 1)
-                                            + " is not an exact 7-place decimal");
+                                        + " is not an exact 7-place decimal");
                             }
                             Some(component) => {
                                 let added: Int = push(out, component);

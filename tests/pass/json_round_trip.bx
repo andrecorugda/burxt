@@ -11,13 +11,13 @@ use "../../lib/json.bx";
 
 let mutable rows: [Json] = [];
 let r: Int = push(rows, json_object([json_field("sku", json_text("RICE")),
-                                     json_field("price", json_money($52.75)),
-                                     json_field("qty", json_int(3))]));
+                    json_field("price", json_money($52.75)),
+        json_field("qty", json_int(3))]));
 
 let doc: Json = json_object([json_field("total", json_money($158.25)),
-                            json_field("rows", json_list(rows)),
-                            json_field("ok", json_truth(true)),
-                            json_field("note", json_null())]);
+                json_field("rows", json_list(rows)),
+                json_field("ok", json_truth(true)),
+        json_field("note", json_null())]);
 
 let once: String = json_render(doc);
 print(once);

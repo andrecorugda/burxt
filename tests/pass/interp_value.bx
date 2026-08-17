@@ -9,7 +9,7 @@ region r {
     print(s);
     print(len(s));
     let joined: String = "n is " + to_string(n) + ", money " + to_string(m)
-        + ", ok " + to_string(ok) + ", from " + who;
+            + ", ok " + to_string(ok) + ", from " + who;
     print(s == joined);
     // a single interpolation, and one with no pieces at all
     let bare: String = "{n}";

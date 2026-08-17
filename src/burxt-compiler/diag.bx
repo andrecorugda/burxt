@@ -212,7 +212,7 @@ pure function shown_line(src: String, from: Int, to: Int) -> String {
 // The gutter is as wide as the line number, so line 9 and line 1009 both line up with
 // their own source. That is why `gutter` is computed rather than a constant.
 function diag_render(path: String, src: String, span_start: Int, span_end: Int,
-                     message: String) -> String {
+        message: String) -> String {
     let at: Int = reportable_offset(src, span_start);
     let line: Int = line_number_at(src, at);
     let column: Int = column_at(src, at);
@@ -228,10 +228,10 @@ function diag_render(path: String, src: String, span_start: Int, span_end: Int,
     let pad: String = repeated(" ", column - 1);
     let carets: String = repeated("^", span_width(src, span_start, span_end));
     return "error: " + message + "\n"
-        + gutter + "--> " + path + ":" + to_string(line) + ":" + to_string(column) + "\n"
-        + gutter + " |\n"
-        + number + " | " + shown + "\n"
-        + gutter + " | " + pad + carets + "\n";
+            + gutter + "--> " + path + ":" + to_string(line) + ":" + to_string(column) + "\n"
+            + gutter + " |\n"
+            + number + " | " + shown + "\n"
+            + gutter + " | " + pad + carets + "\n";
 }
 
 // ---- JSON -----------------------------------------------------------------------------
@@ -296,7 +296,7 @@ pure function hex_pair(b: Int) -> String {
 // off-by-ones live, so both are stated here once and neither consumer has to know the
 // other's convention.
 function diag_json(path: String, src: String, span_start: Int, span_end: Int,
-                   message: String) -> String {
+        message: String) -> String {
     let start_at: Int = reportable_offset(src, span_start);
     let end_at: Int = reportable_offset(src, span_end);
     let start_line: Int = line_number_at(src, start_at);
@@ -304,15 +304,15 @@ function diag_json(path: String, src: String, span_start: Int, span_end: Int,
     let end_line: Int = line_number_at(src, end_at);
     let end_column: Int = column_at(src, end_at);
     return "\{\"file\":" + json_escape(path)
-        + ",\"severity\":\"error\",\"message\":" + json_escape(message)
-        + ",\"line\":" + to_string(start_line)
-        + ",\"column\":" + to_string(start_column)
-        + ",\"endLine\":" + to_string(end_line)
-        + ",\"endColumn\":" + to_string(end_column)
-        + ",\"lspStart\":\{\"line\":" + to_string(start_line - 1)
-        + ",\"character\":" + to_string(start_column - 1)
-        + "\},\"lspEnd\":\{\"line\":" + to_string(end_line - 1)
-        + ",\"character\":" + to_string(end_column - 1)
-        + "\},\"byteStart\":" + to_string(span_start)
-        + ",\"byteEnd\":" + to_string(span_end) + "\}";
+            + ",\"severity\":\"error\",\"message\":" + json_escape(message)
+            + ",\"line\":" + to_string(start_line)
+            + ",\"column\":" + to_string(start_column)
+            + ",\"endLine\":" + to_string(end_line)
+            + ",\"endColumn\":" + to_string(end_column)
+            + ",\"lspStart\":\{\"line\":" + to_string(start_line - 1)
+            + ",\"character\":" + to_string(start_column - 1)
+            + "\},\"lspEnd\":\{\"line\":" + to_string(end_line - 1)
+            + ",\"character\":" + to_string(end_column - 1)
+            + "\},\"byteStart\":" + to_string(span_start)
+            + ",\"byteEnd\":" + to_string(span_end) + "\}";
 }

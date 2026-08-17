@@ -45,8 +45,8 @@ pure function is_big(n: Int) -> Bool {
 
 // And inside a contract clause, for the same reason: a clause must be pure.
 pure function capped(n: Int) -> Int
-    requires n <= LIMIT
-{
+        requires n <= LIMIT
+        {
     return n;
 }
 

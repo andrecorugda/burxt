@@ -174,9 +174,9 @@ pure function hash_mask_32(x: Int) -> Int {
 // `n == 0` would ask for `shift_left(x, 32)`, which is defined (it is a shift by less than the
 // register width) and gives the right answer once masked. No round in SHA-256 rotates by 0.
 pure function hash_rotate_right_32(x: Int, n: Int) -> Int
-    requires n >= 0
-    requires n < 32
-{
+        requires n >= 0
+        requires n < 32
+        {
     return hash_mask_32(bit_or(shift_right_zeros(x, n), shift_left(x, 32 - n)));
 }
 
@@ -187,9 +187,9 @@ pure function hash_rotate_right_32(x: Int, n: Int) -> Int
 // does not define. No round in SHA-512 rotates by 0, and the precondition says so rather than
 // leaving it to be discovered on some other machine.
 pure function hash_rotate_right_64(x: Int, n: Int) -> Int
-    requires n > 0
-    requires n < 64
-{
+        requires n > 0
+        requires n < 64
+        {
     return bit_or(shift_right_zeros(x, n), shift_left(x, 64 - n));
 }
 
@@ -246,9 +246,9 @@ pure function hash_multiply_wrapping_64(a: Int, b: Int) -> Int {
 // ============================================================================
 
 pure function hash_hex_digit(value: Int) -> String
-    requires value >= 0
-    requires value < 16
-{
+        requires value >= 0
+        requires value < 16
+        {
     if value < 10 {
         return byte_as_string(48 + value);
     }
@@ -287,9 +287,9 @@ pure function hash_hex(digest: [Int]) -> String {
 // the same bits. Printing it as a decimal Int is legal and useless; printing it here gives the
 // sixteen characters the FNV reference page prints.
 pure function hash_hex_int(value: Int, width: Int) -> String
-    requires width > 0
-    requires width <= 8
-{
+        requires width > 0
+        requires width <= 8
+        {
     let mutable bytes: [Int] = [];
     for i in 0..width {
         push(bytes, bit_and(shift_right_zeros(value, 8 * (width - 1 - i)), 0xFF));
@@ -452,7 +452,7 @@ function sha256_k(mutable into: [Int]) -> Int {
         0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
         0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
         0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-    ];
+            ];
     for t in 0..len(table) {
         push(into, table[t]);
     }
@@ -471,15 +471,15 @@ function sha256_block(mutable h: [Int], mutable w: [Int], message: [Int], at: In
     for t in 0..16 {
         let b: Int = at + 4 * t;
         w[t] = bit_or(bit_or(shift_left(message[b], 24), shift_left(message[b + 1], 16)),
-                      bit_or(shift_left(message[b + 2], 8), message[b + 3]));
+                bit_or(shift_left(message[b + 2], 8), message[b + 3]));
     }
     for t in 16..64 {
         let x: Int = w[t - 15];
         let y: Int = w[t - 2];
         let s0: Int = bit_xor(bit_xor(hash_rotate_right_32(x, 7), hash_rotate_right_32(x, 18)),
-                              shift_right_zeros(x, 3));
+                shift_right_zeros(x, 3));
         let s1: Int = bit_xor(bit_xor(hash_rotate_right_32(y, 17), hash_rotate_right_32(y, 19)),
-                              shift_right_zeros(y, 10));
+                shift_right_zeros(y, 10));
         w[t] = hash_mask_32(w[t - 16] + s0 + w[t - 7] + s1);
     }
     let mutable a: Int = h[0];
@@ -492,14 +492,14 @@ function sha256_block(mutable h: [Int], mutable w: [Int], message: [Int], at: In
     let mutable last: Int = h[7];
     for t in 0..64 {
         let s1: Int = bit_xor(bit_xor(hash_rotate_right_32(e, 6), hash_rotate_right_32(e, 11)),
-                              hash_rotate_right_32(e, 25));
+                hash_rotate_right_32(e, 25));
         // `bit_not(e)` sets every bit above 31 too; `bit_and` with `g`, which is a u32, clears them
         // again. No mask needed and none written, because one that does nothing is a lie about
         // where the danger is.
         let ch: Int = bit_xor(bit_and(e, f), bit_and(bit_not(e), g));
         let t1: Int = hash_mask_32(last + s1 + ch + k[t] + w[t]);
         let s0: Int = bit_xor(bit_xor(hash_rotate_right_32(a, 2), hash_rotate_right_32(a, 13)),
-                              hash_rotate_right_32(a, 22));
+                hash_rotate_right_32(a, 22));
         let maj: Int = bit_xor(bit_xor(bit_and(a, b), bit_and(a, c)), bit_and(b, c));
         let t2: Int = hash_mask_32(s0 + maj);
         last = g;
@@ -537,7 +537,7 @@ function sha256_block(mutable h: [Int], mutable w: [Int], message: [Int], at: In
 function sha256(data: [Int]) -> [Int] {
     let n: Int = len(data);
     let mutable h: [Int] = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
     let mutable w: [Int] = [];
     for t in 0..64 {
         push(w, 0);
@@ -621,7 +621,7 @@ function sha512_k(mutable into: [Int]) -> Int {
         0x06f067aa72176fba, 0x0a637dc5a2c898a6, 0x113f9804bef90dae, 0x1b710b35131c471b,
         0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c,
         0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817
-    ];
+            ];
     for t in 0..len(table) {
         push(into, table[t]);
     }
@@ -643,11 +643,11 @@ function sha512_block(mutable h: [Int], mutable w: [Int], message: [Int], at: In
         let x: Int = w[t - 15];
         let y: Int = w[t - 2];
         let s0: Int = bit_xor(bit_xor(hash_rotate_right_64(x, 1), hash_rotate_right_64(x, 8)),
-                              shift_right_zeros(x, 7));
+                shift_right_zeros(x, 7));
         let s1: Int = bit_xor(bit_xor(hash_rotate_right_64(y, 19), hash_rotate_right_64(y, 61)),
-                              shift_right_zeros(y, 6));
+                shift_right_zeros(y, 6));
         w[t] = hash_add_wrapping_64(hash_add_wrapping_64(w[t - 16], s0),
-                                    hash_add_wrapping_64(w[t - 7], s1));
+                hash_add_wrapping_64(w[t - 7], s1));
     }
     let mutable a: Int = h[0];
     let mutable b: Int = h[1];
@@ -659,13 +659,13 @@ function sha512_block(mutable h: [Int], mutable w: [Int], message: [Int], at: In
     let mutable last: Int = h[7];
     for t in 0..80 {
         let s1: Int = bit_xor(bit_xor(hash_rotate_right_64(e, 14), hash_rotate_right_64(e, 18)),
-                              hash_rotate_right_64(e, 41));
+                hash_rotate_right_64(e, 41));
         let ch: Int = bit_xor(bit_and(e, f), bit_and(bit_not(e), g));
         let t1: Int = hash_add_wrapping_64(hash_add_wrapping_64(hash_add_wrapping_64(last, s1),
-                                                                hash_add_wrapping_64(ch, k[t])),
-                                           w[t]);
+                    hash_add_wrapping_64(ch, k[t])),
+                w[t]);
         let s0: Int = bit_xor(bit_xor(hash_rotate_right_64(a, 28), hash_rotate_right_64(a, 34)),
-                              hash_rotate_right_64(a, 39));
+                hash_rotate_right_64(a, 39));
         let maj: Int = bit_xor(bit_xor(bit_and(a, b), bit_and(a, c)), bit_and(b, c));
         let t2: Int = hash_add_wrapping_64(s0, maj);
         last = g;
@@ -697,8 +697,8 @@ function sha512_block(mutable h: [Int], mutable w: [Int], message: [Int], at: In
 function sha512(data: [Int]) -> [Int] {
     let n: Int = len(data);
     let mutable h: [Int] = [0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b,
-                            0xa54ff53a5f1d36f1, 0x510e527fade682d1, 0x9b05688c2b3e6c1f,
-                            0x1f83d9abfb41bd6b, 0x5be0cd19137e2179];
+                0xa54ff53a5f1d36f1, 0x510e527fade682d1, 0x9b05688c2b3e6c1f,
+            0x1f83d9abfb41bd6b, 0x5be0cd19137e2179];
     let mutable w: [Int] = [];
     for t in 0..80 {
         push(w, 0);
@@ -875,9 +875,9 @@ function hmac_sha512_text(key: String, message: String) -> [Int] {
 // from the password or the digest.
 
 function pbkdf2_sha256(password: [Int], salt: [Int], iterations: Int, length: Int) -> [Int]
-    requires iterations >= 1
-    requires length >= 1
-{
+        requires iterations >= 1
+        requires length >= 1
+        {
     let mutable out: [Int] = [];
     let mutable index: Int = 1;
     while len(out) < length {
@@ -922,8 +922,8 @@ function pbkdf2_sha256(password: [Int], salt: [Int], iterations: Int, length: In
 }
 
 function pbkdf2_sha256_text(password: String, salt: String, iterations: Int, length: Int) -> [Int]
-    requires iterations >= 1
-    requires length >= 1
-{
+        requires iterations >= 1
+        requires length >= 1
+        {
     return pbkdf2_sha256(to_bytes(password), to_bytes(salt), iterations, length);
 }

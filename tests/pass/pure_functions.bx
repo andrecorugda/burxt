@@ -2,15 +2,15 @@
 // compiler checked it. For money that is the audit story — a hidden clock or a
 // config lookup three calls down cannot get in.
 pure function interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>)
-    -> Decimal<2, RoundHalfEven>
-{
+        -> Decimal<2, RoundHalfEven>
+        {
     return balance * rate;
 }
 
 // Purity is transitive without being inferred: a pure function may call one.
 pure function total_with_interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>)
-    -> Decimal<2, RoundHalfEven>
-{
+        -> Decimal<2, RoundHalfEven>
+        {
     return balance + interest(balance, rate);
 }
 

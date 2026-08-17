@@ -12,7 +12,7 @@ enum Shape {
 }
 
 function total(
-    a: Int,
+            a: Int,
     b: Int,
 ) -> Int {
     return a + b;
@@ -24,8 +24,8 @@ region r {
         y: 2,
     };
     print(total(
-        p.x,
-        p.y,
+                    p.x,
+            p.y,
     ));
 
     let sizes: [Int; 3] = [

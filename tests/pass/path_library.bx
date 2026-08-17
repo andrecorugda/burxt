@@ -161,7 +161,7 @@ region main {
     // And the limit of that: join is not a containment check. `..` is normalise's business.
     show("join(uploads, ../../etc/passwd)", path_join("uploads", "../../etc/passwd"));
     show("normalise(join(uploads, ../../etc/passwd))",
-        path_normalise(path_join("uploads", "../../etc/passwd")));
+            path_normalise(path_join("uploads", "../../etc/passwd")));
     // Interior separators untouched: only the joint is.
     show("join(a//b, c)", path_join("a//b", "c"));
     show("join(/base, sub/file.txt)", path_join("/base", "sub/file.txt"));
@@ -209,9 +209,9 @@ region main {
 
     // ---- the partition invariant, over every path above ----
     let all_paths: [String] = ["", "/", "//", "///", "a", "/a", "a/b", "/a/b/", "a//", "//a",
-        "//a//b//", "a//b//c", ".", "..", "...", "/..", "archive.tar.gz", ".hidden", ".hidden.txt",
-        "a/b.c/d", "a.", "a.b.", "a..b", ".a.", "noext", "/a/b.txt/", "a/b/c",
-        "uploads/../../etc/passwd", "..a", "a/...", "/a/b.txt"];
+                "//a//b//", "a//b//c", ".", "..", "...", "/..", "archive.tar.gz", ".hidden", ".hidden.txt",
+                "a/b.c/d", "a.", "a.b.", "a..b", ".a.", "noext", "/a/b.txt/", "a/b/c",
+            "uploads/../../etc/passwd", "..a", "a/...", "/a/b.txt"];
     let mutable broken: Int = 0;
     for i in 0..len(all_paths) {
         if !partitions(all_paths[i]) {

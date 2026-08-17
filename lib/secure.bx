@@ -116,9 +116,9 @@ const SECURE_DRAW_ATTEMPTS: Int = 128;
 // position in it rather than a run-time -1 for a reason the signature never mentioned. Callers
 // wanting more should use `secure_random_bytes`, which loops.
 function secure_entropy_block(count: Int) -> Option<[Int]> touches input
-    requires count > 0
-    requires count <= SECURE_ENTROPY_BLOCK
-{
+        requires count > 0
+        requires count <= SECURE_ENTROPY_BLOCK
+        {
     let buffer: CPointer = malloc(count);
     if c_is_null(buffer) {
         return Option.None;
@@ -144,8 +144,8 @@ function secure_entropy_block(count: Int) -> Option<[Int]> touches input
 // If any block fails, the whole call fails. It does NOT answer the bytes it managed to collect:
 // a short key is a weaker key that looks like a key.
 function secure_random_bytes(count: Int) -> Option<[Int]> touches input
-    requires count > 0
-{
+        requires count > 0
+        {
     let mutable out: [Int] = [];
     let mutable taken: Int = 0;
     while taken < count {
@@ -176,8 +176,8 @@ function secure_random_bytes(count: Int) -> Option<[Int]> touches input
 // keeps every value non-negative without an `INT_MIN` special case. That costs one bit of the
 // range and nothing else, since `bound` is an Int and cannot exceed `SECURE_INT_MAX` anyway.
 function secure_random_int_below(bound: Int) -> Option<Int> touches input
-    requires bound > 0
-{
+        requires bound > 0
+        {
     // The number of draws to discard at the top so that what is left divides evenly. 2^63 does not
     // fit in an Int, so it is computed from `SECURE_INT_MAX`, which is 2^63 - 1: the count of
     // values in `0 ..= SECURE_INT_MAX` is `SECURE_INT_MAX + 1`, and its remainder modulo `bound`
@@ -222,10 +222,10 @@ function secure_uuid_v4() -> Option<String> touches input {
     bytes[8] = bit_or(bit_and(bytes[8], 63), 128);
     let digits: String = encoding_hex_encode(bytes);
     return Option.Some(substring(digits, 0, 8) + "-"
-                     + substring(digits, 8, 4) + "-"
-                     + substring(digits, 12, 4) + "-"
-                     + substring(digits, 16, 4) + "-"
-                     + substring(digits, 20, 12));
+                + substring(digits, 8, 4) + "-"
+                + substring(digits, 12, 4) + "-"
+                + substring(digits, 16, 4) + "-"
+            + substring(digits, 20, 12));
 }
 
 // `count` random bytes as lowercase hex — twice `count` characters, and safe in a URL, a header,
@@ -234,8 +234,8 @@ function secure_uuid_v4() -> Option<String> touches input {
 // The argument is a count of BYTES, not of characters, because the strength is in the bytes and a
 // caller who reads "32" should get 256 bits. 32 is the number to use when unsure.
 function secure_token_hex(count: Int) -> Option<String> touches input
-    requires count > 0
-{
+        requires count > 0
+        {
     let bytes: [Int] = secure_random_bytes(count)?;
     return Option.Some(encoding_hex_encode(bytes));
 }
@@ -243,8 +243,8 @@ function secure_token_hex(count: Int) -> Option<String> touches input
 // The same, in unpadded base64url — shorter for the same strength, and still safe in a URL. 32
 // bytes give 43 characters against hex's 64.
 function secure_token_urlsafe(count: Int) -> Option<String> touches input
-    requires count > 0
-{
+        requires count > 0
+        {
     let bytes: [Int] = secure_random_bytes(count)?;
     return Option.Some(encoding_base64url_encode(bytes));
 }

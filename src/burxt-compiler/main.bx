@@ -290,59 +290,59 @@ function report_problem(mutable unit: Unit, src: String, path: String, shape: In
 // and must not.
 function module_text(mutable unit: Unit) -> String {
     return "; LLVM IR written by the Burxt compiler, in Burxt.\n"
-    + "@burxt.fmt_int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n"
-    + "@burxt.fmt_str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n"
-    + "@burxt.fmt_nl = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n"
-    // These four are Burxt STRINGS, not printf formats, so they carry a length
-    // header like every other String — `to_string(true)` answers one of them, and
-    // `len` of it would otherwise read whatever the linker placed before the bytes.
-    // The `fmt_*` globals above are C format strings and need none.
-    + "@burxt.string_true = private unnamed_addr constant \{ i64, [5 x i8] \} "
-    + "\{ i64 4, [5 x i8] c\"true\\00\" \}\n"
-    + "@burxt.string_false = private unnamed_addr constant \{ i64, [6 x i8] \} "
-    + "\{ i64 5, [6 x i8] c\"false\\00\" \}\n"
-    + "@burxt.string_minus = private unnamed_addr constant \{ i64, [2 x i8] \} "
-    + "\{ i64 1, [2 x i8] c\"-\\00\" \}\n"
-    + "@burxt.string_empty = private unnamed_addr constant \{ i64, [1 x i8] \} "
-    + "\{ i64 0, [1 x i8] c\"\\00\" \}\n"
-    // B19. These three said something different from stage-0, and nothing compared them:
-    // `the_two_compilers_render_a_problem_identically` covers COMPILE-TIME diagnostics, and
-    // runtime text was checked by no test at all until the B18 tightening required the named
-    // message. Same blind spot as B18, one layer up — a program that dies correctly can still
-    // say the wrong thing about why, and for a language whose case is that errors read as
-    // advice, the wording IS the feature.
-    + "@burxt.overflow_msg = private unnamed_addr constant [97 x i8] "
-    + "c\"burxt runtime error: arithmetic overflow \\E2\\80\\94 the exact result no "
-    + "longer fits in the value range\\0A\\00\"\n"
-    // No longer names a number, because the number is no longer knowable when this text is
-    // written: `burxt.alloc` asks for 4 GB, then 256 MB, then 16 MB, and keeps whichever the
-    // machine granted. Saying "reserves 4 GB" to a process holding 16 MB would be the most
-    // misleading thing this message could say. Word for word what stage-0's `build_panic` emits.
-    + "@burxt.region_msg = private unnamed_addr constant [120 x i8] "
-    + "c\"burxt runtime error: region memory exhausted — this process has used "
-    + "all the region memory the machine would give it\\0A\\00\"\n"
-    // The OTHER region failure, and a different one: not "used it all" but "never got any".
-    // Stage-0 distinguishes them, so stage-1 must too — one message for two causes is how a
-    // runtime error stops being advice.
-    + "@burxt.no_region_msg = private unnamed_addr constant [105 x i8] "
-    + "c\"burxt runtime error: could not reserve any region memory — the machine "
-    + "refused 4 GB, 256 MB and 16 MB\\0A\\00\"\n"
-    + "@burxt.divzero_msg = private unnamed_addr constant [39 x i8] "
-    + "c\"burxt runtime error: division by zero\\0A\\00\"\n"
-    // The third number was the SOURCE BYTE OFFSET, which is a compiler-writer's number: it
-    // tells a reader where in the file the indexing expression sits, not what they may
-    // legally pass. Stage-0 prints the last valid index instead, which is the number that
-    // ends the argument about whether 5 was allowed.
-    + "@burxt.bounds_msg = private unnamed_addr constant [109 x i8] "
-    + "c\"burxt runtime error: index %lld is out of bounds \\E2\\80\\94 this array "
-    + "holds %lld values (valid indexes 0 to %lld)\\0A\\00\"\n"
-    // `argument(n)` had NO message of its own — it borrowed the array bounds check, so a
-    // program given one argument and asked for its hundredth said "index 99 is outside an
-    // array of 1", naming an array the programmer never wrote. Structural, not wording.
-    + "@burxt.argument_msg = private unnamed_addr constant [114 x i8] "
-    + "c\"burxt runtime error: argument(%lld) does not exist \\E2\\80\\94 this program "
-    + "was given %lld arguments (0 is its own name)\\0A\\00\"\n"
-    + unit.finish_globals() + "\n" + unit.finish();
+            + "@burxt.fmt_int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n"
+            + "@burxt.fmt_str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n"
+            + "@burxt.fmt_nl = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n"
+            // These four are Burxt STRINGS, not printf formats, so they carry a length
+            // header like every other String — `to_string(true)` answers one of them, and
+            // `len` of it would otherwise read whatever the linker placed before the bytes.
+            // The `fmt_*` globals above are C format strings and need none.
+            + "@burxt.string_true = private unnamed_addr constant \{ i64, [5 x i8] \} "
+            + "\{ i64 4, [5 x i8] c\"true\\00\" \}\n"
+            + "@burxt.string_false = private unnamed_addr constant \{ i64, [6 x i8] \} "
+            + "\{ i64 5, [6 x i8] c\"false\\00\" \}\n"
+            + "@burxt.string_minus = private unnamed_addr constant \{ i64, [2 x i8] \} "
+            + "\{ i64 1, [2 x i8] c\"-\\00\" \}\n"
+            + "@burxt.string_empty = private unnamed_addr constant \{ i64, [1 x i8] \} "
+            + "\{ i64 0, [1 x i8] c\"\\00\" \}\n"
+            // B19. These three said something different from stage-0, and nothing compared them:
+            // `the_two_compilers_render_a_problem_identically` covers COMPILE-TIME diagnostics, and
+            // runtime text was checked by no test at all until the B18 tightening required the named
+            // message. Same blind spot as B18, one layer up — a program that dies correctly can still
+            // say the wrong thing about why, and for a language whose case is that errors read as
+            // advice, the wording IS the feature.
+            + "@burxt.overflow_msg = private unnamed_addr constant [97 x i8] "
+            + "c\"burxt runtime error: arithmetic overflow \\E2\\80\\94 the exact result no "
+            + "longer fits in the value range\\0A\\00\"\n"
+            // No longer names a number, because the number is no longer knowable when this text is
+            // written: `burxt.alloc` asks for 4 GB, then 256 MB, then 16 MB, and keeps whichever the
+            // machine granted. Saying "reserves 4 GB" to a process holding 16 MB would be the most
+            // misleading thing this message could say. Word for word what stage-0's `build_panic` emits.
+            + "@burxt.region_msg = private unnamed_addr constant [120 x i8] "
+            + "c\"burxt runtime error: region memory exhausted — this process has used "
+            + "all the region memory the machine would give it\\0A\\00\"\n"
+            // The OTHER region failure, and a different one: not "used it all" but "never got any".
+            // Stage-0 distinguishes them, so stage-1 must too — one message for two causes is how a
+            // runtime error stops being advice.
+            + "@burxt.no_region_msg = private unnamed_addr constant [105 x i8] "
+            + "c\"burxt runtime error: could not reserve any region memory — the machine "
+            + "refused 4 GB, 256 MB and 16 MB\\0A\\00\"\n"
+            + "@burxt.divzero_msg = private unnamed_addr constant [39 x i8] "
+            + "c\"burxt runtime error: division by zero\\0A\\00\"\n"
+            // The third number was the SOURCE BYTE OFFSET, which is a compiler-writer's number: it
+            // tells a reader where in the file the indexing expression sits, not what they may
+            // legally pass. Stage-0 prints the last valid index instead, which is the number that
+            // ends the argument about whether 5 was allowed.
+            + "@burxt.bounds_msg = private unnamed_addr constant [109 x i8] "
+            + "c\"burxt runtime error: index %lld is out of bounds \\E2\\80\\94 this array "
+            + "holds %lld values (valid indexes 0 to %lld)\\0A\\00\"\n"
+            // `argument(n)` had NO message of its own — it borrowed the array bounds check, so a
+            // program given one argument and asked for its hundredth said "index 99 is outside an
+            // array of 1", naming an array the programmer never wrote. Structural, not wording.
+            + "@burxt.argument_msg = private unnamed_addr constant [114 x i8] "
+            + "c\"burxt runtime error: argument(%lld) does not exist \\E2\\80\\94 this program "
+            + "was given %lld arguments (0 is its own name)\\0A\\00\"\n"
+            + unit.finish_globals() + "\n" + unit.finish();
 }
 
 // Everything a program needs to become IR, in one place: load it with what it uses, lex,
@@ -391,7 +391,7 @@ function drive_source(src: String, path: String, out_ll: String, loud: Int) -> I
 // The renderers are `diag.bx`'s, already held byte-for-byte against `diag.rs` since v0.0.222,
 // LSP positions included. So this function chooses; it does not format.
 function drive_reporting(src: String, path: String, out_ll: String, loud: Int,
-                         shape: Int) -> Int touches files, input {
+        shape: Int) -> Int touches files, input {
     let mutable unit: Unit = Unit { pending_public: 0, package_names: [], package_starts: [], package_ends: [], private_names: [], private_owners: [], tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], consts: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, grow_parameters: [], grow_self: [], relay_parameters: [], relay_self: [], relay_method_parameters: [], relay_aliases: [], relay_ceiling: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], impl_traits: [], typed: [], region_depth: 0, region_token: 0 - 1, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", global_chunks: [], sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], region_marks: [], loop_region_depths: [], block_release: [], placing: 0, rel_frames: [], rel_names: [], in_function: 0, depth: 0, param_depth: 0 - 1, problems: 0, diagnose: 0, problem_start: 0 - 1, problem_length: 0, problem_message: "", position: 0, token_end: 0, no_record_literal: 0, in_extern_signature: 0, range_bounds: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
     if shape > 0 {
         unit.diagnose = 1;
@@ -404,7 +404,7 @@ function drive_reporting(src: String, path: String, out_ll: String, loud: Int,
 
     if loud == 1 {
         print("lexed " + path + ": " + to_string(total) + " tokens, "
-              + to_string(installed) + " keywords known");
+                + to_string(installed) + " keywords known");
         print("  identifiers: " + to_string(unit.count_of(1)));
         print("  decimals:    " + to_string(unit.count_of(3)));
         print("  strings:     " + to_string(unit.count_of(4)));
@@ -428,8 +428,8 @@ function drive_reporting(src: String, path: String, out_ll: String, loud: Int,
     }
     if loud == 1 {
         print("parsed " + to_string(items) + " items and statements into "
-              + to_string(len(unit.nodes)) + " nodes, "
-              + to_string(len(unit.children)) + " child slots");
+                    + to_string(len(unit.nodes)) + " nodes, "
+                + to_string(len(unit.children)) + " child slots");
         print("  parse errors: " + to_string(unit.errors));
     }
     if unit.errors > 0 {
@@ -440,15 +440,15 @@ function drive_reporting(src: String, path: String, out_ll: String, loud: Int,
     let problems: Int = unit.check(src);
     if loud == 1 {
         print("checked " + to_string(len(unit.functions)) + " functions and "
-              + to_string(len(unit.types)) + " types");
+                + to_string(len(unit.types)) + " types");
         print("  type errors: " + to_string(problems));
         // M9: what the checker actually did, per run. A number beside a phase is the only
         // thing that turns "the checker is slow" into a place to look.
         print("  work: " + to_string(len(unit.nodes)) + " nodes, type_of "
-              + to_string(unit.type_of_calls) + ", find_binding " + to_string(unit.find_binding_calls)
-              + " over " + to_string(len(unit.bindings)) + " bindings, find_function "
-              + to_string(unit.find_function_calls) + " over " + to_string(len(unit.functions))
-              + " functions");
+                    + to_string(unit.type_of_calls) + ", find_binding " + to_string(unit.find_binding_calls)
+                    + " over " + to_string(len(unit.bindings)) + " bindings, find_function "
+                    + to_string(unit.find_function_calls) + " over " + to_string(len(unit.functions))
+                + " functions");
     }
     if problems > 0 {
         let told: Int = report_problem(unit, src, path, shape);
@@ -464,7 +464,7 @@ function drive_reporting(src: String, path: String, out_ll: String, loud: Int,
             print("  backend refusals: " + to_string(unit.problems));
         } else {
             print_error("burxt: the backend refused " + to_string(unit.problems)
-                        + " construct(s) in " + path);
+                    + " construct(s) in " + path);
         }
         return unit.problems;
     }
@@ -802,7 +802,7 @@ if command == "build" || command == "run" {
         machine = " -mtriple=" + triple;
     }
     let assembled: Int = system(llc_command() + " -relocation-model=pic -filetype=obj"
-                                + machine + " -o " + object + " " + ll);
+            + machine + " -o " + object + " " + ll);
     if assembled != 0 {
         print_error("burxt: llc could not assemble " + ll);
         exit(1);
@@ -812,7 +812,7 @@ if command == "build" || command == "run" {
         // linking needs the other machine's toolchain. Same reason `emit-ir` keeps nothing.
         let dropped: Int = system("rm -f " + ll);
         print_error("wrote " + object + " for " + triple
-                    + " — linking needs that target's libc and linker");
+                + " — linking needs that target's libc and linker");
         exit(0);
     }
     let linked: Int = system("cc -o " + output + " " + object);

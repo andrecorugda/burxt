@@ -46,9 +46,9 @@ function show_bool(label: String, value: Bool) -> Bool {
 // have to name and read, which is what keeps the whole thing collision-free.
 function child_says(exe: String, setting: String, expectation: String) -> Bool touches commands {
     let command: String =
-        "F=$(mktemp /tmp/burxt-log-fixture.XXXXXX); G=$(mktemp /tmp/burxt-log-fixture.XXXXXX); "
-        + setting + " '" + exe + "' emit >\"$G\" 2>\"$F\"; R=1; "
-        + "if " + expectation + "; then R=0; fi; rm -f \"$F\" \"$G\"; exit $R";
+            "F=$(mktemp /tmp/burxt-log-fixture.XXXXXX); G=$(mktemp /tmp/burxt-log-fixture.XXXXXX); "
+            + setting + " '" + exe + "' emit >\"$G\" 2>\"$F\"; R=1; "
+            + "if " + expectation + "; then R=0; fi; rm -f \"$F\" \"$G\"; exit $R";
     return os_run(command) == 0;
 }
 
@@ -71,7 +71,7 @@ region main {
 
     // ---- the line, exactly ----
     show("format(WARN, 2026-07-29T08:14:56Z)",
-        log_format(LOG_WARN, "disk almost full", 1785312896));
+            log_format(LOG_WARN, "disk almost full", 1785312896));
     show("format(DEBUG, epoch)", log_format(LOG_DEBUG, "at the beginning", 0));
     show("format(INFO, leap day 2000)", log_format(LOG_INFO, "2000 was a leap year", 951782400));
     show("format(ERROR, epoch)", log_format(LOG_ERROR, "gone", 0));
@@ -157,45 +157,45 @@ region main {
     // Everything, and stdout stays empty. The exact padded forms are checked, so the column
     // alignment is part of the assertion.
     show_bool("BURXT_LOG=debug logs all four to stderr, none to stdout",
-        child_says(exe, "BURXT_LOG=debug",
-            "grep -q 'DEBUG debug-line' \"$F\" && grep -q 'INFO  info-line' \"$F\" "
-            + "&& grep -q 'WARN  warn-line' \"$F\" && grep -q 'ERROR error-line' \"$F\" "
+                child_says(exe, "BURXT_LOG=debug",
+                    "grep -q 'DEBUG debug-line' \"$F\" && grep -q 'INFO  info-line' \"$F\" "
+                    + "&& grep -q 'WARN  warn-line' \"$F\" && grep -q 'ERROR error-line' \"$F\" "
             + "&& [ ! -s \"$G\" ]"));
     // Unset: the default. Warnings and errors, and nothing else — the whole argument for WARN
     // being the default rather than silent or info.
     show_bool("unset logs warn and error only",
-        child_says(exe, "unset BURXT_LOG;",
-            "grep -q 'WARN  warn-line' \"$F\" && grep -q 'ERROR error-line' \"$F\" "
+                child_says(exe, "unset BURXT_LOG;",
+                    "grep -q 'WARN  warn-line' \"$F\" && grep -q 'ERROR error-line' \"$F\" "
             + "&& ! grep -q 'debug-line' \"$F\" && ! grep -q 'info-line' \"$F\""));
     // A library that cannot be quiet is not one you can put in a pipeline.
     show_bool("BURXT_LOG=off logs nothing at all",
-        child_says(exe, "BURXT_LOG=off", "[ ! -s \"$F\" ] && [ ! -s \"$G\" ]"));
+            child_says(exe, "BURXT_LOG=off", "[ ! -s \"$F\" ] && [ ! -s \"$G\" ]"));
     // The case this whole rule exists for.
     show_bool("BURXT_LOG=banana does not silence the log",
-        child_says(exe, "BURXT_LOG=banana",
+                child_says(exe, "BURXT_LOG=banana",
             "grep -q 'DEBUG debug-line' \"$F\" && grep -q 'ERROR error-line' \"$F\""));
     // Case-insensitive through a real environment, not just through the parser.
     show_bool("BURXT_LOG=WARN is BURXT_LOG=warn",
-        child_says(exe, "BURXT_LOG=WARN",
+                child_says(exe, "BURXT_LOG=WARN",
             "grep -q 'WARN  warn-line' \"$F\" && ! grep -q 'info-line' \"$F\""));
     show_bool("BURXT_LOG= (empty) is the default",
-        child_says(exe, "BURXT_LOG=",
+                child_says(exe, "BURXT_LOG=",
             "grep -q 'WARN  warn-line' \"$F\" && ! grep -q 'info-line' \"$F\""));
     show_bool("BURXT_LOG=error drops warnings",
-        child_says(exe, "BURXT_LOG=error",
+                child_says(exe, "BURXT_LOG=error",
             "grep -q 'ERROR error-line' \"$F\" && ! grep -q 'warn-line' \"$F\""));
 
     // ---- the complaint, for a program that wants to tell its operator about a typo ----
     // Through a child, because `log_env_problem` reads the environment and THIS process has
     // whatever the developer running the suite happens to export.
     show_bool("banana produces a complaint naming the value",
-        child_says(exe, "BURXT_LOG=banana",
+                child_says(exe, "BURXT_LOG=banana",
             "grep -q 'BURXT_LOG=banana is not a level I know' \"$F\""));
     show_bool("a good value produces no complaint",
-        child_says(exe, "BURXT_LOG=info", "! grep -q 'is not a level I know' \"$F\""));
+            child_says(exe, "BURXT_LOG=info", "! grep -q 'is not a level I know' \"$F\""));
     show_bool("unset produces no complaint",
-        child_says(exe, "unset BURXT_LOG;", "! grep -q 'is not a level I know' \"$F\""));
+            child_says(exe, "unset BURXT_LOG;", "! grep -q 'is not a level I know' \"$F\""));
     show_bool("empty produces no complaint",
-        child_says(exe, "BURXT_LOG=", "! grep -q 'is not a level I know' \"$F\""));
+            child_says(exe, "BURXT_LOG=", "! grep -q 'is not a level I know' \"$F\""));
     print("done");
 }

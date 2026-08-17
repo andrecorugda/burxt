@@ -41,7 +41,7 @@ region r {
     print(a.either(false));
 
     let mutable b: Pair<Point> = Pair { first: Point { x: 1, y: 2 },
-                                        second: Point { x: 9, y: 8 } };
+            second: Point { x: 9, y: 8 } };
     print(b.left().x);
     let moved: Int = b.swap();
     print(b.left().x);
