@@ -691,7 +691,7 @@ pure function codepoint_at(text: String, i: Int) -> Int
 //
 // `len` and `byte_at` already give a caller this one byte at a time, so this exists for the case
 // where the bytes have to be held: passed to a function, sorted, hashed, compared as a whole.
-function to_bytes(text: String) -> [Int] {
+pure function to_bytes(text: String) -> [Int] {
     let mutable out: [Int] = [];
     for i in 0..len(text) {
         let added: Int = push(out, byte_at(text, i));

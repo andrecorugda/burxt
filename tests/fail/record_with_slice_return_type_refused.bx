@@ -1,3 +1,0 @@
-class Bag { items: [Int] }
-function same(b: Bag) -> Bag { return b; }
-print("k");

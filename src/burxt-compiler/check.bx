@@ -5055,6 +5055,30 @@ function (self: Unit) grows_self(method: Int) -> Bool {
 // refused, but by the arm that already refused it, for allocating. `to_string(x)` likewise. The
 // property is only ever recorded when a `return` walks down to a parameter through links that
 // share storage, so a function that COPIES is untouched.
+// Does this function hand back storage that arrived as a PARAMETER, through any of them?
+//
+// **The identity case, and the reason the escape rule needed a second question.** The rule refuses
+// returning region data unless the function allocates — because an allocation goes into the
+// CALLER's region and so outlives the call. That argument is right and it is not the only way for
+// storage to belong to the caller: a parameter's storage is the caller's already, by construction,
+// with nothing allocated at all.
+//
+// Asking only about allocation made the rule a PROXY, and it was measurably wrong both ways.
+// `f(xs) -> [Int] { return xs; }` was refused, while the same function with a junk allocation the
+// answer never touches was accepted — so the check was satisfied by a line unrelated to what came
+// back, and deleting the dead line broke the build.
+//
+// Nothing new is inferred. `relay_parameters` has held exactly this since B32, per index; the
+// index is what the call-site taint rules need and what this one does not.
+function (self: Unit) relays_any_parameter(owner: Int) -> Bool {
+    for known in self.relay_parameters {
+        if known.owner == owner {
+            return true;
+        }
+    }
+    return false;
+}
+
 function (self: Unit) relays_parameter(owner: Int, parameter: Int) -> Bool {
     for known in self.relay_parameters {
         if known.owner == owner && known.parameter == parameter {
@@ -6952,6 +6976,7 @@ function (mutable self: Unit) check_return_storage(src: String) -> Int {
                 // there, and reading the node would see only what was literally written.
                 let declared: DeclaredFunction = self.functions[found];
                 if flag_allocates(declared.flags) == 0
+                    && self.relays_any_parameter(found) == false
                     && self.region_allocated(src, declared.return_type) {
                     let complained: Int = self.complain_at(src, item.token,
                         "function `" + substring(src, name.start, name.length)

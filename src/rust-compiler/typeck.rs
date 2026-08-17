@@ -1250,6 +1250,27 @@ impl TypeChecker {
         self.alloc_fns.contains(name)
     }
 
+    /// Does this function hand back storage that arrived as a PARAMETER?
+    ///
+    /// **The identity case, and the reason the escape rule needed a second question.** RULE 2
+    /// refuses returning region data unless the function allocates — because an allocation goes
+    /// into the CALLER's region and so outlives the call. That argument is right and it is not
+    /// the only way for storage to belong to the caller: a parameter's storage is the caller's
+    /// already, by construction, without anything being allocated at all.
+    ///
+    /// Asking only about allocation made the rule a PROXY, and the proxy was measurably wrong in
+    /// both directions. `f(xs) -> [Int] { return xs; }` was refused, while the same function with
+    /// a junk allocation the answer never touches was accepted — so the check was satisfied by a
+    /// line that had nothing to do with what was returned, and a reader who deleted the dead line
+    /// broke the build.
+    ///
+    /// Nothing new is inferred here. `record_relay` has recorded exactly this fact since B32,
+    /// per parameter index and gated on `may_be_region_storage`, for the call-site taint rules.
+    /// This asks the question the escape rule was always trying to ask.
+    fn relays_a_parameter(&self, name: &str) -> bool {
+        self.relay_params.iter().any(|(f, _)| f == name)
+    }
+
     fn allocates_method(&self, receiver: &str, name: &str) -> bool {
         self.alloc_methods.contains(&(receiver.to_string(), name.to_string()))
     }
@@ -3054,10 +3075,17 @@ impl TypeChecker {
             // before a single body was read, so the probe found nothing and every function
             // that builds its own answer stayed refused — the inference silently did
             // nothing at all. The real pass applies it with the answer in hand.
+            // `f.allocates` as well as `allocates_fn`, and the order is why: the declared word is
+            // recorded into `alloc_fns` further down this same loop body, so reading only the set
+            // asks about a function whose own declaration has not been filed yet. The word was
+            // verified and then ignored — `f(xs: [Int]) -> [Int] allocates { return xs; }` was
+            // refused for not allocating while saying that it did.
             if !self.probing
                 && !self.probe_truncated
                 && self.region_allocated(&f.ret)
+                && !f.allocates
                 && !self.allocates_fn(&f.name)
+                && !self.relays_a_parameter(&f.name)
             {
                 return Err(format!(
                     "function `{}` cannot return {}, because its storage lives in a region \

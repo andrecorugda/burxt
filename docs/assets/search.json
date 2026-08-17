@@ -697,7 +697,7 @@
   "name": "to_bytes",
   "text": "lib/string.bx",
   "url": "/reference/string.html#to-bytes",
-  "where": "function to_bytes(text: String) -> [Int]"
+  "where": "pure function to_bytes(text: String) -> [Int]"
  },
  {
   "kind": "function",

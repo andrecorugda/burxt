@@ -383,7 +383,7 @@ O(n) in `i` for the same reason `char_at` is. Walk with `next_char` if you want 
 {: #to-bytes}
 
 ```burxt
-function to_bytes(text: String) -> [Int]
+pure function to_bytes(text: String) -> [Int]
 ```
 
 Every byte, as numbers. §D1p asks for it, and `from_bytes` at the bottom of this file is the inverse — `from_bytes(to_bytes(s)) == s` for every String. This note used to say the partner did not exist and that getting bytes back into a String was "the thing this language cannot do yet"; the `byte_as_string` builtin (§A13) is what changed, in v0.0.259.

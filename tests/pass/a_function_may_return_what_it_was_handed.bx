@@ -1,0 +1,43 @@
+// A function may hand back storage that arrived as a PARAMETER. The caller owns it already, so
+// nothing outlives anything — which is what the escape rule was always trying to ask.
+//
+// **These two programs were `tests/fail` fixtures until this landed**, and they were wrong rather
+// than strict. The rule refused a return whose storage lived in a region unless the function
+// ALLOCATED — using allocation as a proxy for "the storage belongs to the caller". A parameter's
+// storage belongs to the caller too, without anything being allocated, so the identity function was
+// refused while the SAME function with a junk allocation the answer never touched was accepted. A
+// reader who deleted the dead line broke the build.
+//
+// Nothing new is inferred to permit this: `record_relay` has recorded "the result may point at
+// parameter i" since B32, for the call-site taint rules. The escape rule now asks it.
+//
+// What stays refused is in `region_data_may_not_escape_by_being_relayed.bx`: a relay only excuses
+// storage that came IN, never storage the function built inside a region of its own.
+class Bag { items: [Int] }
+
+function same_bag(b: Bag) -> Bag { return b; }
+function same_words(xs: [String]) -> [String] { return xs; }
+
+// The shape a front-end update function needs: every branch answers a Model, including the branch
+// where nothing changed. That branch is `return m;` and it is the case this fixture exists for.
+class Model { count: Int, items: [Int] }
+function dispatch(m: Model, message: Int) -> Model {
+    if message == 0 {
+        return m;
+    }
+    return m;
+}
+
+region main {
+    let mutable xs: [Int] = [];
+    let a: Int = push(xs, 7);
+    let b: Bag = Bag { items: xs };
+    print("{same_bag(b).items[0]}");
+
+    let mutable words: [String] = [];
+    let c: Int = push(words, "kept");
+    print("{same_words(words)[0]}");
+
+    let m: Model = Model { count: 3, items: xs };
+    print("{dispatch(m, 0).count}");
+}
