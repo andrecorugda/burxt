@@ -4449,6 +4449,93 @@ fn the_library_imports_itself_by_bare_filename() {
 /// compile. That is expected to FAIL, because the remaining candidates genuinely mutate or print.
 /// Only when it succeeds — meaning at least one marker is missing — does this go function by
 /// function to say which.
+/// Both compilers format the same way, byte for byte.
+///
+/// **This is what makes `fmt.rs` a held row rather than an unheld one.**
+/// `every_rust_module_has_a_burxt_counterpart_or_a_reason` is an EQUALITY, not a floor: every Rust
+/// module has been held by a comparison since v0.0.239, so shipping the Rust formatter alone would
+/// have been the first unheld row in a hundred versions. Writing the second one found the divergence
+/// below, which is the argument for the gate in one sentence.
+///
+/// **The divergence it found.** Stage-1 terminated a continuation on any opener, using its
+/// `fmt_is_opener` predicate. Stage-0 terminates on `{` and `[` and NOT on `(`, because a line ending
+/// in `(` is a wrapped call whose arguments the corpus aligns by hand:
+///
+///     let yoe: Int = divide_floor(
+///         doe - divide_floor(doe, 1460) + divide_floor(doe, 36524) …, 365);
+///
+/// The general-looking predicate was the wrong subject for the rule. One line of `lib/time.bx`
+/// disagreed, and nothing else in 25 modules would have shown it — which is why this compares the two
+/// rather than checking each against a fixture.
+#[test]
+fn the_two_compilers_format_the_same_way() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("fmt-differential");
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).unwrap();
+
+    let stage1 = scratch.join("stage1");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .output()
+        .expect("failed to spawn burxt");
+    assert!(
+        built.status.success(),
+        "stage-1 did not build:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let mut differ = Vec::new();
+    let mut compared = 0;
+    for dir in ["lib", "examples", "src/burxt-compiler"] {
+        for entry in fs::read_dir(root.join(dir)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+                continue;
+            }
+            let name = path.file_name().unwrap().to_str().unwrap().to_string();
+            // A copy each, so both format the same input and neither sees the other's output.
+            let mut written = Vec::new();
+            for (which, binary) in [
+                ("stage-0", PathBuf::from(env!("CARGO_BIN_EXE_burxt"))),
+                ("stage-1", stage1.clone()),
+            ] {
+                let copy = scratch.join(format!("{which}-{name}"));
+                // `lib/` modules import their siblings by bare filename, so a copy only lexes
+                // beside them. `fmt` reads one file and never resolves an import, so a lone copy is
+                // enough — and that is the property being relied on, not an accident.
+                fs::copy(&path, &copy).unwrap();
+                let out = Command::new(&binary).arg("fmt").arg(&copy).output().expect("burxt fmt");
+                assert!(
+                    out.status.success(),
+                    "{which} `burxt fmt` failed on {}:\n{}",
+                    path.display(),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                written.push(fs::read_to_string(&copy).unwrap());
+            }
+            compared += 1;
+            if written[0] != written[1] {
+                differ.push(path.display().to_string());
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&scratch);
+
+    // A sweep that compared nothing would pass silently, which is the shape of every ratchet failure
+    // this project has already had.
+    assert!(compared >= 50, "only {compared} sources were compared — the sweep stopped working");
+    assert!(
+        differ.is_empty(),
+        "the two compilers format these differently, so one of them is imposing a layout the other \
+         does not:\n  {}",
+        differ.join("\n  ")
+    );
+}
+
 /// `burxt fmt` leaves the standard library and the examples exactly as they are.
 ///
 /// **The acceptance test for a formatter is that it agrees with hand-written code its authors were
@@ -9790,22 +9877,17 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         ),
         (
             "fmt.rs",
-            &[],
-            Strength::Missing,
+            &["src/burxt-compiler/fmt.bx"],
+            Strength::Verified,
             "`burxt fmt` — leading indentation and trailing whitespace, and deliberately nothing \
-             else. **No Burxt counterpart yet, and this row is the decision rather than an \
-             oversight.** A twin is writable: stage-1 has the lexer this needs, and the algorithm is \
-             a walk over `(Token, Span)` pairs with a bracket stack. It is not written because a \
-             formatter is the one tool whose divergence cannot be silent — two formatters that \
-             disagree produce visibly different LAYOUT, not a different answer about which programs \
-             compile, so a gap here costs a reader a diff and not a wrong result. Every other row in \
-             this map is about something that decides whether a program is accepted. \
+             else. `the_two_compilers_format_the_same_way` formats every source in `lib/`, \
+             `examples/` and `src/burxt-compiler/` with both binaries and compares the bytes. \
              \
-             The trigger for writing it is a Burxt-only toolchain: the day someone formats with a \
-             compiler built by `burxt build src/burxt-compiler/main.bx`, this gap becomes the \
-             difference between a project that can be formatted and one that cannot. Until then \
-             `the_formatter_agrees_with_the_corpus_and_is_idempotent` holds stage-0's behaviour, and \
-             `lib/` plus `examples/` are the enforced set.",
+             Writing the second one is what found the rule stated about the wrong subject: stage-1 \
+             terminated a continuation on any OPENER, and stage-0 terminates on `{` and `[` but not \
+             `(`, because a line ending in `(` is a wrapped call whose arguments the corpus aligns \
+             by hand. One line of `lib/time.bx` disagreed and nothing else in 25 modules would have \
+             shown it. That is the equality gate earning its keep rather than costing a day.",
         ),
         (
             "effects.rs",

@@ -12,96 +12,84 @@
 // heredocs this approach would corrupt data silently. Depth comes from the TOKENS, so a brace inside
 // a string or a comment moves nothing.
 //
-// **Why this file exists at all**, rather than the Rust one being enough:
+// **Why this file exists rather than the Rust one being enough.**
 // `every_rust_module_has_a_burxt_counterpart_or_a_reason` is an EQUALITY, not a floor — every Rust
-// module is held by a comparison, and has been since v0.0.239. Adding `fmt.rs` alone broke it, which
-// is the gate doing exactly its job: it forced this decision on the day the file was written rather
-// than leaving it for a hundred versions, which is what happened to M4 §3b.
+// module has been held by a comparison since v0.0.239. Adding `fmt.rs` alone failed it, which is the
+// gate doing its job: forcing the both-compilers decision on the day the file is written instead of
+// leaving it for a hundred versions, which is what happened to M4 §3b.
 //
-// The four rules below are not invented. Each exists because
+// **The four rules are not invented.** Each exists because
 // `the_formatter_agrees_with_the_corpus_and_is_idempotent` disagreed with 2,025 lines of hand-written
 // `lib/`, and the corpus was right every time:
 //
 //   1. A trailing comma continues a wrapped parameter list and does NOT continue a block's member
-//      list. The difference is whether the bracket it sits inside was the last token on ITS line.
-//   2. An opener ending a line moves the depth, so the next line is a member at depth rather than a
-//      continuation — otherwise it gains a level.
-//   3. A `{` alone on a line closes a signature rather than continuing it, so it sits at the
-//      signature's depth. Without this the brace under a `requires` lands beside the clause.
-//   4. A hand-aligned continuation keeps the indentation it was written with, because where a wrapped
-//      expression lines up is a judgement no rule reproduces.
+//      list. The difference is whether the bracket it sits inside had content after it on its OWN
+//      line.
+//   2. An opener ending a line has already moved the depth, so the next line is a member at depth
+//      rather than a continuation — otherwise it gains a level.
+//   3. A hand-aligned continuation keeps the indentation it was written with. Where a wrapped
+//      expression lines up is a judgement no rule reproduces, and this is what makes the formatter a
+//      no-op on code its authors were happy with rather than a reformatter of the world.
+//   4. Rule 3 subsumes the signature-brace case: a `{` alone on a line after a `requires` is a
+//      continuation, so it keeps its written column and needs no rule of its own.
 // ============================================================================
 
-// The token kinds this needs, named rather than repeated as digits at each test.
-// `(` `)` `{` `}` `[` `]` `;` `,` — from `lexer.bx`.
-pure function fmt_kind_lparen() -> Int { return 29; }
-pure function fmt_kind_rparen() -> Int { return 30; }
-pure function fmt_kind_lbrace() -> Int { return 31; }
-pure function fmt_kind_rbrace() -> Int { return 32; }
-pure function fmt_kind_lbracket() -> Int { return 33; }
-pure function fmt_kind_rbracket() -> Int { return 34; }
-pure function fmt_kind_semicolon() -> Int { return 21; }
-pure function fmt_kind_comma() -> Int { return 22; }
+// The token kinds this needs, from `lexer.bx`: ( ) { } [ ] ; ,
+pure function fmt_lparen() -> Int { return 29; }
+pure function fmt_rparen() -> Int { return 30; }
+pure function fmt_lbrace() -> Int { return 31; }
+pure function fmt_rbrace() -> Int { return 32; }
+pure function fmt_lbracket() -> Int { return 33; }
+pure function fmt_rbracket() -> Int { return 34; }
+pure function fmt_semicolon() -> Int { return 21; }
+pure function fmt_comma() -> Int { return 22; }
 
 pure function fmt_is_opener(kind: Int) -> Bool {
-    return kind == fmt_kind_lparen() || kind == fmt_kind_lbrace() || kind == fmt_kind_lbracket();
+    return kind == fmt_lparen() || kind == fmt_lbrace() || kind == fmt_lbracket();
 }
 
 pure function fmt_is_closer(kind: Int) -> Bool {
-    return kind == fmt_kind_rparen() || kind == fmt_kind_rbrace() || kind == fmt_kind_rbracket();
+    return kind == fmt_rparen() || kind == fmt_rbrace() || kind == fmt_rbracket();
+}
+
+pure function fmt_is_space(byte: Int) -> Bool {
+    return byte == 32 || byte == 9 || byte == 13;
 }
 
 // Did a line ending in this token leave a statement open, so the next line continues it?
 //
-// `inside_inline` is whether the innermost still-open bracket had content after it on its own line.
-// A comma inside one continues a wrapped list; a comma inside a bracket that ended its line closes a
-// member of a block and continues nothing.
+// `inside_inline` is whether the innermost still-open bracket had content after it on its own line. A
+// comma inside one continues a wrapped list; a comma inside a bracket that ENDED its line closes a
+// member of a block and continues nothing. Treating the two alike broke both directions at once —
+// every enum variant gained a level, and every wrapped parameter list slid to column zero.
 pure function fmt_ends_open(kind: Int, carried: Bool, inside_inline: Bool) -> Bool {
     if kind < 0 {
         return carried;                              // a comment-only line carries the state through
     }
-    if kind == fmt_kind_semicolon() || kind == fmt_kind_rbrace() {
+    if kind == fmt_semicolon() || kind == fmt_rbrace() {
         return false;
     }
-    if fmt_is_opener(kind) {
-        return false;                                // rule 2: the bracket moved the depth already
+    // Rule 2, and note `(` is NOT here. A line ending in `{` or `[` opens a block whose members sit
+    // at depth, so calling the next line a continuation would double the indent. A line ending in `(`
+    // is a wrapped CALL, and the corpus aligns its arguments by hand:
+    //
+    //     let yoe: Int = divide_floor(
+    //         doe - divide_floor(doe, 1460) + divide_floor(doe, 36524) …, 365);
+    //
+    // Including `(` here moved that line and one other in `lib/time.bx`; excluding it is what makes
+    // both compilers agree with the corpus. Measured, not chosen — and it is the whole difference
+    // between this and `fmt_is_opener`, which is why that predicate is not used.
+    if kind == fmt_lbrace() || kind == fmt_lbracket() {
+        return false;
     }
-    if kind == fmt_kind_comma() {
+    if kind == fmt_comma() {
         return inside_inline;                        // rule 1
     }
     return true;
 }
 
-// The byte offset of each line's first character, and the line each offset belongs to. One pass,
-// because a token's line is asked for once per token and a scan per token would be quadratic.
-pure function fmt_line_of(src: String, mutable starts: [Int]) -> Int {
-    let added: Int = push(starts, 0);
-    let mutable i: Int = 0;
-    while i < len(src) {
-        if byte_at(src, i) == 10 {
-            let next: Int = push(starts, i + 1);
-        }
-        i += 1;
-    }
-    return len(starts);
-}
-
-pure function fmt_line_at(starts: [Int], offset: Int) -> Int {
-    // Binary search: `starts` is ascending by construction.
-    let mutable low: Int = 0;
-    let mutable high: Int = len(starts) - 1;
-    while low < high {
-        let mid: Int = low + divide_floor(high - low + 1, 2);
-        if starts[mid] <= offset {
-            low = mid;
-        } else {
-            high = mid - 1;
-        }
-    }
-    return low;
-}
-
-pure function fmt_spaces(count: Int) -> String allocates {
+// A run of `count` indents, four spaces each — the width the corpus already was.
+pure function fmt_indent(count: Int) -> String allocates {
     let mutable out: String = "";
     let mutable i: Int = 0;
     while i < count {
@@ -111,7 +99,7 @@ pure function fmt_spaces(count: Int) -> String allocates {
     return out;
 }
 
-// The leading spaces of a line, kept verbatim for a continuation — rule 4.
+// The leading spaces of a line, kept verbatim for a continuation — rule 3.
 pure function fmt_leading(src: String, from: Int, upto: Int) -> String allocates {
     let mutable n: Int = 0;
     while from + n < upto && byte_at(src, from + n) == 32 {
@@ -120,23 +108,257 @@ pure function fmt_leading(src: String, from: Int, upto: Int) -> String allocates
     return substring(src, from, n);
 }
 
-// A line with its surrounding whitespace removed.
+// The line with surrounding whitespace removed.
 pure function fmt_trim(src: String, from: Int, upto: Int) -> String allocates {
     let mutable a: Int = from;
-    let mutable b: Int = upto;
-    while a < b && (byte_at(src, a) == 32 || byte_at(src, a) == 9 || byte_at(src, a) == 13) {
+    while a < upto && fmt_is_space(byte_at(src, a)) {
         a += 1;
     }
-    while b > a {
-        let c: Int = byte_at(src, b - 1);
-        if c == 32 || c == 9 || c == 13 {
-            b -= 1;
-        } else {
-            b = b;
-            if c != 32 && c != 9 && c != 13 {
-                return substring(src, a, b - a);
-            }
-        }
+    let mutable b: Int = upto;
+    while b > a && fmt_is_space(byte_at(src, b - 1)) {
+        b -= 1;
     }
     return substring(src, a, b - a);
+}
+
+// Join chunks PAIRWISE rather than one after another.
+//
+// Appending each chunk to a growing result copies the whole result every time — O(n²) in the output
+// size, which is what exhausted a 1 GB region once the module grew past a megabyte. Merging pairs
+// halves the count each round, so the copying is O(n log n). Lifted from `emit.bx:finish`, which
+// records the measurement.
+function fmt_join(mutable chunks: [String]) -> String allocates {
+    if len(chunks) == 0 {
+        return "";
+    }
+    while len(chunks) > 1 {
+        let mutable merged: [String] = [];
+        let mutable i: Int = 0;
+        while i + 1 < len(chunks) {
+            let pair: Int = push(merged, chunks[i] + chunks[i + 1]);
+            i += 2;
+        }
+        if i < len(chunks) {
+            let odd: Int = push(merged, chunks[i]);
+        }
+        chunks = merged;
+    }
+    return chunks[0];
+}
+
+// The formatted text of `src`, given its tokens.
+//
+// One pass over the lines with a token cursor, rather than per-line token lists: a nested array per
+// line would be the same information in a shape this language makes awkward, and the tokens are
+// already in source order.
+function fmt_render(src: String, tokens: [Token]) -> String allocates {
+    let mutable chunks: [String] = [];
+    let mutable pending: String = "";
+    let mutable cursor: Int = 0;                     // next unconsumed token
+    let mutable depth: Int = 0;
+    let mutable continued: Bool = false;
+    let mutable inline_stack: [Int] = [];            // 1 when the open bracket had content after it
+    let mutable at: Int = 0;                         // byte offset of the current line's first char
+
+    while at <= len(src) {
+        // The line runs to the next newline, or to the end.
+        let mutable stop: Int = at;
+        while stop < len(src) && byte_at(src, stop) != 10 {
+            stop += 1;
+        }
+
+        // The tokens on this line, and what they do to the depth. `dip` is how far the line goes
+        // BELOW its own starting depth, which is what un-indents a line whose first token is a
+        // closer: `} else {` nets zero and still belongs one level out.
+        let first: Int = cursor;
+        let mutable last_kind: Int = 0 - 1;
+        let mutable first_kind: Int = 0 - 1;
+        let mutable net: Int = 0;
+        let mutable dip: Int = 0;
+        let mutable scan: Int = cursor;
+        while scan < len(tokens) && tokens[scan].start < stop {
+            let kind: Int = tokens[scan].kind;
+            if first_kind < 0 {
+                first_kind = kind;
+            }
+            last_kind = kind;
+            if fmt_is_opener(kind) {
+                net += 1;
+            }
+            if fmt_is_closer(kind) {
+                net -= 1;
+                if net < dip {
+                    dip = net;
+                }
+            }
+            scan += 1;
+        }
+
+        let body: String = fmt_trim(src, at, stop);
+        if len(body) == 0 {
+            // A blank line stays blank rather than becoming indented whitespace: trailing spaces on
+            // an empty line are invisible in review and loud in a diff, which is the wrong way round.
+            pending = pending + "\n";
+        } else {
+            if continued {
+                pending = pending + fmt_leading(src, at, stop) + body + "\n";
+            } else {
+                let mutable level: Int = depth + dip;
+                if level < 0 {
+                    level = 0;
+                }
+                pending = pending + fmt_indent(level) + body + "\n";
+            }
+        }
+        if len(pending) > 512 {
+            let flushed: Int = push(chunks, pending);
+            pending = "";
+        }
+
+        // Now apply this line's brackets, in order, so the stack reflects what is open AFTER it.
+        let mutable j: Int = first;
+        while j < scan {
+            let kind: Int = tokens[j].kind;
+            if fmt_is_opener(kind) {
+                // Inline when another token follows it on this same line.
+                let mutable is_inline: Int = 0;
+                if j + 1 < scan {
+                    is_inline = 1;
+                }
+                let pushed: Int = push(inline_stack, is_inline);
+            }
+            if fmt_is_closer(kind) {
+                if len(inline_stack) > 0 {
+                    let dropped: Int = truncate(inline_stack, len(inline_stack) - 1);
+                }
+            }
+            j += 1;
+        }
+        cursor = scan;
+        depth += net;
+        if depth < 0 {
+            depth = 0;
+        }
+        let mutable innermost: Bool = false;
+        if len(inline_stack) > 0 {
+            if inline_stack[len(inline_stack) - 1] == 1 {
+                innermost = true;
+            }
+        }
+        continued = fmt_ends_open(last_kind, continued, innermost);
+
+        if stop >= len(src) {
+            at = len(src) + 1;                       // done
+        } else {
+            at = stop + 1;
+        }
+    }
+
+    if len(pending) > 0 {
+        let flushed: Int = push(chunks, pending);
+    }
+    let text: String = fmt_join(chunks);
+    // The loop emits a `\n` for the empty piece after a trailing newline, so drop the duplicate
+    // rather than growing the file by a line every run — which would make this the opposite of
+    // idempotent.
+    if len(text) >= 2 && byte_at(text, len(text) - 1) == 10 && byte_at(text, len(text) - 2) == 10 {
+        if len(src) > 0 && byte_at(src, len(src) - 1) == 10 {
+            return substring(text, 0, len(text) - 1);
+        }
+    }
+    return text;
+}
+
+// `burxt fmt <file.bx>...`, and `--check` which changes nothing.
+//
+// It reads each file DIRECTLY rather than through `load_program`: a formatter formats one file, and
+// resolving imports would pull a program's dependencies in and rewrite them too. `burxt fmt
+// lib/json.bx` must touch `lib/json.bx` and nothing else.
+//
+// A file that does not lex is left alone and reported. Reformatting broken source moves its braces
+// and relocates its error, which turns one problem into two.
+function fmt_one(path: String, check: Bool) -> Int touches files {
+    let src: String = read_file(path);
+    let mutable unit: Unit = Unit { pending_public: 0, package_names: [], package_starts: [], package_ends: [], private_names: [], private_owners: [], tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], consts: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, grow_parameters: [], grow_self: [], relay_parameters: [], relay_self: [], relay_method_parameters: [], relay_aliases: [], relay_ceiling: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], impl_traits: [], typed: [], region_depth: 0, region_token: 0 - 1, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", global_chunks: [], sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], region_marks: [], loop_region_depths: [], block_release: [], placing: 0, rel_frames: [], rel_names: [], in_function: 0, depth: 0, param_depth: 0 - 1, problems: 0, diagnose: 0, problem_start: 0 - 1, problem_length: 0, problem_message: "", position: 0, token_end: 0, no_record_literal: 0, in_extern_signature: 0, range_bounds: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+    let installed: Int = unit.install_keywords();
+    let total: Int = unit.run(src);
+    if unit.errors > 0 {
+        return 2;
+    }
+    let formatted: String = fmt_render(src, unit.tokens);
+    if formatted == src {
+        return 0;
+    }
+    if check {
+        return 1;
+    }
+    let written: Int = write_file(path, formatted);
+    return 1;
+}
+
+// The whole command. Two modes because they have two audiences: a person wants the file fixed, and CI
+// wants to be told without its checkout being modified. A formatter with only the first gets wrapped
+// in `git diff --exit-code` by everyone who needs the second, and that wrapper is where the
+// interesting failures live.
+//
+// `--check` NAMES every file it would change, because "run the formatter" is not actionable in a
+// repository of two hundred files.
+function fmt_command() -> Int touches files, input {
+    let mutable check: Bool = false;
+    let mutable paths: [String] = [];
+    let mutable i: Int = 2;
+    while i < argument_count() {
+        let a: String = argument(i);
+        if a == "--check" {
+            check = true;
+        } else {
+            let added: Int = push(paths, a);
+        }
+        i += 1;
+    }
+    if len(paths) == 0 {
+        print_error("usage: burxt fmt <file.bx>...  — rewrite in place");
+        print_error("or:    burxt fmt --check <file.bx>...  — change nothing, exit 1 if it would");
+        print_error("");
+        print_error("Sets leading indentation and strips trailing whitespace. It does not re-wrap");
+        print_error("lines, move blank lines, or touch anything inside a line.");
+        return 2;
+    }
+    let mutable changed: [String] = [];
+    let mutable broken: Bool = false;
+    let mutable j: Int = 0;
+    while j < len(paths) {
+        let outcome: Int = fmt_one(paths[j], check);
+        if outcome == 2 {
+            print_error(paths[j] + ": does not lex, so it was left alone");
+            broken = true;
+        }
+        if outcome == 1 {
+            let noted: Int = push(changed, paths[j]);
+        }
+        j += 1;
+    }
+    if broken {
+        return 1;
+    }
+    if check {
+        if len(changed) > 0 {
+            print_error("these files are not formatted:");
+            let mutable k: Int = 0;
+            while k < len(changed) {
+                print_error("    " + changed[k]);
+                k += 1;
+            }
+            print_error("");
+            print_error("Run `burxt fmt` on them.");
+            return 1;
+        }
+        return 0;
+    }
+    let mutable m: Int = 0;
+    while m < len(changed) {
+        print("formatted " + changed[m]);
+        m += 1;
+    }
+    return 0;
 }

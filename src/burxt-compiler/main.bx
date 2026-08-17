@@ -68,6 +68,7 @@ use "lsp.bx";
 use "review.bx";
 use "effects.bx";
 use "layout.bx";
+use "fmt.bx";
 
 // The shell, for `build` and `run`. Those two have to invoke `llc` and `cc`, and until
 // v0.0.219 the Burxt compiler could not: it emitted IR to a file and a human ran the rest
@@ -510,7 +511,7 @@ function is_subcommand(word: String) -> Bool {
     if word == "check" || word == "build" || word == "run" || word == "emit-ir" {
         return true;
     }
-    if word == "mcp-schema" || word == "review" || word == "layout" {
+    if word == "mcp-schema" || word == "review" || word == "layout" || word == "fmt" {
         return true;
     }
     if word == "--help" || word == "-h" || word == "help" || word == "--version" || word == "-V" {
@@ -654,6 +655,14 @@ if command == "check" {
         exit(0);
     }
     exit(1);
+}
+
+if command == "fmt" {
+    // One layout, so a review is about the change. Counterpart of `fmt.rs`, and it exists because
+    // `every_rust_module_has_a_burxt_counterpart_or_a_reason` is an EQUALITY rather than a floor:
+    // shipping the Rust half alone would have been the first unheld row since v0.0.239.
+    let outcome: Int = fmt_command();
+    exit(outcome);
 }
 
 if command == "layout" {
