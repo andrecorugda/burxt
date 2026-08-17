@@ -1,0 +1,142 @@
+// ============================================================================
+// fmt.bx — `burxt fmt <file.bx>...`, written in Burxt. The counterpart of
+// `src/rust-compiler/fmt.rs`.
+//
+// It sets leading indentation and strips trailing whitespace, and deliberately nothing else. It does
+// not re-wrap lines, move blank lines, reorder anything, or touch what is inside a line. Every one of
+// those is a judgement about intent, and a formatter that makes judgements is one people turn off.
+//
+// **Why a line-based formatter is safe here.** Burxt refuses a string that crosses a newline —
+// *"unterminated string literal — close it with `"` before the end of the line"* — so no literal
+// interior spans lines and rewriting leading whitespace cannot reach inside one. In a language with
+// heredocs this approach would corrupt data silently. Depth comes from the TOKENS, so a brace inside
+// a string or a comment moves nothing.
+//
+// **Why this file exists at all**, rather than the Rust one being enough:
+// `every_rust_module_has_a_burxt_counterpart_or_a_reason` is an EQUALITY, not a floor — every Rust
+// module is held by a comparison, and has been since v0.0.239. Adding `fmt.rs` alone broke it, which
+// is the gate doing exactly its job: it forced this decision on the day the file was written rather
+// than leaving it for a hundred versions, which is what happened to M4 §3b.
+//
+// The four rules below are not invented. Each exists because
+// `the_formatter_agrees_with_the_corpus_and_is_idempotent` disagreed with 2,025 lines of hand-written
+// `lib/`, and the corpus was right every time:
+//
+//   1. A trailing comma continues a wrapped parameter list and does NOT continue a block's member
+//      list. The difference is whether the bracket it sits inside was the last token on ITS line.
+//   2. An opener ending a line moves the depth, so the next line is a member at depth rather than a
+//      continuation — otherwise it gains a level.
+//   3. A `{` alone on a line closes a signature rather than continuing it, so it sits at the
+//      signature's depth. Without this the brace under a `requires` lands beside the clause.
+//   4. A hand-aligned continuation keeps the indentation it was written with, because where a wrapped
+//      expression lines up is a judgement no rule reproduces.
+// ============================================================================
+
+// The token kinds this needs, named rather than repeated as digits at each test.
+// `(` `)` `{` `}` `[` `]` `;` `,` — from `lexer.bx`.
+pure function fmt_kind_lparen() -> Int { return 29; }
+pure function fmt_kind_rparen() -> Int { return 30; }
+pure function fmt_kind_lbrace() -> Int { return 31; }
+pure function fmt_kind_rbrace() -> Int { return 32; }
+pure function fmt_kind_lbracket() -> Int { return 33; }
+pure function fmt_kind_rbracket() -> Int { return 34; }
+pure function fmt_kind_semicolon() -> Int { return 21; }
+pure function fmt_kind_comma() -> Int { return 22; }
+
+pure function fmt_is_opener(kind: Int) -> Bool {
+    return kind == fmt_kind_lparen() || kind == fmt_kind_lbrace() || kind == fmt_kind_lbracket();
+}
+
+pure function fmt_is_closer(kind: Int) -> Bool {
+    return kind == fmt_kind_rparen() || kind == fmt_kind_rbrace() || kind == fmt_kind_rbracket();
+}
+
+// Did a line ending in this token leave a statement open, so the next line continues it?
+//
+// `inside_inline` is whether the innermost still-open bracket had content after it on its own line.
+// A comma inside one continues a wrapped list; a comma inside a bracket that ended its line closes a
+// member of a block and continues nothing.
+pure function fmt_ends_open(kind: Int, carried: Bool, inside_inline: Bool) -> Bool {
+    if kind < 0 {
+        return carried;                              // a comment-only line carries the state through
+    }
+    if kind == fmt_kind_semicolon() || kind == fmt_kind_rbrace() {
+        return false;
+    }
+    if fmt_is_opener(kind) {
+        return false;                                // rule 2: the bracket moved the depth already
+    }
+    if kind == fmt_kind_comma() {
+        return inside_inline;                        // rule 1
+    }
+    return true;
+}
+
+// The byte offset of each line's first character, and the line each offset belongs to. One pass,
+// because a token's line is asked for once per token and a scan per token would be quadratic.
+pure function fmt_line_of(src: String, mutable starts: [Int]) -> Int {
+    let added: Int = push(starts, 0);
+    let mutable i: Int = 0;
+    while i < len(src) {
+        if byte_at(src, i) == 10 {
+            let next: Int = push(starts, i + 1);
+        }
+        i += 1;
+    }
+    return len(starts);
+}
+
+pure function fmt_line_at(starts: [Int], offset: Int) -> Int {
+    // Binary search: `starts` is ascending by construction.
+    let mutable low: Int = 0;
+    let mutable high: Int = len(starts) - 1;
+    while low < high {
+        let mid: Int = low + divide_floor(high - low + 1, 2);
+        if starts[mid] <= offset {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return low;
+}
+
+pure function fmt_spaces(count: Int) -> String allocates {
+    let mutable out: String = "";
+    let mutable i: Int = 0;
+    while i < count {
+        out = out + "    ";
+        i += 1;
+    }
+    return out;
+}
+
+// The leading spaces of a line, kept verbatim for a continuation — rule 4.
+pure function fmt_leading(src: String, from: Int, upto: Int) -> String allocates {
+    let mutable n: Int = 0;
+    while from + n < upto && byte_at(src, from + n) == 32 {
+        n += 1;
+    }
+    return substring(src, from, n);
+}
+
+// A line with its surrounding whitespace removed.
+pure function fmt_trim(src: String, from: Int, upto: Int) -> String allocates {
+    let mutable a: Int = from;
+    let mutable b: Int = upto;
+    while a < b && (byte_at(src, a) == 32 || byte_at(src, a) == 9 || byte_at(src, a) == 13) {
+        a += 1;
+    }
+    while b > a {
+        let c: Int = byte_at(src, b - 1);
+        if c == 32 || c == 9 || c == 13 {
+            b -= 1;
+        } else {
+            b = b;
+            if c != 32 && c != 9 && c != 13 {
+                return substring(src, a, b - a);
+            }
+        }
+    }
+    return substring(src, a, b - a);
+}

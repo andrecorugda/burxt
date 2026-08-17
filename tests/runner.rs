@@ -4449,6 +4449,89 @@ fn the_library_imports_itself_by_bare_filename() {
 /// compile. That is expected to FAIL, because the remaining candidates genuinely mutate or print.
 /// Only when it succeeds — meaning at least one marker is missing — does this go function by
 /// function to say which.
+/// `burxt fmt` leaves the standard library and the examples exactly as they are.
+///
+/// **The acceptance test for a formatter is that it agrees with hand-written code its authors were
+/// happy with** — 2,025 lines of `lib/` and 17 examples, none of it written with a formatter in mind.
+/// Anything else is the formatter imposing a style rather than recording one. Four separate rules in
+/// `fmt.rs` exist because this test disagreed with the corpus and the corpus was right each time:
+/// a trailing comma means one thing inside a block and another inside a wrapped parameter list; an
+/// opener ending a line moves the depth rather than starting a continuation; a `{` alone on a line
+/// closes a signature rather than continuing it; and a hand-aligned continuation is left alone,
+/// because where a wrapped expression lines up is a judgement no rule reproduces.
+///
+/// **Idempotence is asserted, not hoped for.** star-burxt and BMX both generate Burxt, and both
+/// offered to gate their output on `burxt fmt --check` producing no diff. That only works if
+/// formatting twice is formatting once, and a generator is where a drift would first show.
+///
+/// **`src/burxt-compiler/` and `tests/pass/` are NOT in this set yet, deliberately.** Nine files
+/// there hold hand-aligned continuations the current rules classify differently. One of the
+/// disagreements was the formatter being right — `main.bx` had a `return` at column zero inside a
+/// function body, which this found and which is fixed. The rest are a decision about whether to
+/// reformat the tree or widen the rules, and that decision belongs in its own change rather than
+/// riding along with the tool.
+#[test]
+fn the_formatter_agrees_with_the_corpus_and_is_idempotent() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut checked = 0;
+    let mut unformatted = Vec::new();
+    let mut unstable = Vec::new();
+
+    for dir in ["lib", "examples"] {
+        for entry in fs::read_dir(root.join(dir)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+                continue;
+            }
+            checked += 1;
+            let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+                .arg("fmt")
+                .arg("--check")
+                .arg(&path)
+                .output()
+                .expect("burxt fmt");
+            if !out.status.success() {
+                unformatted.push(path.display().to_string());
+                continue;
+            }
+            // Idempotence, on a copy: format once, format again, require the second to be a no-op.
+            let scratch = scratch_dir("fmt-idempotent");
+            let _ = fs::remove_dir_all(&scratch);
+            fs::create_dir_all(&scratch).unwrap();
+            let copy = scratch.join(path.file_name().unwrap());
+            fs::copy(&path, &copy).unwrap();
+            for _ in 0..2 {
+                let r = Command::new(env!("CARGO_BIN_EXE_burxt"))
+                    .arg("fmt")
+                    .arg(&copy)
+                    .output()
+                    .expect("burxt fmt");
+                assert!(r.status.success(), "burxt fmt failed on {}", copy.display());
+            }
+            if fs::read_to_string(&copy).unwrap() != fs::read_to_string(&path).unwrap() {
+                unstable.push(path.display().to_string());
+            }
+            let _ = fs::remove_dir_all(&scratch);
+        }
+    }
+
+    // A sweep that examined nothing would pass silently, which is the shape of every ratchet
+    // failure this project has already had.
+    assert!(checked >= 40, "only {checked} sources were checked — the sweep stopped working");
+    assert!(
+        unformatted.is_empty(),
+        "`burxt fmt` would change these, so either the formatter or the file is wrong — read the \
+         diff before deciding which:\n  {}",
+        unformatted.join("\n  ")
+    );
+    assert!(
+        unstable.is_empty(),
+        "`burxt fmt` is not idempotent on these, which breaks every consumer that gates on \
+         `--check` producing no diff:\n  {}",
+        unstable.join("\n  ")
+    );
+}
+
 #[test]
 fn a_library_function_that_could_be_pure_says_so() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -9704,6 +9787,25 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
              hover contents byte for byte, MethodNotFound byte for byte, and both exit codes. \
              Wording and column are deliberately not asserted: the two compilers word diagnostics \
              differently and a translation table inside `lsp.bx` would hide that",
+        ),
+        (
+            "fmt.rs",
+            &[],
+            Strength::Missing,
+            "`burxt fmt` — leading indentation and trailing whitespace, and deliberately nothing \
+             else. **No Burxt counterpart yet, and this row is the decision rather than an \
+             oversight.** A twin is writable: stage-1 has the lexer this needs, and the algorithm is \
+             a walk over `(Token, Span)` pairs with a bracket stack. It is not written because a \
+             formatter is the one tool whose divergence cannot be silent — two formatters that \
+             disagree produce visibly different LAYOUT, not a different answer about which programs \
+             compile, so a gap here costs a reader a diff and not a wrong result. Every other row in \
+             this map is about something that decides whether a program is accepted. \
+             \
+             The trigger for writing it is a Burxt-only toolchain: the day someone formats with a \
+             compiler built by `burxt build src/burxt-compiler/main.bx`, this gap becomes the \
+             difference between a project that can be formatted and one that cannot. Until then \
+             `the_formatter_agrees_with_the_corpus_and_is_idempotent` holds stage-0's behaviour, and \
+             `lib/` plus `examples/` are the enforced set.",
         ),
         (
             "effects.rs",

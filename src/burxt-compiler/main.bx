@@ -282,7 +282,7 @@ function report_problem(mutable unit: Unit, src: String, path: String, shape: In
 // are Burxt Strings that `to_string` can answer with; the `fmt_*` ones are C format strings
 // and must not.
 function module_text(mutable unit: Unit) -> String {
-return "; LLVM IR written by the Burxt compiler, in Burxt.\n"
+    return "; LLVM IR written by the Burxt compiler, in Burxt.\n"
     + "@burxt.fmt_int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n"
     + "@burxt.fmt_str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n"
     + "@burxt.fmt_nl = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n"

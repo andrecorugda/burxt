@@ -14,6 +14,7 @@
 //! delegates linking to system tools rather than owning it.
 
 mod effects;
+mod fmt;
 mod ast;
 mod manifest;
 mod diag;
@@ -123,6 +124,8 @@ fn compile_main() {
         eprintln!("                <file.bx> --target <triple> ... an object for another machine");
         eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
         eprintln!("  burxt emit-ir <file.bx> [--target ...]   print LLVM IR");
+        eprintln!("  burxt fmt     <file.bx>...               set indentation, in place");
+        eprintln!("                <file.bx>... --check     ... change nothing; exit 1 if it would");
         eprintln!("  burxt layout  <file.bx>                  print class layouts");
         eprintln!("  burxt explain memory <file.bx>           what each function builds");
         // One `eprintln!` per row. These two were a single call holding a raw newline, which
@@ -156,6 +159,78 @@ fn compile_main() {
         std::process::exit(2);
     }
     let cmd = &arguments[1];
+
+    // `burxt fmt <file.bx>...` rewrites in place; `--check` changes nothing and exits 1 if it would.
+    //
+    // **Two modes because they have two audiences.** A person wants the file fixed; CI wants to be
+    // told without its checkout being modified. A formatter with only the first mode gets wrapped in
+    // `git diff --exit-code` by everyone who needs the second, and that wrapper is where the
+    // interesting failures live — see `the_reference_is_not_stale`, whose remedy performs the damage
+    // it guards against.
+    //
+    // `--check` NAMES every file it would change rather than exiting quietly, because "run the
+    // formatter" is not actionable in a repository of two hundred files.
+    if cmd == "fmt" {
+        let check = arguments.iter().any(|a| a == "--check");
+        let files: Vec<String> = arguments[2..]
+            .iter()
+            .filter(|a| !a.starts_with('-'))
+            .cloned()
+            .collect();
+        if files.is_empty() {
+            eprintln!("usage: burxt fmt <file.bx>...  — rewrite in place");
+            eprintln!("or:    burxt fmt --check <file.bx>...  — change nothing, exit 1 if it would");
+            eprintln!();
+            eprintln!("Sets leading indentation and strips trailing whitespace. It does not");
+            eprintln!("re-wrap lines, move blank lines, or touch anything inside a line.");
+            std::process::exit(2);
+        }
+        let mut would_change = Vec::new();
+        for path in &files {
+            let src = match std::fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("cannot read {}: {}", path, e);
+                    std::process::exit(1);
+                }
+            };
+            // A file that does not lex is left alone. Reformatting broken source moves its braces
+            // and relocates its error, which turns one problem into two.
+            let formatted = match fmt::format(&src) {
+                Ok(f) => f,
+                Err(d) => {
+                    eprintln!("{}", diag::render(path, &src, &d));
+                    std::process::exit(1);
+                }
+            };
+            if formatted == src {
+                continue;
+            }
+            would_change.push(path.clone());
+            if !check {
+                if let Err(e) = std::fs::write(path, &formatted) {
+                    eprintln!("cannot write {}: {}", path, e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        if check && !would_change.is_empty() {
+            eprintln!("these files are not formatted:");
+            for p in &would_change {
+                eprintln!("    {}", p);
+            }
+            eprintln!();
+            eprintln!("Run `burxt fmt` on them.");
+            std::process::exit(1);
+        }
+        if !check {
+            for p in &would_change {
+                println!("formatted {}", p);
+            }
+        }
+        return;
+    }
+
     // `burxt explain memory <file>` — the subject is written out, per M14 §7's spelling, because
     // memory is not the only thing a program could be asked to explain and a bare `explain` would
     // have to be guessed at later. Refused rather than defaulted: guessing which subject was meant

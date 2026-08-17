@@ -145,9 +145,30 @@ def builtin_effects():
     return out
 
 
+def usage_block():
+    """Just the top-level usage block, not the whole of `main.rs`.
+
+    **Both scrapes below used to read the entire file, and that was a latent defect.** They walk
+    `eprintln!`s and join lines that begin with whitespace onto the previous flag — so the FIRST
+    `eprintln!` added anywhere later in `main.rs` gets absorbed into whatever flag came last. It was
+    correct only because nobody had added one. `burxt fmt`'s own usage message did, and the published
+    `--target` row grew two sentences about formatting.
+
+    Bounded by the exit that ends the block, so a message written after it cannot reach the table.
+    """
+    text = read("src", "rust-compiler", "main.rs")
+    start = text.find("burxt {} \u2014 the Burxt compiler")
+    if start < 0:
+        sys.exit("the usage block's first line moved; fix this bound rather than removing it")
+    end = text.find("std::process::exit(2);", start)
+    if end < 0:
+        sys.exit("the usage block no longer ends in `exit(2)`; fix this bound rather than removing it")
+    return text[start:end]
+
+
 def commands():
     """The command line, from the usage block in src/rust-compiler/main.rs."""
-    text = read("src", "rust-compiler", "main.rs")
+    text = usage_block()
     lines = []
     # `[^"\n]*` rather than `[^"]*`: one row per `eprintln!`, and a call that spans a raw
     # newline is a mistake rather than a shape to accommodate. It used to be accommodated —
@@ -189,7 +210,7 @@ def flags():
     back into one paragraph here, so the page can say WHY a flag exists rather than only that it
     does — `-g` being off by default is a design decision, not a default worth guessing at.
     """
-    text = read("src", "rust-compiler", "main.rs")
+    text = usage_block()
     rows, current = [], None
     for m in re.finditer(r'eprintln!\("(  (?:-|\s)[^"\n]*)"\)', text):
         line = m.group(1).replace("\\'", "'")
