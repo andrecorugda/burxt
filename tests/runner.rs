@@ -12584,3 +12584,92 @@ fn a_broken_declaration_does_not_blame_an_innocent_file() {
     }
 }
 
+
+/// Every declaration in `lib/` reaches the reference, and this asks the generator rather than
+/// trusting it.
+///
+/// **`the_reference_is_not_stale` cannot make this check, by construction.** It compares the
+/// committed pages against a fresh run of `scripts/site-reference.py`, so it measures whether the
+/// generator agrees with itself. When that generator silently dropped every `public` declaration —
+/// 188 lines and 119 search entries, exactly the symbols meant to BE the public API — its failure
+/// message said *"Regenerate it"*, and following that instruction would have committed the deletion
+/// and turned the suite green. A test whose remedy performs the damage cannot police the tool it
+/// names.
+///
+/// So this reads the library and the pages independently and asks whether every declaration in the
+/// first appears in the second.
+///
+/// **The regex is deliberately not the generator's.** A check that shares the generator's bug
+/// proves nothing, so this one is dumber on purpose: strip any leading modifier words, then look
+/// for the declaring keyword. It does not know what `public` is and does not need to.
+///
+/// **`external` is the one exclusion and it was measured, not assumed.** The first run reported 22
+/// declarations absent from the reference and every single one was an `external function` — a C
+/// binding, which is not the library's surface and which the generator omits on purpose. That is
+/// the difference between a check somebody trusts and one they disable: the exclusion is a fact
+/// about the corpus rather than a hole big enough to hide the next defect in.
+#[test]
+fn every_declaration_in_the_library_reaches_the_reference() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let decl = |line: &str| -> Option<String> {
+        let mut rest = line;
+        loop {
+            let word = rest.split(|c: char| !c.is_alphanumeric() && c != '_').next()?;
+            if matches!(word, "function" | "class" | "enum" | "interface") {
+                let name = rest[word.len()..].trim_start();
+                let end = name
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(name.len());
+                return if end == 0 { None } else { Some(name[..end].to_string()) };
+            }
+            // A modifier — `public`, `pure`, and whatever the language grows next.
+            if word.is_empty() || !word.chars().all(|c| c.is_ascii_lowercase()) {
+                return None;
+            }
+            rest = rest[word.len()..].trim_start();
+        }
+    };
+
+    let mut missing = Vec::new();
+    let mut checked = 0;
+    for entry in fs::read_dir(root.join("lib")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        let name = path.file_stem().unwrap().to_str().unwrap().to_string();
+        let page = root.join("docs/reference").join(format!("{}.md", name));
+        if !page.exists() {
+            continue; // `every_library_module_has_a_reference_page` owns that failure.
+        }
+        let rendered = fs::read_to_string(&page).unwrap();
+        for line in fs::read_to_string(&path).unwrap().lines() {
+            // A C binding is not the library's surface, and the generator omits it deliberately.
+            if line.starts_with("external ") {
+                continue;
+            }
+            let Some(named) = decl(line) else { continue };
+            checked += 1;
+            // **The HEADING, not the name.** Looking for the name anywhere on the page is a check
+            // that cannot fail: `money_split` is discussed in `decimal.md`'s opening paragraph, so
+            // dropping its entry left the name on the page and a weaker version of this test passed
+            // a deliberately broken generator. An entry is `### \`name\``; prose is not an entry.
+            if !rendered.contains(&format!("\n### `{}`\n", named)) {
+                missing.push(format!("lib/{}.bx: {}", name, named));
+            }
+        }
+    }
+
+    // A sweep that found nothing to check would pass silently, which is the shape of every ratchet
+    // failure this project has already had.
+    assert!(checked >= 400, "the sweep found only {checked} declarations in lib/ — it stopped working");
+    missing.sort();
+    assert!(
+        missing.is_empty(),
+        "these declarations are in lib/ and not in their reference page:\n  {}\n\
+         The page is generated, so this is `scripts/site-reference.py` failing to read a form the \
+         language now has — teach it the form. Regenerating will NOT fix it; regenerating is how \
+         the last one got committed.",
+        missing.join("\n  ")
+    );
+}
