@@ -310,11 +310,58 @@ honest one.
 
 ---
 
-## 3. What this file does NOT cover
+## W6 — the browser, which turned out not to be a different document
 
-- **WebAssembly and the browser.** `wasm32` objects already emit — `the_ir_is_the_same_for_every_target`
-  covers thirteen triples — but host glue is `ROADMAP-1.0.md` §G3, target-side packaging, and a DOM
-  binding is not specified anywhere. Running Burxt *in* a browser is a different document.
+**This section replaces the row below that said running Burxt in a browser was out of scope.** It
+was written when host glue was filed as a post-1.0 subsystem beside the Android NDK. That was an
+estimate, and measuring it produced a different number: the host is **seven libc symbols** for a
+pure component, of which **two do real work** — `malloc` and `memcpy`. `wasm32-unknown-unknown`, so
+no WASI, and `rust-lld -flavor wasm` IS `wasm-ld`, so nothing needs installing. It is a ~150-line
+JavaScript driver, not a subsystem.
+
+**star-burxt** is the front end built on it: a `.bmx` document is a component, and it renders in a
+browser with the compiler having judged its event handlers. **It is not in this repository** —
+`github.com/andrecorugda/star-burxt`, documented at `star.burxt-lang.org`, versioned on its own
+cadence and depended on through `burxt.package` like anybody else's package. It lived in `lib/` for
+exactly as long as `use` had no way to name the standard library from outside the compiler's tree;
+`std/` ended that, and it left in the next commit.
+
+**The property this file should record, because it will otherwise be rediscovered as a design
+choice somebody made:**
+
+> **The refusal that looked like a limitation is what produces the diffable component.**
+
+Burxt has no closures. They were declined in `DESIGN.md` for a memory reason — a closure needs an
+owner for its captured state, which is a question about regions rather than about ergonomics — and
+that decision predates every line of web code here.
+
+With no closures, **state cannot hide inside an event handler.** A handler cannot capture a mutable
+cell and change it later; it can only be given the state and produce the next one. So a handler is
+an expression, threaded explicitly, and three things follow that nobody designed:
+
+1. **The compiler judges it.** `on:click=total * 1.5` on a `Decimal<2>` is a compile error about
+   rounding — the ordinary rule, reaching an event handler. No framework whose handlers are
+   closures can see inside one, and not through carelessness: **a closure's captured state is
+   invisible to the signature**, which is the same sentence that declined closures in the first
+   place.
+2. **`burxt review` can diff what a handler promises** between versions, because the promise is a
+   signature rather than a capture.
+3. **The page is resumable.** A handler reaches the browser as `data-star-h="0"` — a static symbol
+   plus serialisable state, never an inline handler — so a server can emit the wiring and the
+   client need not run a render to attach it. Measured: a server-rendered page, interactive, with
+   the wasm module not even fetched until the first click.
+
+**And the memory architecture was forced in the same way.** A long-lived page re-renders
+indefinitely and `burxt.alloc` reclaims only on region close, so the frame must be the region —
+1,000,000 frames flat in 16 MB, against 50,000 before exhaustion without it. The compiler refuses to
+let a String built in a region outlive the block, which means the host must take the bytes *inside*
+the frame. There was exactly one shape available.
+
+**What is still true of the old row:** a DOM binding is not specified anywhere, and the driver is
+JavaScript because a browser reaches the DOM no other way. What is not true is that any of it is
+far off.
+
+## 3. What this file does NOT cover
 - **Databases.** An encoder to guard is §G5; a driver needs W2 first.
 - **A separate repository.** Considered and rejected: `use` names a path relative to the importing
   file with no way to name a **dependency** (`M6-MODULES.md` §1), so a second repo would need a git
@@ -335,8 +382,32 @@ Per `ROADMAP-2.0.md`'s rule: every slice states what would have to be **executed
 | W3 | Two units of work interleave, and a data race on a shared balance is a **compile error** with a fixture proving it |
 | W4 | `curl` gets a correct response from a Burxt binary, and a second concurrent `curl` is not made to wait |
 | W5 | — |
+| W6a | A handler expression that narrows money is a **compile error**, proved by a fail fixture in THIS suite: `tests/fail/an_event_handler_may_not_round_money_silently.bx`. It is hand-written and framework-free, because the claim is about the language — the generated shape, not a paraphrase of it |
+| W6b † | A `.bmx` component **runs in a real browser** — clicked, state changed, page updated. Measured in Chrome rather than reasoned about, and earned by `star-burxt@bc60edcbb6c05ba4aa4d5a69b202145ebe99675d`'s `test.py`: fifteen assertions, accepting case first |
+
+**† is not a lesser mark, it is a different one: this repository cannot re-run it.** Every other row
+above is falsified by `cargo test` on some future day; W6b is falsified only by somebody going and
+looking. star-burxt can go red, or quietly rewrite `test.py`, and this file would keep saying the
+claim holds — so the row carries **a commit rather than a repository**, for the same reason
+`burxt.lock` pins commits rather than tags: a tag moves and a sha is a fact. Re-pin it when
+star-burxt earns more, and treat the old sha as what was actually checked rather than as history.
+
+**W6 was ONE row and splitting it is the point of the mark.** The two halves have different
+falsifiability, and one row carrying both meant the verifiable half was hostage to the one nobody
+here can run. The half about the LANGUAGE — that a click handler is judged like any other
+expression — never needed star-burxt to exist, and now does not need it to keep existing.
 
 **The trap this table exists to avoid:** W0 will be tempting to mark DONE the moment `html.bx`
 compiles. Compiling proves nothing about escaping — and a new type going green on the first try is
 a red flag rather than a result, because an unknown type silences every rule that would have
 refused it. **The fail fixture is the test that matters**, not the pass one.
+
+**W6 has the same trap in a new costume.** It will be tempting to mark DONE the moment a component
+renders, because a rendering component is visible and satisfying. Rendering proves nothing about the
+guarantees: the claim is that the compiler *judges the handler*, and the test for that is a program
+that must be **refused**. A generator that refused everything would pass every refusal test, which
+is why the accepting case is asserted first in the same test.
+
+And one measurement of W6 is not a measurement of anything: `0.038 ms` per frame is a four-node
+counter, which is the workload where nothing is hard. A number quoted for this slice must say what
+size tree it came from.

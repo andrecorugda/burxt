@@ -1,0 +1,26 @@
+// **The claim `M15-WEB.md` W6 makes about event handlers, proved HERE and without a framework.**
+//
+// star-burxt turns `::: button on:click=total * 1.5` into exactly this function, and the refusal
+// below is why a front end written in Burxt can say something no framework whose handlers are
+// closures can: **the compiler judges what happens on a click.** A closure's captured state is
+// invisible to the signature, so there is nothing for a type system to look at; a handler that is
+// an expression threaded through a signature is ordinary code, and the ordinary rule applies.
+//
+// The fixture is HAND-WRITTEN and star-burxt is a package in another repository, deliberately. W6's
+// browser half is earned by a suite this repository does not run, and a claim whose only evidence
+// lives elsewhere cannot decay visibly here. This half is about the LANGUAGE rather than the
+// framework, so it belongs in this suite, where it will keep being true or stop being true in
+// front of somebody.
+//
+// The shape is the generated one, not a paraphrase of it: a handler INDEX selects an expression,
+// and the state type is the first prop's type — which is what makes `-> Decimal<2>` the narrowing
+// the compiler catches.
+
+pure function receipt_dispatch(handler: Int, total: Decimal<2>) -> Decimal<2> {
+    if handler == 0 {
+        return total * 1.5;
+    }
+    return total;
+}
+
+print(to_string(receipt_dispatch(0, 1299.05)));
