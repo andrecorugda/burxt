@@ -101,7 +101,7 @@ So BMX lives in `.bmx` files: read at runtime here, read at build time by the ge
 {: #bmxslot}
 
 ```burxt
-class BmxSlot { expression: String, offset: Int }
+public class BmxSlot { expression: String, offset: Int }
 ```
 
 A slot carries its expression AND where it started, because a host must be able to point at the source the author wrote rather than at whatever it generated. The format makes the offset mandatory for that reason.
@@ -112,7 +112,7 @@ A slot carries its expression AND where it started, because a host must be able 
 {: #bmxwrap}
 
 ```burxt
-class BmxWrap { children: [Bmx] }
+public class BmxWrap { children: [Bmx] }
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L82)
@@ -121,7 +121,7 @@ class BmxWrap { children: [Bmx] }
 {: #bmxlink}
 
 ```burxt
-class BmxLink { target: String, children: [Bmx] }
+public class BmxLink { target: String, children: [Bmx] }
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L84)
@@ -130,7 +130,7 @@ class BmxLink { target: String, children: [Bmx] }
 {: #bmxinline}
 
 ```burxt
-class BmxInline { name: String, head: String, offset: Int }
+public class BmxInline { name: String, head: String, offset: Int }
 ```
 
 Inline content. An inline block — `::key[Ctrl+S]::`. NOT a slot: a slot's value is escaped and this is a call to something the host declared, so the two look different because they ARE different.
@@ -141,7 +141,7 @@ Inline content. An inline block — `::key[Ctrl+S]::`. NOT a slot: a slot's valu
 {: #bmx}
 
 ```burxt
-enum Bmx
+public enum Bmx
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L91)
@@ -150,7 +150,7 @@ enum Bmx
 {: #bmxitem}
 
 ```burxt
-class BmxItem { children: [Bmx] }
+public class BmxItem { children: [Bmx] }
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L101)
@@ -159,7 +159,7 @@ class BmxItem { children: [Bmx] }
 {: #bmxheading}
 
 ```burxt
-class BmxHeading { level: Int, children: [Bmx] }
+public class BmxHeading { level: Int, children: [Bmx] }
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L103)
@@ -168,7 +168,7 @@ class BmxHeading { level: Int, children: [Bmx] }
 {: #bmxlist}
 
 ```burxt
-class BmxList { ordered: Bool, items: [BmxItem] }
+public class BmxList { ordered: Bool, items: [BmxItem] }
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L104)
@@ -177,7 +177,7 @@ class BmxList { ordered: Bool, items: [BmxItem] }
 {: #bmxcode}
 
 ```burxt
-class BmxCode { info: String, value: String }
+public class BmxCode { info: String, value: String }
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L105)
@@ -186,7 +186,7 @@ class BmxCode { info: String, value: String }
 {: #bmxwords}
 
 ```burxt
-class BmxWords { children: [Bmx] }
+public class BmxWords { children: [Bmx] }
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L106)
@@ -195,7 +195,7 @@ class BmxWords { children: [Bmx] }
 {: #bmxblock}
 
 ```burxt
-class BmxBlock { name: String, head: String, offset: Int, children: [Block] }
+public class BmxBlock { name: String, head: String, offset: Int, children: [Block] }
 ```
 
 Block content. `Paragraph` and `Quote` carry the same shape and are still two variants: they mean different things and render differently, and a `kind` field would put the distinction somewhere a `match` cannot see it. A block — the format's one extension point for structure. `head` is captured and NEVER parsed, exactly like a slot's expression: what `for line in order.lines` means is the host's business.
@@ -206,7 +206,7 @@ Block content. `Paragraph` and `Quote` carry the same shape and are still two va
 {: #block}
 
 ```burxt
-enum Block
+public enum Block
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L115)
@@ -256,7 +256,7 @@ pure function bmx_is_space(b: Int) -> Bool
 {: #bmx-strip-end}
 
 ```burxt
-pure function bmx_strip_end(text: String) -> String
+public pure function bmx_strip_end(text: String) -> String
 ```
 
 A line's content with trailing spaces removed. The format strips them because the two-space line break is an invisible character that changes output, which is unreviewable by construction.
@@ -342,7 +342,7 @@ Split into lines, keeping each line's byte offset. `\r\n` ends a line and a lone
 {: #bmx-parse}
 
 ```burxt
-function bmx_parse(source: String) -> Result<[Block], String>
+public function bmx_parse(source: String) -> Result<[Block], String>
 ```
 
 A document, or the first error in it. A conforming parser stops at the first error: recovery is a real want, but recovery that differs between implementations is worse than none.
@@ -471,7 +471,7 @@ A Burxt string literal, escaped. `\{` and `\}` are the two a reader will not exp
 {: #bmx-emit-inline}
 
 ```burxt
-function bmx_emit_inline(nodes: [Bmx]) -> Result<String, String>
+public function bmx_emit_inline(nodes: [Bmx]) -> Result<String, String>
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L1046)
@@ -480,7 +480,7 @@ function bmx_emit_inline(nodes: [Bmx]) -> Result<String, String>
 {: #bmx-emit-one}
 
 ```burxt
-function bmx_emit_one(block: Block) -> Result<String, String>
+public function bmx_emit_one(block: Block) -> Result<String, String>
 ```
 
 The expression for one block that is NOT a fence. Fences are statements and are handled by `bmx_emit_stmts`, which is the only caller.
@@ -491,7 +491,7 @@ The expression for one block that is NOT a fence. Fences are statements and are 
 {: #bmx-emit-stmts}
 
 ```burxt
-function bmx_emit_stmts(blocks: [Block], target: String, tag: String, indent: String) -> Result<String, String>
+public function bmx_emit_stmts(blocks: [Block], target: String, tag: String, indent: String) -> Result<String, String>
 ```
 
 Statements that push each block into `target`, because a fence is a statement: `for` and `if` bind names, and a binding cannot live inside an expression.

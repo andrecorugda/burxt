@@ -220,11 +220,16 @@ def flags():
 # ---------------------------------------------------------------------------------------------
 
 DECL = re.compile(
-    r"^(?P<pure>pure\s+)?function\s+"
+    r"^(?:public\s+)?(?P<pure>pure\s+)?function\s+"
     r"(?:\(\s*(?P<mut>mutable\s+)?self\s*:\s*(?P<recv>[^)]+?)\s*\)\s*)?"
     r"(?P<name>[a-z_][A-Za-z0-9_]*)\s*(?P<rest>.*)$"
 )
-TYPE_DECL = re.compile(r"^(?P<kind>class|enum|interface)\s+(?P<name>[A-Z][A-Za-z0-9_]*)")
+TYPE_DECL = re.compile(
+    r"^(?:public\s+)?(?P<kind>class|enum|interface)\s+(?P<name>[A-Z][A-Za-z0-9_]*)")
+# The words that open a top-level declaration. Used only to notice that a line WAS one and this
+# parser failed to read it — see the refusal in `module`. Add to this when the language grows a
+# declaring word, which is the same moment the patterns above need to learn it.
+DECLARING_WORDS = {"public", "pure", "function", "class", "enum", "interface"}
 BANNER = re.compile(r"^//\s*-{2,}\s*(.*?)\s*-{2,}\s*$")
 
 
@@ -309,6 +314,31 @@ def module(name):
         signature = raw.split(" {")[0].rstrip().rstrip("{").rstrip()
         t = TYPE_DECL.match(raw)
         d = DECL.match(raw)
+        # A declaration this parser cannot read is DROPPED, silently, and the page is regenerated
+        # without it. That is worse than a crash, because `the_reference_is_not_stale` compares the
+        # committed page against a fresh generation — so its remedy is *"regenerate it"*, and
+        # following that instruction commits the deletion and turns the suite green. **A test whose
+        # fix is to regenerate cannot catch a generator that loses things; it certifies whatever the
+        # generator produced.**
+        #
+        # It has happened: `public` was added to the language and these patterns did not know the
+        # word, so every symbol a package marked as its public API — the twelve types and five
+        # functions a consumer needs — vanished from the reference while the docs kept the private
+        # helpers. Caught by reading `-188` in a diffstat, which is not a mechanism.
+        #
+        # Declarations sit at column 0 (verified: `lib/` has no indented one), so a line that opens
+        # with a declaring word and matches neither pattern is this parser failing to keep up with
+        # the language. `if not symbols` below already makes exactly this check at file
+        # granularity — *"the parser needs fixing"* — and a file that loses eleven of twelve symbols
+        # passes it. This is that check per line, which is where the information is.
+        if not t and not d and raw.split(" ")[0] in DECLARING_WORDS:
+            sys.exit(
+                "%s:%d — this parser could not read a declaration:\n"
+                "    %s\n"
+                "It would have been dropped from the reference and the page regenerated without "
+                "it. Teach DECL/TYPE_DECL the new form rather than deleting the line."
+                % (path, n + 1, raw.rstrip())
+            )
         if t:
             # A one-line `class Map<K, V> { entries: … }` carries its fields in the signature.
             whole = raw.rstrip()

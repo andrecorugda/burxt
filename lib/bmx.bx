@@ -77,18 +77,18 @@ use "json.bx";
 // A slot carries its expression AND where it started, because a host must be able to point at
 // the source the author wrote rather than at whatever it generated. The format makes the
 // offset mandatory for that reason.
-class BmxSlot { expression: String, offset: Int }
+public class BmxSlot { expression: String, offset: Int }
 
-class BmxWrap { children: [Bmx] }
+public class BmxWrap { children: [Bmx] }
 
-class BmxLink { target: String, children: [Bmx] }
+public class BmxLink { target: String, children: [Bmx] }
 
 // Inline content.
 // An inline block — `::key[Ctrl+S]::`. NOT a slot: a slot's value is escaped and this is a call
 // to something the host declared, so the two look different because they ARE different.
-class BmxInline { name: String, head: String, offset: Int }
+public class BmxInline { name: String, head: String, offset: Int }
 
-enum Bmx {
+public enum Bmx {
     Text(String),
     Emphasis(BmxWrap),
     Strong(BmxWrap),
@@ -98,21 +98,21 @@ enum Bmx {
     InlineBlock(BmxInline),
 }
 
-class BmxItem { children: [Bmx] }
+public class BmxItem { children: [Bmx] }
 
-class BmxHeading { level: Int, children: [Bmx] }
-class BmxList { ordered: Bool, items: [BmxItem] }
-class BmxCode { info: String, value: String }
-class BmxWords { children: [Bmx] }
+public class BmxHeading { level: Int, children: [Bmx] }
+public class BmxList { ordered: Bool, items: [BmxItem] }
+public class BmxCode { info: String, value: String }
+public class BmxWords { children: [Bmx] }
 
 // Block content. `Paragraph` and `Quote` carry the same shape and are still two variants: they
 // mean different things and render differently, and a `kind` field would put the distinction
 // somewhere a `match` cannot see it.
 // A block — the format's one extension point for structure. `head` is captured and NEVER parsed,
 // exactly like a slot's expression: what `for line in order.lines` means is the host's business.
-class BmxBlock { name: String, head: String, offset: Int, children: [Block] }
+public class BmxBlock { name: String, head: String, offset: Int, children: [Block] }
 
-enum Block {
+public enum Block {
     Heading(BmxHeading),
     Paragraph(BmxWords),
     Quote(BmxWords),
@@ -138,7 +138,7 @@ pure function bmx_is_space(b: Int) -> Bool {
 // A line's content with trailing spaces removed. The format strips them because the two-space
 // line break is an invisible character that changes output, which is unreviewable by
 // construction.
-pure function bmx_strip_end(text: String) -> String {
+public pure function bmx_strip_end(text: String) -> String {
     let mutable n: Int = len(text);
     while n > 0 && byte_at(text, n - 1) == 32 {
         n -= 1;
@@ -442,7 +442,7 @@ function bmx_lines(source: String) -> [BmxLine] {
 
 // A document, or the first error in it. A conforming parser stops at the first error: recovery
 // is a real want, but recovery that differs between implementations is worse than none.
-function bmx_parse(source: String) -> Result<[Block], String> {
+public function bmx_parse(source: String) -> Result<[Block], String> {
     let lines: [BmxLine] = bmx_lines(source);
     let mutable out: [Block] = [];
     match bmx_parse_blocks(lines, 0, 0, out) {
@@ -1043,7 +1043,7 @@ pure function bmx_burxt_string(text: String) -> String {
     return out + "\"";
 }
 
-function bmx_emit_inline(nodes: [Bmx]) -> Result<String, String> {
+public function bmx_emit_inline(nodes: [Bmx]) -> Result<String, String> {
     let mutable out: String = "[";
     let mutable i: Int = 0;
     while i < len(nodes) {
@@ -1094,7 +1094,7 @@ function bmx_emit_inline(nodes: [Bmx]) -> Result<String, String> {
 
 // The expression for one block that is NOT a fence. Fences are statements and are handled by
 // `bmx_emit_stmts`, which is the only caller.
-function bmx_emit_one(block: Block) -> Result<String, String> {
+public function bmx_emit_one(block: Block) -> Result<String, String> {
     let mutable out: String = "";
     let mutable i: Int = 0;
     while i < 1 {
@@ -1166,7 +1166,7 @@ function bmx_emit_one(block: Block) -> Result<String, String> {
 //
 // `tag` makes generated names unique without threading a counter: children of block `i` under
 // `tag` are built in `k_<tag>_<i>`.
-function bmx_emit_stmts(blocks: [Block], target: String, tag: String, indent: String) -> Result<String, String> {
+public function bmx_emit_stmts(blocks: [Block], target: String, tag: String, indent: String) -> Result<String, String> {
     let mutable out: String = "";
     let mutable i: Int = 0;
     while i < len(blocks) {
