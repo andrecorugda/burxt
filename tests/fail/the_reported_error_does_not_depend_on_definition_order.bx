@@ -1,0 +1,37 @@
+// The error a reader sees may not depend on where a function is DEFINED.
+//
+// `fill` is `pure` and takes a `mutable` parameter, which is a contradiction and the only defect
+// here. `without_first` has none: it is never called by `fill`, and it compiles the moment `pure` is
+// dropped above it.
+//
+// **With `without_first` defined AFTER `fill`, stage-0 reported the wrong one of the two.** It said
+// `without_first cannot return [Node], because its storage lives in a region` — naming a function
+// with nothing wrong in it. Swapping the two definitions reported the real error from the same file.
+//
+// The mechanism: the allocation probe dies at `fill`, so everything it had not reached yet is
+// uninferred, and `without_first` was never credited as allocating — after which RULE 2 refused it.
+// The probe's death was only recorded while it was still collecting DECLARATIONS, and this death
+// happens later, while checking a body. A probe that died knows less than one that finished,
+// whenever it died.
+//
+// **Two errors where the wrong one wins is worse than one error**, because it sends the reader to a
+// file with nothing wrong in it — 800 lines away, in the case that found this. Stage-1 never had it,
+// so this also closes a divergence nothing was testing.
+class Node { tag: Int }
+
+pure function fill(items: [Node], from: Int, mutable out: [Node]) -> Int {
+    let added: Int = push(out, items[from]);
+    return len(out);
+}
+
+function without_first(items: [Node]) -> [Node] {
+    let mutable rest: [Node] = [];
+    let mutable i: Int = 1;
+    while i < len(items) {
+        let added: Int = push(rest, items[i]);
+        i += 1;
+    }
+    return rest;
+}
+
+print("k");

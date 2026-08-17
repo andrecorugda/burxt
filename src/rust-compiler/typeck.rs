@@ -1229,13 +1229,34 @@ impl TypeChecker {
             probe.relay_methods = relay_methods.clone();
             // **THE ONE PLACE THIS IS DETECTED, and it is deliberately not a list of checks.**
             //
-            // `check_program_inner` has thirty-one refusal sites. Any of them firing during Pass 1
-            // abandons this probe before a single body is read, so nothing is inferred — and
-            // because this error is discarded, silently. Guarding the refusals would encode the
-            // rule once per site and leave the rest for the next person to trip; asking the
-            // finished probe whether it died while `declaring` catches all of them, including the
-            // ones nobody has written yet.
-            if probe.check_program_inner(prog).is_err() && probe.declaring {
+            // `check_program_inner` has thirty-one refusal sites. Any of them firing abandons this
+            // probe, so everything it had not reached yet is uninferred — and because this error is
+            // discarded, silently. Guarding the refusals would encode the rule once per site and
+            // leave the rest for the next person to trip; asking the finished probe whether it died
+            // catches all of them, including the ones nobody has written yet.
+            //
+            // **`&& probe.declaring` used to be here and it made definition ORDER decide which of
+            // two errors a reader sees.** A death during Pass 1 leaves nothing inferred, which the
+            // gate caught. A death while checking a BODY leaves everything after that body
+            // uninferred, which it did not — so:
+            //
+            //     pure function fill(items: [Node], from: Int, mutable out: [Node]) -> Int
+            //     function without_first(items: [Node]) -> [Node]           // defined AFTER
+            //
+            // reported `without_first cannot return [Node], because its storage lives in a region`
+            // — a function with no defect, never called by `fill`, and fine the moment `pure` is
+            // dropped from `fill`. Swap the two definitions and the same file reports the real
+            // error. The probe died at `fill`'s body with `declaring` already false, so
+            // `without_first` was never credited as allocating and RULE 2 refused it.
+            //
+            // Two errors where the WRONG one wins is worse than one error, because it sends the
+            // reader to a file with nothing wrong in it — 800 lines away, in the case that found
+            // this. A probe that died knows less than a probe that finished, whenever it died.
+            //
+            // Standing down more often is the safe direction: every rule that consumes this
+            // inference is a REFUSAL, so a stale `truncated` accepts rather than rejects — and the
+            // program that killed the probe has a real error of its own to report.
+            if probe.check_program_inner(prog).is_err() {
                 truncated = true;
             }
             let found_fns = probe.probe_fns.borrow().clone();

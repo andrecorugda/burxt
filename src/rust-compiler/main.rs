@@ -96,6 +96,21 @@ fn compile_main() {
         return;
     }
 
+    // `--version` is a QUESTION, and answering it is a success.
+    //
+    // It had no arm at all, so it fell through to the usage block below and exited **2** — the code
+    // for "you typed something wrong". A caller piping `burxt --version` therefore had to ignore the
+    // exit status to read the answer, which is the opposite of what a status is for. Reported
+    // against 0.2.0 by a consumer who had been piping it since.
+    //
+    // stdout, not stderr, for the same reason: this is the output that was asked for, not a
+    // diagnostic about the request. The usage block below stays on stderr and keeps exiting 2,
+    // because there nothing was answered.
+    if arguments.len() == 2 && (arguments[1] == "--version" || arguments[1] == "-V") {
+        println!("burxt {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     if arguments.len() < 3 {
         eprintln!("burxt {} — the Burxt compiler", env!("CARGO_PKG_VERSION"));
         eprintln!("usage:");
