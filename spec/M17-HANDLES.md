@@ -204,9 +204,38 @@ remember — which is the sign the mechanism is the right shape rather than a pa
 
 ### Left to decide before code
 
-- **The reservation in a browser.** One strip means no doubling, but a 1 GB reserve is still half of
-  wasm32's address space. A UI's model is small; the figure should be a build-time choice rather than
-  the compiler's own number reused.
+- ~~**The reservation in a browser.**~~ **The premise was stale and the question was the wrong one.**
+  There is no 1 GB constant and no compile-time number to choose: since v0.0.222/v0.0.261 both
+  compilers emit a **run-time ladder** — ask `malloc` for 4 GiB, then 256 MiB, then 16 MiB, keep
+  whichever the machine grants, and record the size that was actually given. It is deliberately a
+  ladder rather than a per-target constant so that `the_ir_is_the_same_for_every_target` keeps
+  passing: pointer width never reaches the IR.
+
+  **So the size is already asked of the machine. What cannot happen is a second ask.** One chunk is
+  taken on first use and exhaustion is a panic, which means:
+
+  - on wasm32, whatever rung is granted is a **hard ceiling**, with `memory.grow` sitting unused;
+  - on a 64-bit OS the 4 GiB is virtual and free, but nothing bounds what becomes *resident*.
+
+  That wall has already been hit for real, and not hypothetically: **stage-1 built by itself died with
+  `region memory exhausted` compiling `main.bx`**, at a 0.53% margin, and the fixpoint broke.
+  `emit.bx`'s own comment draws the conclusion — *"what is RESIDENT is the real limit and no constant
+  moves it."*
+
+  **The answer that needs no number on any platform is to grow**, and the shape is contained. Keep the
+  cursor as one logical offset over equal power-of-two chunks: a chunk index is a shift, an offset
+  within it is a mask, and **a mark stays a single integer** — so `build_region_open`,
+  `build_region_close` and all eleven `region_marks` sites are untouched, and only `alloc_fn` changes.
+  Verified safe: nothing assumes the arena is contiguous, because slice growth already *allocates
+  fresh and copies* rather than extending in place. An allocation larger than one chunk needs its own
+  path.
+
+  This is also what makes the freestanding target (§G4) fall out rather than needing its own design: a
+  fixed chunk table with no `malloc` behind it is bounded memory, which is the whole requirement on a
+  device with 320 KB of RAM.
+
+  **Growth and A12 are independent and both are needed.** Growth removes an arbitrary ceiling; only
+  per-block release bounds what is resident. Neither substitutes for the other.
 - ~~**What `copy_down` does with a cycle.**~~ **Settled, and asserting it is what found the bug.** The
   claim was *"a model cannot contain one today"*. Testing it rather than believing it produced a
   **compiler crash**: `class Node { label: String, next: Option<Node> }` passed `burxt check` and then
