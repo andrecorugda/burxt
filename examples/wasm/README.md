@@ -110,3 +110,23 @@ its return value was ignored and a zeroed `rlim_cur` passed the sanity check.
 - **Not measured in a browser.** node is a WebAssembly engine and this is engine-level code,
   but that is a reasoned claim and this file is here because reasoned claims about platforms
   were wrong four times this month. Treat it as unproven until someone loads it in Firefox.
+
+## What runs the host
+
+**Node 14.8 or newer.** The number is measured rather than assumed: `host.mjs:178` uses **top-level
+`await`** — `const { instance } = await WebAssembly.instantiate(…)` with no `async` wrapper — and
+that is unflagged from 14.8. Everything else it uses is older: `BigInt` is 10.4, `WebAssembly` is 8.
+
+**It was stated nowhere until 2026-08-18, and that is a worse failure than stating it too high.**
+BMX found the same shape in their own `reference/bmx.js` and put it best: *an undocumented floor
+cannot go stale, so nothing ever prompts you to re-check it.* CI ran whatever the runner happened to
+have, which is a PIN and was never a floor — a consumer on an older Node would have found out by
+running it.
+
+`the_wasm_host_states_the_node_it_needs` reads this number out of this file rather than keeping its
+own copy, because a floor written in two places is a floor that goes stale in one of them.
+
+**And measuring it went wrong first**, which is worth more than the number: my scan required a bare
+identifier after `const`, so `const { instance } = await …` — a destructuring assignment — was not
+counted as top-level await, and the first answer was 10.4. Four versions too low, in the check
+written *because* BMX had warned that patterns answer questions you did not ask.

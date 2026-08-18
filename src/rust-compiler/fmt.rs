@@ -236,6 +236,9 @@ pub fn format(src: &str) -> Result<String, Diagnostic> {
         // Recorded here rather than in a tracker because whoever revisits the continuation rule
         // reads this function, and this is the case that should be tried against a new one first.
         // BMX's own verdict: "consistent, not wrong, and I have taken it rather than fighting it."
+        // And the case to try a new rule against, theirs: a multi-line struct literal inside a call
+        // inside a NESTED BLOCK — that is where the opening and closing edges disagree most, and it
+        // is where the one they hit sat.
 
         if level < 0 {
             level = 0;

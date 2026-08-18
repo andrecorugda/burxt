@@ -7721,6 +7721,108 @@ fn every_limitation_the_docs_claim_is_still_true() {
 
 
 
+
+/// The wasm host states which Node runs it, and the number is read from the DOCUMENTATION.
+///
+/// **The failure this closes is the inverted one, and it is worse than a floor stated too high.**
+/// `examples/wasm/host.mjs` is the artefact a stranger copies to run a Burxt module in an engine
+/// that has never heard of Burxt — the whole portability claim leans on it — and until 2026-08-18
+/// **nothing said which Node it needs.** CI ran whatever the runner happened to have, which is a PIN
+/// and was never a floor; a consumer on an older Node would have found out by running it.
+///
+/// BMX found the same shape in their own `reference/bmx.js` and put the reason better than I can:
+/// *an undocumented floor cannot go stale, so nothing ever prompts you to re-check it.* A floor
+/// written down wrongly gets corrected when the build image moves. A floor never written down can
+/// only be found by somebody failing.
+///
+/// **The number lives in the README and this test reads it from there**, rather than keeping its own
+/// copy — BMX's rule, and it is right: *a floor stated in two places is a floor that goes stale in
+/// one of them.*
+///
+/// **And the scan that found it was wrong the first time**, which is why it is shaped the way it is.
+/// Comments and string literals are stripped before matching, because a feature NAMED in prose is
+/// not a feature USED; and a member access requires a real receiver before the dot, because the
+/// third dot of `...at(x)` otherwise reads as `Array.prototype.at` and reports a floor four versions
+/// too high. My own first answer was four versions too LOW for the mirror-image reason: the pattern
+/// for top-level `await` required a bare identifier after `const`, so
+/// `const { instance } = await WebAssembly.instantiate(…)` was not counted at all.
+#[test]
+fn the_wasm_host_states_the_node_it_needs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme = fs::read_to_string(root.join("examples/wasm/README.md")).unwrap();
+    let host = fs::read_to_string(root.join("examples/wasm/host.mjs")).unwrap();
+
+    // The documented floor, parsed out of the sentence a reader sees.
+    let stated = readme
+        .split("**Node ")
+        .nth(1)
+        .and_then(|s| s.split(' ').next())
+        .and_then(|s| s.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.').parse::<f64>().ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "examples/wasm/README.md does not state a Node floor. It is the artefact a stranger \
+                 copies, so the version that runs it belongs beside it — see this test's comment for \
+                 why an undocumented floor is worse than a wrong one."
+            )
+        });
+
+    // Strip comments and string literals: a feature named in prose is not a feature used.
+    let mut code = String::with_capacity(host.len());
+    let bytes: Vec<char> = host.chars().collect();
+    let mut i = 0;
+    while i < bytes.len() {
+        let two: String = bytes[i..(i + 2).min(bytes.len())].iter().collect();
+        if two == "//" {
+            while i < bytes.len() && bytes[i] != '\n' { i += 1; }
+        } else if two == "/*" {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == '*' && bytes[i + 1] == '/') { i += 1; }
+            i += 2;
+        } else if bytes[i] == '"' || bytes[i] == '\'' || bytes[i] == '`' {
+            let q = bytes[i];
+            i += 1;
+            while i < bytes.len() && bytes[i] != q {
+                if bytes[i] == '\\' { i += 1; }
+                i += 1;
+            }
+            i += 1;
+            code.push_str("''");
+        } else {
+            code.push(bytes[i]);
+            i += 1;
+        }
+    }
+
+    // Features that raise the floor, highest first. Each one is a version somebody can look up.
+    let mut needed: Vec<(f64, &str, &str)> = Vec::new();
+    if code.contains("structuredClone(") { needed.push((17.0, "17.0", "structuredClone")); }
+    if code.contains("replaceAll(") { needed.push((15.0, "15.0", "String.replaceAll")); }
+    // Top-level await: an `await` with no enclosing `async`. Checked by ABSENCE of `async`, which is
+    // crude and correct here — one 218-line file with no async function in it at all.
+    if code.contains("await ") && !code.contains("async ") {
+        needed.push((14.8, "14.8", "top-level await"));
+    }
+    if code.contains("??") || code.contains("?.") { needed.push((14.0, "14.0", "?? or ?.")); }
+    if code.contains("BigInt(") { needed.push((10.4, "10.4", "BigInt")); }
+    needed.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+
+    let (measured, shown, why) = needed
+        .first()
+        .copied()
+        .unwrap_or((8.0, "8.0", "WebAssembly"));
+
+    assert!(
+        (stated - measured).abs() < 0.05,
+        "examples/wasm/README.md states Node {} and host.mjs needs {} ({}). A floor above what the \
+         code needs tells every host to upgrade for a reason that is not theirs; a floor below it is \
+         a promise the file cannot keep.",
+        stated,
+        shown,
+        why
+    );
+    eprintln!("the wasm host needs Node {} ({}), and says so", shown, why);
+}
+
 /// The editor icons are what `scripts/editor-icons.py` makes from the brand assets.
 ///
 /// **Why this is a test and not a note in a README.** The artwork is a designer's and arrives as a
