@@ -6492,6 +6492,7 @@ impl<'ctx> CodeGen<'ctx> {
         let unknown_bb = self.ctx.append_basic_block(f, "never_issued");
         let in_range_bb = self.ctx.append_basic_block(f, "slot_in_range");
         let live_bb = self.ctx.append_basic_block(f, "slot_live");
+        let ahead_bb = self.ctx.append_basic_block(f, "generation_differs");
         let stale_bb = self.ctx.append_basic_block(f, "superseded");
         let same_gen_bb = self.ctx.append_basic_block(f, "generation_matches");
         let wrong_type_bb = self.ctx.append_basic_block(f, "another_type");
@@ -6515,7 +6516,20 @@ impl<'ctx> CodeGen<'ctx> {
                 "past_table",
             )
             .map_err(err)?;
-        self.builder.build_conditional_branch(past, unknown_bb, in_range_bb).map_err(err)?;
+        // **A handle carrying generation ZERO was never issued, and this arm exists because the
+        // message was wrong without it.** `hold` increments before it packs, so a real handle
+        // always carries 1 or more — and the integer a host is most likely to pass by mistake is
+        // exactly `0`: an uninitialised variable, a missing return, a literal where a call should
+        // have been. Without this it landed in the generation comparison below and was told the
+        // value had been "replaced by a later call", sending a reader to look for a call that was
+        // never made. Reported from a JS host by star-burxt, which is the only place it is
+        // reachable from.
+        let unissued = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, gen, i64t.const_zero(), "generation_zero")
+            .map_err(err)?;
+        let bad_shape = self.builder.build_or(past, unissued, "never_from_here").map_err(err)?;
+        self.builder.build_conditional_branch(bad_shape, unknown_bb, in_range_bb).map_err(err)?;
 
         self.builder.position_at_end(in_range_bb);
         let gen_slot = unsafe {
@@ -6541,7 +6555,18 @@ impl<'ctx> CodeGen<'ctx> {
             .builder
             .build_int_compare(inkwell::IntPredicate::EQ, gen, live, "same_generation")
             .map_err(err)?;
-        self.builder.build_conditional_branch(same, same_gen_bb, stale_bb).map_err(err)?;
+        self.builder.build_conditional_branch(same, same_gen_bb, ahead_bb).map_err(err)?;
+
+        // **Superseded means BEHIND. A generation ahead of the live one was never issued**, and
+        // calling it "replaced by a later call" reads backwards — 9 is not behind 1. The two are
+        // different mistakes: one handle is too old, the other never existed. Also star-burxt's,
+        // from the same host run.
+        self.builder.position_at_end(ahead_bb);
+        let behind = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, gen, live, "behind_the_live_one")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(behind, stale_bb, unknown_bb).map_err(err)?;
 
         self.builder.position_at_end(same_gen_bb);
         let tag_slot = unsafe {

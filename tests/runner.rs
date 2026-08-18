@@ -7718,6 +7718,170 @@ fn every_limitation_the_docs_claim_is_still_true() {
     assert!(problems.is_empty(), "\n{}", problems.join("\n\n"));
 }
 
+
+/// The three handle refusals, from OUTSIDE — which is the only place they are reachable.
+///
+/// **This suite could not test them, structurally.** A never-issued handle, a handle from
+/// another module and a generation that never existed cannot be written in Burxt at all: the
+/// type system will not let a program fabricate a `Handle`, which is the property that makes the
+/// feature worth having. So every one of them was unexercised until a HOST passed a raw integer
+/// — and star-burxt, doing exactly that from JavaScript, found two wrong messages within an hour
+/// of the feature landing.
+///
+/// Both were the same class the whole project kept meeting that week — a refusal that points at
+/// the wrong cause:
+///
+///   handle `0`      said "replaced by a later call, issued at generation 0". It is the likeliest
+///                   integer a host passes by mistake — an uninitialised variable, a missing
+///                   return — and it never had a handle at all, so it was sent looking for a call
+///                   nobody made. `hold` increments the generation BEFORE packing it, so a real
+///                   handle never carries zero, and that is now checked first.
+///   generation 9,   said "replaced by a LATER call" when 9 is ahead of 1, not behind. Superseded
+///   live 1          means behind; ahead means never issued. Two different mistakes.
+///
+/// The last probe is the control for both fixes, and it is the one that would have caught an
+/// over-correction: a genuinely superseded handle — slot recycled after 1024 issues — must still
+/// say "replaced by a later call". A fix that routed everything to "never issued" would pass the
+/// first four probes and fail this one.
+///
+/// Each probe runs in a `fork`, because every refusal exits 70: a parent that died on the first
+/// would only ever see one message, and WHICH message is the entire subject.
+#[test]
+fn a_host_passing_a_bad_handle_is_refused_by_name() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let llc = llc_path();
+    if !llc.exists() {
+        eprintln!("skipping: {} is not installed", llc.display());
+        return;
+    }
+    for tool in ["gcc", "objcopy"] {
+        if Command::new(tool).arg("--version").output().is_err() {
+            eprintln!("skipping: {} is not available to build a host", tool);
+            return;
+        }
+    }
+    let scratch = scratch_dir("handle-host");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let program = scratch.join("held.bx");
+    fs::write(
+        &program,
+        "class Model { a: Int }\n\
+         function issue() -> Handle<Model> allocates { return handle_of(Model { a: 7 }); }\n\
+         function read_it(h: Handle<Model>) -> Int { return handle_value(h).a; }\n\
+         region main { print(read_it(issue())); }\n",
+    )
+    .unwrap();
+
+    let ll = scratch.join("held.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("emit-ir")
+        .arg(&program)
+        .env("BURXT_LIB", root.join("lib"))
+        .output()
+        .expect("emit-ir");
+    assert!(out.status.success(), "emit-ir failed");
+    fs::write(&ll, &out.stdout).unwrap();
+
+    let obj = scratch.join("held.o");
+    assert!(Command::new(&llc)
+        .args(["-filetype=obj", "-relocation-model=pic"])
+        .arg(&ll)
+        .arg("-o")
+        .arg(&obj)
+        .status()
+        .expect("llc")
+        .success());
+    // Burxt emits `main`; the host needs it, so the module's own is moved aside.
+    let obj2 = scratch.join("held-renamed.o");
+    assert!(Command::new("objcopy")
+        .arg("--redefine-sym")
+        .arg("main=burxt_main")
+        .arg(&obj)
+        .arg(&obj2)
+        .status()
+        .expect("objcopy")
+        .success());
+
+    let driver = scratch.join("driver.c");
+    fs::write(&driver, HANDLE_HOST_DRIVER).unwrap();
+    let exe = scratch.join("hosttest");
+    let built = Command::new("gcc")
+        .arg("-o")
+        .arg(&exe)
+        .arg(&driver)
+        .arg(&obj2)
+        .arg("-no-pie")
+        .output()
+        .expect("gcc");
+    assert!(
+        built.status.success(),
+        "could not link a C host against the module:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let ran = Command::new(&exe).output().expect("host");
+    let said = String::from_utf8_lossy(&ran.stderr);
+    let read = String::from_utf8_lossy(&ran.stdout);
+
+    assert!(read.contains("READ 7"), "the real handle stopped reading:\n{}{}", read, said);
+
+    // Order matters: the probes run in this order and each writes one line.
+    let want = [
+        ("zero", "never issued by this module"),
+        ("negative", "never issued by this module"),
+        ("index 999, gen 1", "never issued by this module"),
+        ("generation 9 ahead of live 1", "never issued by this module"),
+        ("genuinely superseded", "replaced by a later call"),
+    ];
+    for (probe, expected) in want {
+        let at = said.find(&format!("[{}]", probe)).unwrap_or_else(|| {
+            panic!("the host did not run the `{}` probe:\n{}", probe, said)
+        });
+        let before = &said[..at];
+        let line = before.lines().rev().find(|l| l.contains("runtime error")).unwrap_or("");
+        assert!(
+            line.contains(expected),
+            "probe `{}` should have been refused with `{}` and said:\n  {}\n\nfull output:\n{}",
+            probe,
+            expected,
+            line,
+            said
+        );
+    }
+    eprintln!("a host was refused by name on {} bad handles", want.len());
+}
+
+/// The C host for `a_host_passing_a_bad_handle_is_refused_by_name`, kept beside it rather than in
+/// a file: it is a fixture for one test and reads as part of it.
+const HANDLE_HOST_DRIVER: &str = r#"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+extern long bx_issue(void) __asm__("bx.issue");
+extern long bx_read_it(long) __asm__("bx.read_it");
+
+static void probe(const char *what, long handle) {
+    fflush(NULL);
+    pid_t p = fork();
+    if (p == 0) { long v = bx_read_it(handle); printf("READ %ld\n", v); fflush(NULL); _exit(0); }
+    int st = 0; waitpid(p, &st, 0);
+    fprintf(stderr, "  [%s] exit %d\n", what, WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+}
+int main(void) {
+    long good = bx_issue();
+    probe("the real one", good);
+    probe("zero", 0);
+    probe("negative", -1);
+    probe("index 999, gen 1", (1L << 32) | 999L);
+    probe("generation 9 ahead of live 1", (9L << 32) | 0L);
+    for (int i = 0; i < 1024; i++) (void) bx_issue();
+    probe("genuinely superseded", good);
+    return 0;
+}
+"#;
+
 /// The region GROWS, in both compilers, and a value made in the first chunk stays valid.
 ///
 /// **Why this test exists in this shape, and why the memory cap is the whole of it.** The arena

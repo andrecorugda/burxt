@@ -4390,7 +4390,14 @@ function handle_runtime_ir() -> String {
             + "  %slot = and i64 %h, 4294967295\n"
             + "  %gen = lshr i64 %h, 32\n"
             + "  %past = icmp uge i64 %slot, 1024\n"
-            + "  br i1 %past, label %unknown, label %in_range\n"
+            // A handle carrying generation ZERO was never issued — `hold` increments before it
+            // packs, so a real one always carries 1 or more. `0` is the likeliest integer a host
+            // passes by mistake (an uninitialised variable, a missing return), and without this
+            // it fell through to the generation comparison and was told the value had been
+            // "replaced by a later call" — sending a reader to look for a call never made.
+            + "  %unissued = icmp eq i64 %gen, 0\n"
+            + "  %badshape = or i1 %past, %unissued\n"
+            + "  br i1 %badshape, label %unknown, label %in_range\n"
             + "in_range:\n"
             + "  %gslot = getelementptr i64, ptr @burxt.handle.generation, i64 %slot\n"
             + "  %live = load i64, ptr %gslot\n"
@@ -4401,7 +4408,12 @@ function handle_runtime_ir() -> String {
             + "  br i1 %never, label %unknown, label %live_slot\n"
             + "live_slot:\n"
             + "  %same = icmp eq i64 %gen, %live\n"
-            + "  br i1 %same, label %same_gen, label %stale\n"
+            + "  br i1 %same, label %same_gen, label %differs\n"
+            // Superseded means BEHIND. A generation AHEAD of the live one was never issued, and
+            // calling it "replaced by a later call" reads backwards — 9 is not behind 1.
+            + "differs:\n"
+            + "  %behind = icmp ult i64 %gen, %live\n"
+            + "  br i1 %behind, label %stale, label %unknown\n"
             + "same_gen:\n"
             + "  %tslot = getelementptr i64, ptr @burxt.handle.tag, i64 %slot\n"
             + "  %held_tag = load i64, ptr %tslot\n"
