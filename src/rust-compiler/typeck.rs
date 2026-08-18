@@ -10799,12 +10799,22 @@ impl<'a> ReleasePass<'a> {
             return false;
         }
         match &e.kind {
-            // NEITHER builds region storage, which is the whole reason a handle is cheap.
-            // `hold` files a pointer that already exists; `held` hands the same pointer back.
-            // The storage belongs to whoever built the value, and the handle table only
-            // remembers where it is — so a function that holds or reads a handle does not
-            // thereby have to say `allocates`.
-            K::Hold { .. } | K::Held { .. } => false,
+            // **`handle_of` ALLOCATES, and answering `false` here was a use-after-free** — in
+            // the feature built to prevent them. It copies the value into the region, and that
+            // copy has to outlive the block, because the table goes on pointing at it after the
+            // block ends. Per-block release reasons about what a BLOCK keeps and cannot see the
+            // table, so a handle taken inside a loop was storage the next iteration reclaimed:
+            //
+            //     while n < 500 { h = frame(h); if n == 250 { captured = h; } n += 1; }
+            //     handle_value(captured)          -> SIGSEGV, 249 frames later
+            //
+            // which is star-burxt's real case exactly: a command issued on one frame resolves
+            // several frames later, so the driver holds a handle it took mid-flight. Saying
+            // `true` puts the copy under the same rule as any other escaping value.
+            K::Hold { .. } => true,
+            // `handle_value` builds nothing: it hands back storage the table already holds, and
+            // whoever filed it is who kept it alive.
+            K::Held { .. } => false,
             // A literal String lives in `.rodata`; nothing was built.
             K::StrLit(_) | K::IntLit(_) | K::DecimalLit { .. } | K::BoolLit(_) | K::ArgCount => {
                 false

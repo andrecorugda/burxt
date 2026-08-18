@@ -1,0 +1,38 @@
+// M17. A handle taken INSIDE a loop must still read after the loop has run on without it.
+//
+// **This segfaulted, and it is the failure the milestone exists to refuse.** `handle_of` copies
+// the value into the region, and the first version answered `false` to "does this allocate" —
+// reasoning that it only files a pointer that already exists. It does not: the COPY is new
+// region storage, and it has to outlive the block, because the table goes on pointing at it
+// after the block ends.
+//
+// Per-block release reasons about what a BLOCK provably keeps, and it cannot see the table. So
+// the storage a handle named was reclaimed by the next iteration, and reading the handle a few
+// hundred frames later was a raw SIGSEGV — an anonymous crash, which is the one failure this
+// language forbids, reached through the feature written to prevent exactly this.
+//
+// **star-burxt's real case is this shape**, which is how it was found: a framework issues an
+// asynchronous command on one frame and the driver calls back several frames later with the
+// handle it took mid-flight. A test that captured the handle BEFORE the loop passes either way —
+// that storage is outside the block being released — so the capture has to happen inside.
+class Model { route: String, draft: String, hits: Int }
+
+function frame(h: Handle<Model>) -> Handle<Model> allocates {
+    let old: Model = handle_value(h);
+    return handle_of(Model { route: old.route, draft: old.draft, hits: old.hits + 1 });
+}
+
+region main {
+    let mutable h: Handle<Model> = handle_of(Model { route: "/", draft: "seed", hits: 0 });
+    let mutable captured: Handle<Model> = h;
+    let mutable n: Int = 0;
+    while n < 500 {
+        h = frame(h);
+        if n == 250 { captured = h; }
+        n += 1;
+    }
+    let then: Model = handle_value(captured);
+    let now: Model = handle_value(h);
+    print("captured {then.hits} {then.route} {then.draft}");
+    print("latest {now.hits}");
+}
