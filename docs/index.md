@@ -267,7 +267,8 @@ dependency can now reach the standard library with <code>use "std/…"</code>, w
 library or a framework live in its own repository instead of inside the compiler. Two already do —
 <a href="https://bmx.burxt-lang.org/">BMX</a> and
 <a href="https://star.burxt-lang.org/">star-burxt</a>. You can still write a program, test it, debug
-it, serve TCP and fork workers, and ship it. There are no threads, no TLS and no DNS —
+it, serve TCP and fork workers, speak TLS by binding OpenSSL, and ship it. There are no threads and
+no DNS —
 <a href="{{ site.baseurl }}/limitations.html">every gap is named, with its reason</a>.
 </p>
 

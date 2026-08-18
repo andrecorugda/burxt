@@ -83,11 +83,12 @@ Stated as plainly as the rest, because a comparison that only lists strengths is
 |---|---|---|
 | threads | **none** — processes via `os_fork` | all of them |
 | TCP sockets | **yes**, server and client | all of them |
-| TLS, HTTP, DNS | **none** | all of them |
+| TLS | **no library — bound, and that works today** | all of them |
+| HTTP, DNS | **none** | all of them |
 | closures | **declined** — `dynamic Trait` instead | all of them |
 | inheritance | **declined** — composition only | most |
 | generics | yes | yes |
-| a formatter | **none yet** | all of them |
+| a formatter | **yes — `burxt fmt`, in both compilers** | all of them |
 | regex | **none** | all of them |
 | package registry | **none — git URL and tag** | all of them |
 | full Unicode case mapping | **ASCII, and the name says so** | most |

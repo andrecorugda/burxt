@@ -123,14 +123,21 @@ cannot corrupt a balance*, derived from a declared invariant rather than from a 
 remembered, and shipping that half-done would be worse than not shipping it. Separate processes get
 the same guarantee the coarse way: two workers share no memory, so there is nothing to corrupt.
 
-### TCP, yes. No TLS, no HTTP, no DNS
+### TCP, yes. TLS by binding. No HTTP, no DNS
 
 `lib/net.bx` opens, binds, accepts, reads and writes TCP sockets, both as a server and as a client.
 A Burxt program answers HTTP requests. What is missing above it:
 
-- **No TLS**, and binding one rather than writing one is the recorded decision: this language gives
-  no control over instruction timing, and a hand-rolled handshake that *looks* fine is exactly the
-  failure it exists to refuse.
+- **No TLS *library*** — and writing one is not the plan. Binding one is the recorded decision: this
+  language gives no control over instruction timing, and a hand-rolled handshake that *looks* fine is
+  exactly the failure it exists to refuse.
+
+  **Binding one already works, with no compiler change.** Measured 2026-08-18: six
+  `external function` declarations against OpenSSL, built with `burxt build client.bx -lssl -lcrypto`,
+  completing a **TLS 1.3** handshake to a public host and reporting the negotiated version. So the gap
+  is `lib/tls.bx`, a wrapper nobody has written, rather than a capability the language lacks — and
+  this bullet said otherwise until it was measured, one paragraph above the note recording that the
+  same thing had already happened to the sentence about opening a connection at all.
 - **No HTTP**, in the sense that a request is bytes and parsing it is your code.
 - **No DNS.** An address is four octets — `net_connect_ipv4(93, 184, 216, 34, 80)` — because
   `getaddrinfo` hands back a pointer buried inside a chain of structs, and reading a pointer out of
