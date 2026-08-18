@@ -420,6 +420,10 @@
           id: len
         - name: "byte_at"
           id: byte-at
+        - name: "handle_of"
+          id: handle-of
+        - name: "handle_value"
+          id: handle-value
         - name: "byte_as_string"
           id: byte-as-string
         - name: "substring"

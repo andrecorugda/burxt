@@ -12,7 +12,7 @@ description: "Every keyword, builtin, operator and standard-library function —
 Everything the language has. **Read out of the compiler**, not from memory: the keyword table below comes from `src/rust-compiler/lexer.rs`, the reserved names from `src/rust-compiler/typeck.rs`, the commands from `src/rust-compiler/main.rs`, and every standard-library entry from the `//` prose written above the declaration itself. `scripts/site-reference.py` regenerates these pages and a test diffs them, so this cannot fall behind the language again — which it had: the page this replaces still listed `record`, a keyword renamed eleven versions earlier.
 
 <ul class="pages">
-<li><a href="builtins.html"><span>Builtins</span> <span class="what">33 calls the language owns, and what each needs</span></a></li>
+<li><a href="builtins.html"><span>Builtins</span> <span class="what">35 calls the language owns, and what each needs</span></a></li>
 <li><a href="cli.html"><span>The command line</span> <span class="what">11 commands, including <code>review</code> and <code>mcp-schema</code></span></a></li>
 <li><a href="option.html"><span><code>lib/option.bx</code></span> <span class="what">absence, made explicit</span></a></li>
 <li><a href="result.html"><span><code>lib/result.bx</code></span> <span class="what">failure, made explicit</span></a></li>

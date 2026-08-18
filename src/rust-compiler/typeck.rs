@@ -74,6 +74,14 @@ pub enum TypedExprKind {
     CIsNull(Box<TypedExpr>),
     CStringAt(Box<TypedExpr>),
     CBytesAt { pointer: Box<TypedExpr>, count: Box<TypedExpr> },
+    /// `hold(value)` — file a value in the handle table and answer the packed handle. M17.
+    ///
+    /// `of` is the CLASS NAME rather than a number, because the tag that guards a handle mixes
+    /// in a fingerprint of the whole program, and that is not known until every declaration has
+    /// been seen. Deciding it here would mean deciding it too early.
+    Hold { value: Box<TypedExpr>, of: String },
+    /// `held(handle)` — the value back, or one of three named refusals. M17.
+    Held { handle: Box<TypedExpr>, of: String },
     CBytesTo { pointer: Box<TypedExpr>, bytes: Box<TypedExpr> },
     /// `to_string(v)`: the value's exact display form, region-allocated.
     ToString(Box<TypedExpr>),
@@ -859,6 +867,10 @@ fn is_reserved_name(name: &str) -> bool {
             // above — being in this list is what the editor grammar and the generated reference
             // are scraped from, so a builtin that is not here is a builtin no tool knows.
             | "byte_as_string"
+            // M17. Reserved from the version they arrived in, so the editor grammar and the
+            // generated reference know about them on day one — the ten above were not, and a
+            // builtin absent from this list is a builtin no tool has heard of.
+            | "handle_of" | "handle_value"
     )
 }
 
@@ -4662,6 +4674,12 @@ impl TypeChecker {
 
     fn may_be_region_storage_within(&self, ty: &Type, seen: &mut Vec<String>) -> bool {
         match ty {
+            // A `Handle<T>` is an i64 and it still counts, which is the arm somebody will be
+            // tempted to make `false`. The INTEGER holds no pointer; the table ENTRY it names
+            // holds one, into the region. Close the region the value was built in and the entry
+            // dangles, so a handle escaping a region is the same use-after-free as a String
+            // escaping one — reached one level of indirection later, where it is harder to see.
+            Type::Handle(_) => true,
             Type::String | Type::Slice(_) => true,
             // A tuple, still written as one — inside a generic, before `expand` has turned
             // it into the anonymous class the `Named` arm below already answers for.
@@ -7972,6 +7990,67 @@ impl TypeChecker {
                 // deferred it with the trigger "binary I/O", which this fires). Each element is one
                 // byte, 0..=255, which pairs with the `write_bytes` builtin that has had no inverse
                 // since it was added.
+                // `hold(value)` — file a value so a HOST can name it while Burxt is not
+                // running, and answer the packed handle. M17.
+                if name == "handle_of" {
+                    if arguments.len() != 1 {
+                        return Err(
+                            "handle_of(value) takes the one value the host will hold on to".to_string()
+                        );
+                    }
+                    let value = self.check_expr(&arguments[0], None)?;
+                    // A CLASS, and the limit is the table rather than taste: a slot remembers
+                    // WHERE a value is, so the value has to be somewhere. An `Int` is not — it
+                    // travels in a register, there is no address to file, and `handle_of(7)` would
+                    // have to invent storage nobody asked for. A class is also the shape this
+                    // exists for: the application state a host carries between calls.
+                    let Type::Named(class) = &value.ty else {
+                        return Err(format!(
+                            "handle_of(...) takes a class — the state a host holds between calls — \
+                             and this is {}. A scalar has no place in the table to point at; \
+                             put it in a class with the rest of the state.",
+                            value.ty
+                        ));
+                    };
+                    if !self.structs.contains_key(class) && !self.made_records.borrow().contains_key(class) {
+                        return Err(format!(
+                            "handle_of(...) takes a class and `{}` is not one — an enum has no \
+                             single address to file.",
+                            class
+                        ));
+                    }
+                    let of = class.clone();
+                    return Ok(TypedExpr {
+                        ty: Type::Handle(Box::new(Type::Named(of.clone()))),
+                        kind: TypedExprKind::Hold { value: Box::new(value), of },
+                    });
+                }
+                // `held(handle)` — the value back, or one of three named refusals. M17.
+                if name == "handle_value" {
+                    if arguments.len() != 1 {
+                        return Err("handle_value(handle) takes one handle".to_string());
+                    }
+                    let handle = self.check_expr(&arguments[0], None)?;
+                    let Type::Handle(inner) = &handle.ty else {
+                        return Err(format!(
+                            "handle_value(...) takes a `Handle<...>`, the thing `handle_of` answered with, \
+                             but this has type {}. A bare Int is not a handle: it carries no \
+                             type for the table to check against.",
+                            handle.ty
+                        ));
+                    };
+                    let Type::Named(class) = inner.as_ref() else {
+                        return Err(format!(
+                            "handle_value(...) answers a class, and this handle names {}",
+                            inner
+                        ));
+                    };
+                    let of = class.clone();
+                    return Ok(TypedExpr {
+                        ty: Type::Named(of.clone()),
+                        kind: TypedExprKind::Held { handle: Box::new(handle), of },
+                    });
+                }
                 if name == "c_bytes_at" {
                     if arguments.len() != 2 {
                         return Err(
@@ -10631,6 +10710,8 @@ impl<'a> ReleasePass<'a> {
     fn collect_vars(&self, e: &TypedExpr, out: &mut Vec<String>) {
         use TypedExprKind as K;
         match &e.kind {
+            K::Hold { value, .. } => self.collect_vars(value, out),
+            K::Held { handle, .. } => self.collect_vars(handle, out),
             K::Var(n) => out.push(n.clone()),
             K::DynCoerce { var, .. } => out.push(var.clone()),
             K::IntLit(_)
@@ -10718,6 +10799,12 @@ impl<'a> ReleasePass<'a> {
             return false;
         }
         match &e.kind {
+            // NEITHER builds region storage, which is the whole reason a handle is cheap.
+            // `hold` files a pointer that already exists; `held` hands the same pointer back.
+            // The storage belongs to whoever built the value, and the handle table only
+            // remembers where it is — so a function that holds or reads a handle does not
+            // thereby have to say `allocates`.
+            K::Hold { .. } | K::Held { .. } => false,
             // A literal String lives in `.rodata`; nothing was built.
             K::StrLit(_) | K::IntLit(_) | K::DecimalLit { .. } | K::BoolLit(_) | K::ArgCount => {
                 false
@@ -10959,6 +11046,8 @@ impl<'a> ReleasePass<'a> {
     fn children<'e>(e: &'e TypedExpr, out: &mut Vec<&'e TypedExpr>) {
         use TypedExprKind as K;
         match &e.kind {
+            K::Hold { value, .. } => out.push(value),
+            K::Held { handle, .. } => out.push(handle),
             K::IntLit(_)
             | K::DecimalLit { .. }
             | K::BoolLit(_)

@@ -106,6 +106,20 @@
  },
  {
   "kind": "builtin",
+  "name": "handle_of",
+  "text": "a `Handle<T>` naming `value`, for a host to carry between calls",
+  "url": "/reference/builtins.html#handle-of",
+  "where": "handle_of(value) -> Handle<T>"
+ },
+ {
+  "kind": "builtin",
+  "name": "handle_value",
+  "text": "the value the handle names",
+  "url": "/reference/builtins.html#handle-value",
+  "where": "handle_value(handle) -> T"
+ },
+ {
+  "kind": "builtin",
   "name": "byte_as_string",
   "text": "a one-byte `String` holding `n`",
   "url": "/reference/builtins.html#byte-as-string",

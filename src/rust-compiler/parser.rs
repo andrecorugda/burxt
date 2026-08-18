@@ -1881,6 +1881,21 @@ impl Parser {
                         }
                     }
                     self.expect(&Token::Gt)?;
+                    // `Handle<Model>` is built in, so it is recognised HERE rather than
+                    // reserved in the lexer. A program that declares its own `Handle` gets the
+                    // ordinary duplicate-type refusal from the checker, which reads better than
+                    // a keyword collision — and this is the same call `Option` would need if it
+                    // were ever built in, which it deliberately is not.
+                    if name == "Handle" {
+                        if arguments.len() != 1 {
+                            return Err(format!(
+                                "`Handle` names one type — the type of the value the host is \
+                                 holding — and this has {}. Write `Handle<Model>`.",
+                                arguments.len()
+                            ));
+                        }
+                        return Ok(Type::Handle(Box::new(arguments.into_iter().next().unwrap())));
+                    }
                     return Ok(Type::Generic { name, arguments });
                 }
                 Ok(Type::Named(name))

@@ -84,6 +84,11 @@ pub struct CodeGen<'ctx> {
     /// region mark is an integer and the chunk table is `alloc_fn`'s business alone
     heap: Option<inkwell::values::GlobalValue<'ctx>>,
     alloc_fn: Option<FunctionValue<'ctx>>,
+    /// M17's two runtime functions and the fingerprint their tags mix in, all lazily made —
+    /// a program that never holds a value pays for none of it.
+    hold_fn: Option<FunctionValue<'ctx>>,
+    held_fn: Option<FunctionValue<'ctx>>,
+    module_fingerprint: Option<u64>,
     byte_index_check_fn: Option<FunctionValue<'ctx>>,
     str_eq_fn: Option<FunctionValue<'ctx>>,
     /// lazily created UTF-8 validator, B5 — emitted only into programs that let text IN
@@ -214,6 +219,11 @@ struct DebugInfo<'ctx> {
     optimised: bool,
 }
 
+/// How many values a host may hold at once. A power of two so the slot is a mask, and reused
+/// round-robin — a UI builds a model per keystroke, so what matters is that reuse is SAFE
+/// (the generation moves) rather than that the table is large.
+const HANDLE_SLOTS: u64 = 1024;
+
 impl<'ctx> CodeGen<'ctx> {
     pub fn new(ctx: &'ctx Context, module_name: &str) -> Self {
         let module = ctx.create_module(module_name);
@@ -233,6 +243,9 @@ impl<'ctx> CodeGen<'ctx> {
             narrow_check_fn: None,
             heap: None,
             alloc_fn: None,
+            hold_fn: None,
+            held_fn: None,
+            module_fingerprint: None,
             byte_index_check_fn: None,
             str_eq_fn: None,
             utf8_check_fn: None,
@@ -1564,6 +1577,8 @@ impl<'ctx> CodeGen<'ctx> {
     /// NOT the one cell stage-1 uses — the two compilers agree on behaviour, never on ABI.
     fn payload_cells(&self, ty: &Type) -> u32 {
         match ty {
+            // A handle is one i64: a generation and an index, packed.
+            Type::Handle(_) => 1,
             Type::Int | Type::Bool | Type::Decimal { .. } | Type::String => 1,
             // A width is boundary-only, so it can never be an enum variant's payload — the checker
             // refuses it in a field long before this runs. Answered anyway, and answered 1, because
@@ -1633,6 +1648,9 @@ impl<'ctx> CodeGen<'ctx> {
             | Type::Generic { .. }
             | Type::Tuple(_)
             | Type::DynGeneric { .. } => self.ctx.i64_type().into(),
+            // A handle IS an i64 at the ABI, which is the point: a host sees an ordinary
+            // number and needs no marshalling to hold it between calls.
+            Type::Handle(_) => self.ctx.i64_type().into(),
             Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
             Type::CInt => self.ctx.i32_type().into(),
@@ -2269,6 +2287,10 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Tuple(_) => {
                 return Err("codegen bug: a tuple was never made into its class".to_string())
             }
+            // A handle prints as its number. Unlike an address this is REPRODUCIBLE — an index
+            // and a generation are decided by how many values have been held, not by where the
+            // allocator put them — so printing one keeps a program's output identical across
+            // runs and machines. That is why this is allowed where `CPointer` below is not.
             // The checker refuses this, and for a reason worth restating here: an address differs
             // between runs, so printing one would make a program's output non-reproducible. Reaching
             // this arm means the refusal was lost.
@@ -2285,6 +2307,15 @@ impl<'ctx> CodeGen<'ctx> {
                     if *signed { "i" } else { "u" },
                     bits
                 ))
+            }
+            // A handle does NOT print, and the checker says so before this runs. The number is
+            // reproducible — an index and a generation, decided by how many values have been
+            // held rather than by where the allocator put them — so unlike `CPointer` below it
+            // could safely be displayed. It is refused because displaying it INVITES the bug the
+            // generation exists to catch: a number written down and passed back later is exactly
+            // a stale handle. Print a field of `held(h)` instead.
+            Type::Handle(_) => {
+                return Err("codegen bug: a Handle reached print".to_string())
             }
             Type::Int => {
                 let fmt = self.global_str("%lld", "fmt_int");
@@ -2490,6 +2521,53 @@ impl<'ctx> CodeGen<'ctx> {
             // Zero-extended, not sign-extended: a byte is 0..=255, and a `[Int]` holding -1 for 0xFF
             // would be a different number than the one C had. `write_bytes` truncates on the way out,
             // so the two agree.
+            // M17. Both are one call: the table and its three refusals live in
+            // `@burxt.hold` and `@burxt.held`, emitted once per program, so a call site here
+            // costs an argument and a call rather than an inlined table walk.
+            TypedExprKind::Hold { value, of } => {
+                // A class is a struct VALUE here, so the value has to be COPIED into the region
+                // before there is anything to file. That is not overhead the handle adds — it is
+                // the requirement the handle exists to meet: what a host holds between calls must
+                // outlive the call, and a stack slot does not. The copy is one value's worth,
+                // once, at the boundary.
+                let v = self.gen_expr(value)?;
+                let size = self.layout_of(&value.ty).size;
+                let bytes = self.ctx.i64_type().const_int(size, false);
+                let home = self.build_alloc_bytes(bytes)?;
+                self.builder.build_store(home, v).map_err(|e| e.to_string())?;
+                let v = home;
+                let tag = self.handle_tag(of);
+                let f = self.hold_fn()?;
+                let tag_v = self.ctx.i64_type().const_int(tag, false);
+                let call = self
+                    .builder
+                    .build_call(f, &[v.into(), tag_v.into()], "hold")
+                    .map_err(|e| e.to_string())?;
+                match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    _ => Err("codegen bug: burxt.hold answered nothing".to_string()),
+                }
+            }
+            TypedExprKind::Held { handle, of } => {
+                let h = self.gen_expr(handle)?.into_int_value();
+                let tag = self.handle_tag(of);
+                let f = self.held_fn()?;
+                let tag_v = self.ctx.i64_type().const_int(tag, false);
+                let call = self
+                    .builder
+                    .build_call(f, &[h.into(), tag_v.into()], "held")
+                    .map_err(|e| e.to_string())?;
+                let home = match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
+                    _ => return Err("codegen bug: burxt.held answered nothing".to_string()),
+                };
+                // The table answers WHERE the value is; the expression's type is the value, so
+                // it is loaded back out. Any refusal has already exited by now.
+                let ty = self.llvm_type(&e.ty);
+                self.builder
+                    .build_load(ty, home, "held_value")
+                    .map_err(|e| e.to_string())
+            }
             TypedExprKind::CBytesAt { pointer, count } => {
                 let ptr_val = self.gen_expr(pointer)?.into_pointer_value();
                 let n = self.gen_expr(count)?.into_int_value();
@@ -6261,6 +6339,301 @@ impl<'ctx> CodeGen<'ctx> {
         }
         self.alloc_fn = Some(f);
         Ok(f)
+    }
+
+
+    /// The handle table's globals: where a held value is, which generation issued it, and what
+    /// type it was. M17.
+    ///
+    /// Three parallel arrays rather than an array of structs, because every one of them is
+    /// indexed by the same slot number and LLVM addresses a flat array in one `getelementptr`.
+    fn handle_globals(
+        &mut self,
+    ) -> (
+        inkwell::values::GlobalValue<'ctx>,
+        inkwell::values::GlobalValue<'ctx>,
+        inkwell::values::GlobalValue<'ctx>,
+        inkwell::values::GlobalValue<'ctx>,
+    ) {
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let i64t = self.ctx.i64_type();
+        let make = |m: &inkwell::module::Module<'ctx>, name: &str, ty: inkwell::types::BasicTypeEnum<'ctx>| {
+            if let Some(g) = m.get_global(name) {
+                return g;
+            }
+            let g = m.add_global(ty, None, name);
+            match ty {
+                inkwell::types::BasicTypeEnum::ArrayType(a) => g.set_initializer(&a.const_zero()),
+                _ => g.set_initializer(&i64t.const_zero()),
+            }
+            g
+        };
+        let slots = HANDLE_SLOTS as u32;
+        (
+            make(&self.module, "burxt.handle.where", ptr.array_type(slots).into()),
+            make(&self.module, "burxt.handle.generation", i64t.array_type(slots).into()),
+            make(&self.module, "burxt.handle.tag", i64t.array_type(slots).into()),
+            make(&self.module, "burxt.handle.next", i64t.into()),
+        )
+    }
+
+    /// `ptr @burxt.hold(ptr value, i64 tag) -> i64` — file a value, answer a packed handle.
+    ///
+    /// **The generation is what an index alone cannot do.** An index catches out-of-range and
+    /// misses the case that actually happens: a host that kept a handle after a later `update`
+    /// replaced the value. Slot 0 stays live across that, so an index check passes and the host
+    /// reads the wrong model with no diagnostic — the silent use-after-free this milestone
+    /// exists to refuse. So each slot counts how many times it has been issued, and the count
+    /// travels in the handle.
+    ///
+    /// Slots are reused round-robin on purpose. A UI builds a model per keystroke, so handles
+    /// are made in the thousands and a table that only grew would be the leak wearing a hat.
+    /// Reuse is safe precisely because the generation moved.
+    fn hold_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.hold_fn {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved = self.builder.get_insert_block();
+        let (wheres, gens, tags, next) = self.handle_globals();
+        let i64t = self.ctx.i64_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+
+        let f = self.module.add_function(
+            "burxt.hold",
+            i64t.fn_type(&[ptr.into(), i64t.into()], false),
+            None,
+        );
+        let entry = self.ctx.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        let value = f.get_nth_param(0).unwrap().into_pointer_value();
+        let tag = f.get_nth_param(1).unwrap().into_int_value();
+
+        let n = self
+            .builder
+            .build_load(i64t, next.as_pointer_value(), "next")
+            .map_err(err)?
+            .into_int_value();
+        let mask = i64t.const_int(HANDLE_SLOTS - 1, false);
+        let slot = self.builder.build_and(n, mask, "slot").map_err(err)?;
+        let bumped = self
+            .builder
+            .build_int_add(n, i64t.const_int(1, false), "next_after")
+            .map_err(err)?;
+        self.builder.build_store(next.as_pointer_value(), bumped).map_err(err)?;
+
+        let gen_slot = unsafe {
+            self.builder.build_gep(i64t, gens.as_pointer_value(), &[slot], "gen_slot")
+        }
+        .map_err(err)?;
+        let was = self
+            .builder
+            .build_load(i64t, gen_slot, "was")
+            .map_err(err)?
+            .into_int_value();
+        let now = self
+            .builder
+            .build_int_add(was, i64t.const_int(1, false), "generation")
+            .map_err(err)?;
+        self.builder.build_store(gen_slot, now).map_err(err)?;
+
+        let where_slot = unsafe {
+            self.builder.build_gep(ptr, wheres.as_pointer_value(), &[slot], "where_slot")
+        }
+        .map_err(err)?;
+        self.builder.build_store(where_slot, value).map_err(err)?;
+        let tag_slot = unsafe {
+            self.builder.build_gep(i64t, tags.as_pointer_value(), &[slot], "tag_slot")
+        }
+        .map_err(err)?;
+        self.builder.build_store(tag_slot, tag).map_err(err)?;
+
+        // (generation << 32) | slot. A handle of 0 is therefore never one this issued, because
+        // a generation is incremented BEFORE it travels — so the integer a host has not been
+        // given yet is refused rather than read as slot zero.
+        let high = self
+            .builder
+            .build_left_shift(now, i64t.const_int(32, false), "high")
+            .map_err(err)?;
+        let packed = self.builder.build_or(high, slot, "handle").map_err(err)?;
+        self.builder.build_return(Some(&packed)).map_err(err)?;
+
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        self.hold_fn = Some(f);
+        Ok(f)
+    }
+
+    /// `ptr @burxt.held(i64 handle, i64 tag) -> ptr` — the value back, or a named refusal.
+    ///
+    /// **Three causes, three messages, and that is the requirement rather than a nicety.** A
+    /// check that cannot tell two failures apart sends the reader to the wrong one — the same
+    /// rule the `std/` diagnostics were rewritten to obey. "Never issued" is a host bug in the
+    /// integer it kept; "superseded" is a host bug in WHEN it used one, and the fix is to keep
+    /// the handle the last call answered with; "another type" is a wiring mistake, or a handle
+    /// from a different module, and no amount of retrying will help.
+    fn held_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.held_fn {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved = self.builder.get_insert_block();
+        let (wheres, gens, tags, _next) = self.handle_globals();
+        let i64t = self.ctx.i64_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+
+        let f = self.module.add_function(
+            "burxt.held",
+            ptr.fn_type(&[i64t.into(), i64t.into()], false),
+            None,
+        );
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let unknown_bb = self.ctx.append_basic_block(f, "never_issued");
+        let in_range_bb = self.ctx.append_basic_block(f, "slot_in_range");
+        let live_bb = self.ctx.append_basic_block(f, "slot_live");
+        let stale_bb = self.ctx.append_basic_block(f, "superseded");
+        let same_gen_bb = self.ctx.append_basic_block(f, "generation_matches");
+        let wrong_type_bb = self.ctx.append_basic_block(f, "another_type");
+        let ok_bb = self.ctx.append_basic_block(f, "ok");
+
+        self.builder.position_at_end(entry);
+        let handle = f.get_nth_param(0).unwrap().into_int_value();
+        let want = f.get_nth_param(1).unwrap().into_int_value();
+        let low = i64t.const_int(0xFFFF_FFFF, false);
+        let slot = self.builder.build_and(handle, low, "slot").map_err(err)?;
+        let gen = self
+            .builder
+            .build_right_shift(handle, i64t.const_int(32, false), false, "generation")
+            .map_err(err)?;
+        let past = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGE,
+                slot,
+                i64t.const_int(HANDLE_SLOTS, false),
+                "past_table",
+            )
+            .map_err(err)?;
+        self.builder.build_conditional_branch(past, unknown_bb, in_range_bb).map_err(err)?;
+
+        self.builder.position_at_end(in_range_bb);
+        let gen_slot = unsafe {
+            self.builder.build_gep(i64t, gens.as_pointer_value(), &[slot], "gen_slot")
+        }
+        .map_err(err)?;
+        let live = self
+            .builder
+            .build_load(i64t, gen_slot, "live")
+            .map_err(err)?
+            .into_int_value();
+        // A slot at generation zero has never been issued, so this is the same failure as an
+        // index past the end rather than a stale handle — and saying "superseded" about a value
+        // that never existed would send the reader looking for a call that never happened.
+        let never = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, live, i64t.const_zero(), "never")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(never, unknown_bb, live_bb).map_err(err)?;
+
+        self.builder.position_at_end(live_bb);
+        let same = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, gen, live, "same_generation")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(same, same_gen_bb, stale_bb).map_err(err)?;
+
+        self.builder.position_at_end(same_gen_bb);
+        let tag_slot = unsafe {
+            self.builder.build_gep(i64t, tags.as_pointer_value(), &[slot], "tag_slot")
+        }
+        .map_err(err)?;
+        let held_tag = self
+            .builder
+            .build_load(i64t, tag_slot, "held_tag")
+            .map_err(err)?
+            .into_int_value();
+        let matches = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, held_tag, want, "tag_matches")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(matches, ok_bb, wrong_type_bb).map_err(err)?;
+
+        self.builder.position_at_end(ok_bb);
+        let where_slot = unsafe {
+            self.builder.build_gep(ptr, wheres.as_pointer_value(), &[slot], "where_slot")
+        }
+        .map_err(err)?;
+        let value = self.builder.build_load(ptr, where_slot, "value").map_err(err)?;
+        self.builder.build_return(Some(&value)).map_err(err)?;
+
+        self.builder.position_at_end(unknown_bb);
+        self.build_panic(
+            "burxt runtime error: this handle was never issued by this module. An integer that \
+             did not come from a call into this module names nothing here.\n",
+        )?;
+
+        // The one message that must carry NUMBERS, because the two generations are the whole
+        // content of the advice: keep the handle the last call answered with.
+        self.builder.position_at_end(stale_bb);
+        let fprintf = self.fprintf_fn();
+        let (stderr_g, _fputs, exit) = self.panic_deps();
+        let fmt = self.global_str(
+            "burxt runtime error: this handle refers to a value that was replaced by a later \
+             call. It was issued at generation %lld and the live one is generation %lld — use \
+             the handle the last call answered with.\n",
+            "stale_handle_msg",
+        );
+        let stream = self.load_stderr(stderr_g)?;
+        self.builder
+            .build_call(fprintf, &[stream.into(), fmt.into(), gen.into(), live.into()], "fprintf")
+            .map_err(err)?;
+        self.build_exit70(exit)?;
+
+        self.builder.position_at_end(wrong_type_bb);
+        self.build_panic(
+            "burxt runtime error: this handle names a value of a different type, or came from a \
+             different module. A handle is only meaningful to the module that issued it.\n",
+        )?;
+
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        self.held_fn = Some(f);
+        Ok(f)
+    }
+
+    /// The runtime tag for a held type: which class, and which module issued it.
+    ///
+    /// **The module half is what makes "a handle from another module is refused" true**, and it
+    /// has to be derived rather than random: Burxt compiles reproducibly, so a per-build random
+    /// id would make the same source produce different bytes. FNV-1a over the program's declared
+    /// type names is stable for the same program and different for a different one.
+    fn handle_tag(&mut self, class: &str) -> u64 {
+        let fingerprint = match self.module_fingerprint {
+            Some(f) => f,
+            None => {
+                let mut names: Vec<&String> = self.struct_fields.keys().collect();
+                names.sort();
+                let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+                for n in names {
+                    for b in n.as_bytes() {
+                        h ^= *b as u64;
+                        h = h.wrapping_mul(0x100_0000_01b3);
+                    }
+                    h ^= 0xff;
+                    h = h.wrapping_mul(0x100_0000_01b3);
+                }
+                *self.module_fingerprint.insert(h)
+            }
+        };
+        let mut h = fingerprint;
+        for b in class.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+        // Zero is the "empty slot" tag, so a real one is never zero.
+        if h == 0 { 1 } else { h }
     }
 
     /// Emit a call to `@burxt.strlen(s)` — the byte length of a String.

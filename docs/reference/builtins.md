@@ -28,6 +28,8 @@ The names a program may not declare, because the language already means somethin
 | [`print`](#print) | nothing | no | — |
 | [`len`](#len) | how many elements, or how many BYTES of a `String` | no | — |
 | [`byte_at`](#byte-at) | the byte at `i` | no | — |
+| [`handle_of`](#handle-of) | a `Handle<T>` naming `value`, for a host to carry between calls | **yes** | — |
+| [`handle_value`](#handle-value) | the value the handle names | no | — |
 | [`byte_as_string`](#byte-as-string) | a one-byte `String` holding `n` | **yes** | — |
 | [`substring`](#substring) | `count` bytes of `s`, starting at `from` | **yes** | — |
 | [`to_string`](#to-string) | the value, written out | **yes** | — |
@@ -213,6 +215,38 @@ byte_at(s, i) -> Int
 Bounds are always checked. The name says BYTE so that nothing has to guess whether an index into text means a byte or a character.
 
 **Answers** the byte at `i`. **Allocates:** no.
+
+## `handle_of`
+{: #handle-of}
+
+```burxt
+handle_of(value) -> Handle<T>
+```
+
+**A value a host can hold while Burxt is not running.** A browser calls in on every click, and between two calls there is nowhere for the application's state to be — so it crosses as text, comes back as `Json`, and something hand-validates it into a class. That surrenders the checking property exactly where a program works hardest.
+
+`handle_of` files the value and answers an integer the host keeps. It is an **index into a table, never an address**: a pointer handed out is a pointer a host can invent, and a wrong one is type confusion with no diagnostic. The table costs a slot and a lookup, and buys three named refusals instead.
+
+The value is COPIED into the region, because what outlives a call cannot live in a stack slot. Takes a class — the state a host carries — since a scalar has no place to point at.
+
+**Answers** a `Handle<T>` naming `value`, for a host to carry between calls. **Allocates:** yes.
+
+## `handle_value`
+{: #handle-value}
+
+```burxt
+handle_value(handle) -> T
+```
+
+The other half of `handle_of`. **Three failures, three messages**, because a check that cannot tell them apart sends the reader to the wrong one:
+
+- *never issued by this module* — the integer did not come from a call in here;
+- *replaced by a later call* — it did, and then something newer superseded it. The message names the generation the handle carried and the generation that is live, since the fix is to keep the handle the last call answered with;
+- *names a value of a different type, or came from a different module*.
+
+The second is the one an index alone cannot catch, and the one that actually happens: a slot stays live across an update, so an index check passes and the host reads the wrong value silently. That is the use-after-free this exists to refuse.
+
+**Answers** the value the handle names. **Allocates:** no.
 
 ## `byte_as_string`
 {: #byte-as-string}

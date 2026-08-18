@@ -62,7 +62,7 @@
 
   // Built-in calls. `old` is one too: it is spelled like a call and means "before the body ran".
   var BUILTIN = words(
-    'len byte_at byte_as_string push read_file to_string old substring truncate write_file write_bytes ' +
+    'len byte_at byte_as_string handle_of handle_value push read_file to_string old substring truncate write_file write_bytes ' +
     'argument argument_count divide_floor divide_toward_zero remainder hash exit ' +
     'bit_and bit_or bit_xor bit_not shift_left shift_right_zeros shift_right_sign ' +
     'c_is_null c_string_at c_bytes_at c_bytes_to'

@@ -128,6 +128,23 @@ pub enum Type {
     /// argument `mangle` makes for `$`. It also means the messages that DON'T route through
     /// `show` — and there are several — print the right thing anyway.
     Tuple(Vec<Type>),
+    /// `Handle<T>` — a value the HOST is holding while Burxt is not running. M17.
+    ///
+    /// **An index into a table, never an address, and that is the whole design.** The
+    /// language has no `c_address_of` and is not getting one: a pointer handed to a host
+    /// is a pointer the host can invent, and a wrong one is type confusion with no
+    /// diagnostic. So `hold` files the value and answers `(generation, index)` packed into
+    /// an i64, and `held` looks it up. An integer that was never issued, or was superseded,
+    /// or names a value of another type, is a NAMED refusal in all three cases.
+    ///
+    /// **The type argument is not decoration even though the runtime re-checks it.** A host
+    /// can pass any integer, so the tag in the table is what actually protects — but
+    /// `Handle<Model>` is what keeps application state inside the type system where
+    /// `burxt review` can see it, which is the entire reason to prefer this over a mutable
+    /// global. A bare `Int` would close the same hole and give the property away.
+    ///
+    /// At the ABI it IS an i64, so a host sees an ordinary number and needs no marshalling.
+    Handle(Box<Type>),
     /// A type PARAMETER, inside a generic's own body and signature — the `T` of
     /// `fn largest<T>(xs: [T]) -> T`. It is not a type any value has: every one is
     /// replaced by a concrete type before codegen, one copy per instantiation.
@@ -174,6 +191,7 @@ impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Int => write!(f, "Int"),
+            Type::Handle(inner) => write!(f, "Handle<{}>", inner),
             Type::Bool => write!(f, "Bool"),
             Type::String => write!(f, "String"),
             Type::CInt => write!(f, "CInt"),
