@@ -6593,9 +6593,13 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_return(Some(&value)).map_err(err)?;
 
         self.builder.position_at_end(unknown_bb);
+        // Read with the cause deliberately forgotten, which is star-burxt's rule: *a diagnostic
+        // written while you know the answer is a diagnostic written for someone who does.* The
+        // old wording described the situation accurately and told a host author nothing to DO.
         self.build_panic(
-            "burxt runtime error: this handle was never issued by this module. An integer that \
-             did not come from a call into this module names nothing here.\n",
+            "burxt runtime error: this handle was never issued by this module. Pass back exactly \
+             the integer a call into this module answered with — a 0, a remembered constant, or \
+             a number from somewhere else names nothing here.\n",
         )?;
 
         // The one message that must carry NUMBERS, because the two generations are the whole
@@ -6616,9 +6620,18 @@ impl<'ctx> CodeGen<'ctx> {
         self.build_exit70(exit)?;
 
         self.builder.position_at_end(wrong_type_bb);
+        // **"or came from a different module" was advice for a cause this branch cannot
+        // reach**, and it went out claiming a capability the check does not have. This compares
+        // the slot's tag — written by THIS module's own `handle_of` — against what this module
+        // expects, so a handle issued elsewhere finds this module's tag sitting there and
+        // matches. star-burxt measured it: two fresh instances issue identical bit patterns and
+        // neither detects the other. Cross-module detection needs the fingerprint in the HANDLE
+        // rather than the table, and is recorded open. Until it exists, saying so here sends a
+        // host author hunting a module mix-up that is not what happened.
         self.build_panic(
-            "burxt runtime error: this handle names a value of a different type, or came from a \
-             different module. A handle is only meaningful to the module that issued it.\n",
+            "burxt runtime error: this handle names a value of a different type than the one \
+             being asked for. A handle from `handle_of(Model)` reads back only as a Model — \
+             check that the call you passed it to is the one that issued it.\n",
         )?;
 
         if let Some(bb) = saved {
