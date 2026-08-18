@@ -216,6 +216,27 @@ pub fn format(src: &str) -> Result<String, Diagnostic> {
         if continued {
             level += 2;
         }
+        // ---- the one shape whose output reads oddest, reported from real use --------------------
+        //
+        // BMX, after formatting `burxt/bmx.bx` on 1.4.0: a multi-line struct literal inside a call
+        // gets the continuation's +2 for its FIELDS, while the closing line dedents back to the
+        // statement — so the block's opening and closing edges do not line up with each other:
+        //
+        //     let added: Int = push(out, Bmx.InlineBlock(BmxInline {
+        //                 name: name,
+        //                 head: substring(text, open + 1, shut - open - 1),
+        //     }));
+        //
+        // It is consistent and it is not wrong: `dip` dedents the `}` line by one while `continued`
+        // added two, and every file in the corpus agrees. **Left as it is on purpose.** Changing the
+        // rule reflows the whole corpus in BOTH compilers and the differential that holds them
+        // byte-identical, which is a large change for a cosmetic gain — and the corpus test is what
+        // makes the rule trustworthy, so churning it to taste is the wrong trade.
+        //
+        // Recorded here rather than in a tracker because whoever revisits the continuation rule
+        // reads this function, and this is the case that should be tried against a new one first.
+        // BMX's own verdict: "consistent, not wrong, and I have taken it rather than fighting it."
+
         if level < 0 {
             level = 0;
         }
