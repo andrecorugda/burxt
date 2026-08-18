@@ -68,6 +68,27 @@
     <a href="{{ site.baseurl }}/install/"   class="{% if page.section == 'install' %}here{% endif %}">Install</a>
     <a href="https://github.com/andrecorugda/burxt">GitHub</a>
   </span>
+
+  {%- comment -%}
+    The ecosystem, as WORDMARKS rather than words.
+
+    The `b` in each is Burxt's own logo doing duty as the letter — `[b]mx` and `star-[b]` — which
+    is the whole of the branding decision: a subproject is not a separate identity with a family
+    resemblance, it is this letter inside its own name. So there is no second icon set for them
+    here: a wordmark carries a NAME, and a navbar carries names.
+
+    Their file-type icons are a different job and live in `assets/subprojects/` — a document with
+    the b for `.bmx`, a gear with the b for `.sbmx`. **The bare `b` belongs to Burxt alone**, since
+    a file tree showing three bare b's would say the three things are the same thing.
+  {%- endcomment -%}
+  <span class="eco">
+    <a href="https://bmx.burxt-lang.org/" title="BMX — the markup format">
+      <img src="{{ site.baseurl }}/assets/bmx-wordmark.svg" alt="BMX">
+    </a>
+    <a href="https://star.burxt-lang.org/" title="star-burxt — the framework">
+      <img src="{{ site.baseurl }}/assets/starb-wordmark.svg" alt="star-burxt">
+    </a>
+  </span>
 </nav>
 
 <!-- The drawer. On a page with no sidebar this is the ONLY navigation below 900px, because the
@@ -84,6 +105,16 @@
         <li class="topic"><a href="{{ site.baseurl }}/examples/"{% if page.section == "examples" %} class="here"{% endif %}><span>Examples</span></a></li>
         <li class="topic"><a href="{{ site.baseurl }}/install/"{% if page.section == "install" %} class="here"{% endif %}><span>Install</span></a></li>
         <li class="topic"><a href="https://github.com/andrecorugda/burxt"><span>GitHub</span></a></li>
+      </ul>
+    </div>
+    <!-- The ecosystem again, because below 900px the bar's link row and its wordmarks are BOTH
+         hidden and this drawer is the only navigation there is. Words rather than marks here: a
+         drawer is a list, and a list of images is harder to scan than a list of names. -->
+    <div class="group site">
+      <h2>Ecosystem</h2>
+      <ul>
+        <li class="topic"><a href="https://bmx.burxt-lang.org/"><span>BMX — the markup format</span></a></li>
+        <li class="topic"><a href="https://star.burxt-lang.org/"><span>star-burxt — the framework</span></a></li>
       </ul>
     </div>
 </nav>

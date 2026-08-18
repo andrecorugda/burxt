@@ -264,12 +264,32 @@ The work you stop doing is checking for the mistakes on this page.
 <p style="font-size:14px; margin-top:2.5rem;">
 <strong>Burxt 1.3.0 is released.</strong> This is the release two real packages were built against: a
 dependency can now reach the standard library with <code>use "std/…"</code>, which is what lets a
-library or a framework live in its own repository instead of inside the compiler. Two already do —
-<a href="https://bmx.burxt-lang.org/">BMX</a> and
-<a href="https://star.burxt-lang.org/">star-burxt</a>. You can still write a program, test it, debug
+library or a framework live in its own repository instead of inside the compiler. Two already do.
+You can still write a program, test it, debug
 it, serve TCP and fork workers, speak TLS by binding OpenSSL, and ship it. There are no threads and
 no DNS —
 <a href="{{ site.baseurl }}/limitations.html">every gap is named, with its reason</a>.
 </p>
+
+<!-- The ecosystem, as wordmarks.
+
+     The `b` in each IS Burxt's logo standing in for the letter — `[b]mx`, `star-[b]` — which is the
+     branding decision rather than a coincidence of shape: a subproject is this letter inside its own
+     name, not a separate identity that resembles one. The bare `b` stays Burxt's alone.
+
+     Each mark is followed by what the thing IS, because a wordmark carries a name and a name is not
+     an explanation — a reader who has never heard of either learns nothing from two logos. -->
+<div class="eco-row">
+  <a href="https://bmx.burxt-lang.org/">
+    <img src="{{ site.baseurl }}/assets/bmx-wordmark.svg" alt="BMX">
+    <span>A markup format with a testable specification and two implementations. Its documents
+    compile to Burxt.</span>
+  </a>
+  <a href="https://star.burxt-lang.org/">
+    <img src="{{ site.baseurl }}/assets/starb-wordmark.svg" alt="star-burxt">
+    <span>A framework built on both: a <code>.bmx</code> document IS a component, rendered on a
+    server or in a browser from the same compiled bytes.</span>
+  </a>
+</div>
 
 </div>

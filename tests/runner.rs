@@ -7720,6 +7720,53 @@ fn every_limitation_the_docs_claim_is_still_true() {
 
 
 
+
+/// The editor icons are what `scripts/editor-icons.py` makes from the brand assets.
+///
+/// **Why this is a test and not a note in a README.** The artwork is a designer's and arrives as a
+/// tarball; the PADDING is a derivation with one number in it, and three icons have to agree on
+/// that number or a file tree looks ragged. `.bx`, `.bmx` and `.sbmx` sit on consecutive rows, and
+/// an eye reads inconsistent margins as misalignment rather than as three different logos.
+///
+/// The number exists because of a complaint, which is the part worth keeping: the shipped `.bx`
+/// icon filled 86% of its height — four clear pixels at 48px — and in a VS Code row that puts the
+/// glyph against the filename. Andre's words were that it "looks like it is really sticking to the
+/// edge making it no space on the file tree line". At 70% there are seven.
+///
+/// So a new drop of artwork that is not re-derived, or a hand-edited PNG, fails here rather than
+/// shipping a family that no longer matches.
+#[test]
+fn the_editor_icons_are_derived_from_the_brand_assets() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if Command::new("python3").arg("--version").output().is_err() {
+        eprintln!("skipping: python3 is not available");
+        return;
+    }
+    // Pillow is what does the resampling; without it the script cannot answer.
+    let has_pil = Command::new("python3")
+        .args(["-c", "import PIL"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !has_pil {
+        eprintln!("skipping: python3 Pillow is not installed");
+        return;
+    }
+    let out = Command::new("python3")
+        .arg(root.join("scripts/editor-icons.py"))
+        .arg("--check")
+        .current_dir(root)
+        .output()
+        .expect("editor-icons.py");
+    assert!(
+        out.status.success(),
+        "the editor icons are not what scripts/editor-icons.py makes — regenerate them:\n\
+             python3 scripts/editor-icons.py\n\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// A Burxt program fetches a page over VERIFIED HTTPS, and refuses a certificate that is not for
 /// the host it asked for.
 ///

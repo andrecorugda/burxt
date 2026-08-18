@@ -1028,11 +1028,19 @@ def render_index(kw, ren, cmds):
     # They are here anyway because a reader looking for "how do I build a page" comes to the
     # reference index first, and a list that answers "not here" by saying nothing is a list that
     # sends them away.
-    out.append('<li><a href="https://bmx.burxt-lang.org/"><span>BMX</span> '
+    #
+    # Carrying their WORDMARKS rather than their names, because the mark says something the name
+    # cannot: the `b` in each one is Burxt's own logo standing in for the letter — `[b]mx`,
+    # `star-[b]` — so a reader seeing them beside `lib/` entries reads "related to this" without
+    # being told. The bare `b` stays Burxt's alone; their file-type icons (a document, a gear) are
+    # a different job and live in `assets/subprojects/`.
+    out.append('<li><a href="https://bmx.burxt-lang.org/">'
+               '<span><img class="eco-mark" src="../assets/bmx-wordmark.svg" alt="BMX"></span> '
                '<span class="what">the markup format — its own guide, spec and conformance '
                'suite</span></a></li>')
-    out.append('<li><a href="https://star.burxt-lang.org/"><span>star-burxt</span> '
-               '<span class="what">a front-end framework written in Burxt — a package you '
+    out.append('<li><a href="https://star.burxt-lang.org/">'
+               '<span><img class="eco-mark" src="../assets/starb-wordmark.svg" alt="star-burxt">'
+               '</span> <span class="what">a front-end framework written in Burxt — a package you '
                'depend on, not part of the library</span></a></li>')
     out.append("</ul>\n")
 
