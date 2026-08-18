@@ -261,11 +261,12 @@ the call that made the choice, not at the body that needed it.
   a bound, or take a `String`.
 - **A generic `external function`.** C has no type parameters, so there would be no symbol to link
   against.
-- **An enum as a *generic enum's* payload.** `Holder<Inner>` where `Inner` is itself an enum is
-  refused: the inner one's payload area would have to be big enough for the outer one, so there is no
-  finite size without indirection. A **class** payload — `Holder<Point>` — works, and it is checked
-  per *instantiation*, because `Holder<T>`'s payload is neither one thing nor the other until an
-  argument says which.
+- **A payload that carries the enum back to itself by value.** `Holder<Inner>` where `Inner` is
+  another enum is fine — an enum is one tag cell plus its widest variant, a finite number. What is
+  refused is a cycle: `class Node { next: Holder<Node> }` would make `Node` wider than `Node`. A slice
+  ends the walk whatever it points at, so `[Node]` is the way to write it, and this is checked per
+  *instantiation*, because `Holder<T>`'s payload is neither one thing nor the other until an argument
+  says which.
 - **Type arguments on a plain type**, and the wrong number of them. Both say so by name.
 
 ### Under the hood, if you are reading the compiler

@@ -1,0 +1,27 @@
+// The linked list, which is the first thing anybody tries, and it CRASHED the compiler.
+//
+//     class Node { label: String, next: Maybe<Node> }
+//
+// A `Node` holds a `Maybe<Node>` by value, which holds a `Node` by value. No finite size — and
+// stage-0 answered "no errors", then died with a bare `stack overflow, aborting` and a core dump
+// in `build` and in `layout`. An anonymous stack overflow is the one failure this language forbids,
+// and the compiler was the thing doing it.
+//
+// The finiteness walk existed and followed only `Type::Named` FIELDS, so it stepped from `Node`
+// into the instantiation and stopped there, having found no struct fields — because an
+// instantiated enum has variants instead. One arm, not a new rule.
+//
+// **What must stay legal is the reason this is not a blunt "no self-reference" ban**, and all
+// three of these compile today:
+//
+//     class Node { kids: [Node] }                   a slice is a pointer
+//     class Node { kids: Map<String, Node> }        a generic whose fields are slices
+//     enum Tree { Branch([Tree]), Leaf(Int) }       most recursive data, written this way
+//
+// So the rule is FINITE WIDTH and a slice ends the walk. An array does not: it is N copies.
+enum Maybe<T> { Just(T), Nothing }
+
+class Node { label: String, next: Maybe<Node> }
+
+let x: Int = 1;
+print(x);

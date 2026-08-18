@@ -77,6 +77,10 @@ pure function option_is_none<T>(o: Option<T>) -> Bool {
 // recognises absence by the variant name `None`, so nothing in the compiler needs
 // to know this file exists.
 //
-// A payload may be a scalar, a String, a class or an array. `Option<Point>` works since
-// v0.0.118 — the layout was one tag cell plus the widest variant all along. Another ENUM is
-// still refused, because an enum inside an enum has no finite size without indirection.
+// A payload may be anything of finite width: a scalar, a String, a class, an array, or another
+// enum. `Option<Point>` works since v0.0.118 — the layout was one tag cell plus the widest
+// variant all along — and so does `Option<Colour>`, since an enum is that same finite number.
+//
+// What is refused is a payload that carries the enum BACK to itself by value: `Option<Node>` as a
+// field of `Node` would make `Node` wider than `Node`. Hold it behind a slice — `[Node]` — which
+// is a pointer, so the size is finite and the recursion still works.

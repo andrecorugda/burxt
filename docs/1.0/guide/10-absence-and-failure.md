@@ -289,9 +289,26 @@ recorded, not forgotten.
 something else, write the `match`. Somebody has to decide what the caller's failure *means*, and that
 decision does not belong to an operator.
 
-**A payload may not be another enum.** `Option<Point>` works — a class payload is fine — but
-`Option<Inner>` where `Inner` is an enum is refused, because an enum inside an enum has no finite size
-without indirection. Same reason as in [Generics](09-generics.md).
+**A payload may be anything with a finite width**, which is nearly everything. `Option<Point>` works,
+and so does `Option<Colour>` where `Colour` is another enum — an enum inside an enum is one tag cell
+plus the widest variant, and that is a finite number.
+
+What is refused is a payload that carries the enum **back to itself by value**, because then the width
+would have to be bigger than the width:
+
+```burxt
+class Node { label: String, next: Option<Node> }
+```
+
+```
+error: a `Node` cannot contain a `Node` — it would have no finite size (containment cycle:
+       Node -> Option<Node> -> Node). Hold it behind a slice (`[Node]`) instead: a slice is a
+       pointer, so the size is finite and the recursion still works.
+```
+
+Writing it `next: [Node]` is the fix, and it is how recursive data is written here — a slice ends the
+question whatever it points at, which is why `enum Json` in `lib/json.bx` can hold a list of itself.
+Same rule as in [Generics](09-generics.md).
 
 ## When you reach for it
 {: #when-you-reach-for-it}

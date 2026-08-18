@@ -1,0 +1,25 @@
+// A containment cycle that passes THROUGH AN ENUM, and the carrier is declared afterwards.
+//
+// `enum E { V(F) }` with `class F { e: E }` has no finite size for the same reason
+// `a_containment_cycle_through_a_second_class` does not: sizeof(E) includes sizeof(F), which
+// includes sizeof(E). Both compilers had the walk that decides this and neither ran it here.
+//
+// Stage-0's rule was gated on `is_enum(payload)` — it asked what KIND the payload was when the
+// question is whether the width is finite. A payload that is a CLASS carrying the enum back makes
+// it wider than itself exactly as an enum payload would, so the gate was a hole, and the program
+// below passed `check` and then overflowed the COMPILER'S OWN stack in `payload_cells`.
+//
+// **The order of these two declarations is the point, and it is why this fixture is not a
+// duplicate of the class one.** Stage-1's check ran in the pass that FILLS the declaration table,
+// so `find_type` answered -1 for anything not yet reached, and the check silently did nothing:
+//
+//     enum E { V(F) }   class F { e: E }      accepted, and stage-1 emitted a program
+//     class F { e: E }  enum E { V(F) }       refused
+//
+// the same program with two lines swapped. Its neighbour in that file carried a comment naming
+// exactly this trap; the check standing next to it was inside it. Written enum-first on purpose.
+enum E { V(F) }
+class F { e: E }
+
+let x: Int = 1;
+print(x);

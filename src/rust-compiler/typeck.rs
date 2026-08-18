@@ -2932,9 +2932,21 @@ impl TypeChecker {
                         // used to approximate by refusing every enum payload. What actually makes a
                         // width unbounded is a type containing ITSELF by value; recursion through a
                         // slice is a pointer and always terminates. See `embeds_by_value`.
-                        Type::Named(n)
-                            if self.is_enum(n)
-                                && self.embeds_by_value(t, &e.name, &mut Vec::new()) =>
+                          // NOT gated on `is_enum(n)`, and that gate was a hole. The question is
+                          // whether the width is FINITE, which does not depend on what KIND of type
+                          // the payload is — a payload that is a CLASS embedding this enum makes it
+                          // wider than itself exactly as an enum payload would:
+                          //
+                          //     enum E { V(F) }   class F { e: E }
+                          //     class Node { next: Option<Node> }
+                          //
+                          // Both passed `burxt check` and then killed the compiler in
+                          // `payload_cells`, which walks `Named` through fields and variants with no
+                          // cycle guard. A stack overflow with no message is the one failure this
+                          // language forbids, and it was the compiler doing it. Stage-1 refused both
+                          // by name already, so this closes a divergence as well as a crash.
+                          Type::Named(n)
+                              if self.embeds_by_value(t, &e.name, &mut Vec::new()) =>
                         {
                             return Err(format!(
                                 "`{}.{}` payload {} is `{}`, which contains `{}` by value — so \
@@ -4893,23 +4905,52 @@ impl TypeChecker {
         if trail.iter().any(|t| t == name) {
             return Err(format!(
                 "a `{}` cannot contain a `{}` — it would have no finite size \
-                 (containment cycle: {} -> {})",
-                trail[0],
-                trail[0],
-                trail.join(" -> "),
-                name
+                 (containment cycle: {} -> {}). Hold it behind a slice (`[{}]`) instead: \
+                 a slice is a pointer, so the size is finite and the recursion still works.",
+                as_written(&trail[0]),
+                as_written(&trail[0]),
+                trail.iter().map(|t| as_written(t)).collect::<Vec<_>>().join(" -> "),
+                as_written(name),
+                as_written(&trail[0])
             ));
         }
         trail.push(name.to_string());
         if let Some(fields) = self.fields_of(name) {
             for (_, ty) in fields {
-                if let Type::Named(inner) = ty {
-                    self.check_struct_finite(&inner, trail)?;
+                self.follow_finite(&ty, trail)?;
+            }
+        } else if let Some(variants) = self.variants_of(name) {
+            // An ENUM reached from a struct field is the same containment question, and
+            // leaving it out was a hole:
+            //
+            //     class Node { label: String, next: Option<Node> }
+            //
+            // passed `check` and then overflowed the compiler's own stack in `payload_cells`.
+            // `Option<Node>` is monomorphised to a `Named` before it gets here, so the walk
+            // only had to be willing to step through variants as well as fields.
+            for (_, payload) in variants {
+                for ty in &payload {
+                    self.follow_finite(ty, trail)?;
                 }
             }
         }
         trail.pop();
         Ok(())
+    }
+
+    /// Follow one field or payload for the finiteness walk.
+    ///
+    /// **A slice ends it, and that is the whole reason the rule is usable.** `[Node]` is a
+    /// pointer, a length and a capacity whatever it points at, so `class Node { kids: [Node] }`
+    /// and `class Node { kids: Map<String, Node> }` are both finite — both compile today, and
+    /// refusing either would be worse than the crash this fixes. An ARRAY is N copies by value,
+    /// so it does not end the walk. Same distinction `embeds_by_value` draws for enum payloads.
+    fn follow_finite(&self, ty: &Type, trail: &mut Vec<String>) -> Result<(), String> {
+        match ty {
+            Type::Named(inner) => self.check_struct_finite(inner, trail),
+            Type::Array { elem, .. } => self.follow_finite(elem, trail),
+            _ => Ok(()),
+        }
     }
 
     /// Render a struct's fields as `name: Type, ...` for error messages.
@@ -10339,6 +10380,19 @@ fn unify(
 /// The symbol one instantiation gets: `identity$Int`, `largest$Decimal_2`. `$` and `_`
 /// are both legal in an LLVM symbol and neither can appear in a Burxt identifier, so a
 /// mangled name can never collide with a name the program wrote.
+/// The way a mangled instantiation was SPELLED, for a message a reader has to act on.
+///
+/// `Option$Node` is not a name anyone wrote, and a diagnostic naming it sends the reader
+/// looking for a declaration that does not exist. The mangling is not fully reversible —
+/// `mangle` flattens `[Node]` to `_Node_` — so this reconstructs the shape, not the bytes,
+/// which is the right trade for prose: `Option<Node>` is what the reader typed.
+pub fn as_written(symbol: &str) -> String {
+    match symbol.split_once('$') {
+        None => symbol.to_string(),
+        Some((base, args)) => format!("{}<{}>", base, args.split('$').collect::<Vec<_>>().join(", ")),
+    }
+}
+
 pub fn mangle(name: &str, arguments: &[Type]) -> String {
     let mut out = String::from(name);
     for a in arguments {

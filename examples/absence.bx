@@ -128,11 +128,14 @@ match doubled_first(xs) {
 //            Write the type where the value lands — `let x: Option<...> = ...`
 //
 // A class payload works since v0.0.118 — `Option<Point>` is an ordinary thing to want, and it
-// used to be refused by name. What is still refused is an ENUM inside an enum, and the message
-// says why in terms of the argument that caused it:
-//     let held: Option<Shape> = Option.None;     // Shape is itself an enum
-//     error: `Option<Shape>` cannot be made: `Option.Some` would carry the enum `Shape`,
-//            which needs indirection to have a finite size.
+// used to be refused by name. So does another enum: `Option<Shape>` is one tag cell plus the
+// widest variant, a finite number. What is refused is a payload that carries the enum BACK to
+// itself by value, and the message says so in terms of the argument that caused it:
+//     class Node { next: Option<Node> }          // Node -> Option<Node> -> Node
+//     error: a `Node` cannot contain a `Node` — it would have no finite size
+//            (containment cycle: Node -> Option<Node> -> Node). Hold it behind a slice
+//            (`[Node]`) instead: a slice is a pointer, so the size is finite and the
+//            recursion still works.
 //
 // ---- `?` — the shortcut, and the one thing it will not do -------------------
 //

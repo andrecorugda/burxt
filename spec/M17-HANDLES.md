@@ -207,9 +207,22 @@ remember — which is the sign the mechanism is the right shape rather than a pa
 - **The reservation in a browser.** One strip means no doubling, but a 1 GB reserve is still half of
   wasm32's address space. A UI's model is small; the figure should be a build-time choice rather than
   the compiler's own number reused.
-- **What `copy_down` does with a cycle.** A model cannot contain one today — there is no way to build
-  a cycle in Burxt's value types — but that is a property worth asserting rather than assuming, since
-  the walker would not terminate if it were ever untrue.
+- ~~**What `copy_down` does with a cycle.**~~ **Settled, and asserting it is what found the bug.** The
+  claim was *"a model cannot contain one today"*. Testing it rather than believing it produced a
+  **compiler crash**: `class Node { label: String, next: Option<Node> }` passed `burxt check` and then
+  died in `payload_cells` with a bare `stack overflow, aborting` and a core dump, in `build` and in
+  `layout`. Stage-1 accepted `enum E { V(F) } class F { e: E }` and emitted a program for it.
+
+  Both compilers now refuse a containment cycle by name, whichever way round it is written, and a
+  slice still ends the walk — so `[Node]`, `Map<String, Node>` and `enum Tree { Branch([Tree]) }` stay
+  legal, which is the shape recursive data is actually written in. Held by
+  `tests/fail/a_containment_cycle_through_a_generic_instantiation` and
+  `tests/fail/a_containment_cycle_through_an_enum_payload`, which the fail suite runs as an equality
+  across both compilers.
+
+  **So `copy_down`'s termination now rests on a checked rule rather than an observation** — which was
+  the whole point of writing the assumption down instead of relying on it. A property nobody has
+  tried to break is a claim, not an invariant.
 - **Where the mark lives across a call.** The host holds a handle; the runtime holds the mark that
   handle's frame began at. That is one more thing the table stores, and it is the natural home for it.
 

@@ -2511,30 +2511,15 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int {
                 while p < variant.c {
                     let payload: Int = self.nested_children[variant.b + p];
                     let shaped: Int = self.check_type_shape(src, payload, variant.token);
-                    let held: Node = self.nodes[payload];
-                    if held.kind == 46 {
-                        // The rule is FINITE WIDTH, not "no enum payload". A width is unbounded only
-                        // when a type contains ITSELF by value; recursion through a slice is a
-                        // pointer and terminates, which is most recursive data — a tree, a JSON
-                        // document, an AST.
-                        //
-                        // This used to be two flat refusals: one for `E` inside `E` and one for `E`
-                        // inside `F`. The second was a proxy and refused finite shapes, and stage-0
-                        // did not obey it either — the same shape reached through a generic
-                        // instantiation was allowed and worked. One walk now, covering both, and it
-                        // follows classes and arrays as well because either can carry the enum on.
-                        let carried: Type = self.declared_type(src, payload);
-                        if self.embeds_by_value(src, carried, name.start, name.length) {
-                            let complained: Int = self.complain_at(src, variant.token,
-                                        "this variant carries `"
-                                        + substring(src, name.start, name.length)
-                                        + "` by value, so its size would have to be bigger than itself. "
-                                        + "Carry it behind a slice — `["
-                                        + substring(src, name.start, name.length)
-                                        + "]` — which is a pointer, so the size is finite and the recursion "
-                                    + "still works");
-                        }
-                    }
+                    // The FINITE WIDTH check that used to stand here has moved to the SECOND
+                    // pass below, and definition order is why it had to. `find_type` answers -1
+                    // for a declaration this pass has not reached yet, so
+                    //
+                    //     enum E { V(F) }   class F { e: E }      accepted, and IR was emitted
+                    //     class F { e: E }  enum E { V(F) }       refused
+                    //
+                    // were the same program with two lines swapped. Its neighbour's comment
+                    // already named this trap; the check standing next to it was inside it.
                     p += 1;
                 }
                 v += 1;
@@ -2720,6 +2705,39 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int {
                         "a `" + substring(src, named.start, named.length)
                         + "` cannot contain a `" + substring(src, named.start, named.length)
                     + "` — it would have no finite size");
+        }
+        // The same question for an ENUM's payloads, moved here from the declaration pass so a
+        // forward-declared carrier is seen. The rule is FINITE WIDTH, not "no enum payload": a
+        // width is unbounded only when a type contains ITSELF by value, and recursion through a
+        // slice is a pointer that terminates — which is most recursive data, a tree, a JSON
+        // document, an AST. `embeds_by_value` follows classes and arrays too, since either can
+        // carry the enum on.
+        if self.types[c].kind == 83 {
+            let holder: Node = self.nodes[self.types[c].node];
+            let named: Token = self.tokens[holder.token];
+            let mutable v: Int = 0;
+            while v < holder.b {
+                let variant: Node = self.nodes[self.children[holder.a + v]];
+                let mutable p: Int = 0;
+                while p < variant.c {
+                    let payload: Int = self.nested_children[variant.b + p];
+                    if self.nodes[payload].kind == 46 {
+                        let carried: Type = self.declared_type(src, payload);
+                        if self.embeds_by_value(src, carried, named.start, named.length) {
+                            let complained: Int = self.complain_at(src, variant.token,
+                                        "this variant carries `"
+                                        + substring(src, named.start, named.length)
+                                        + "` by value, so its size would have to be bigger than itself. "
+                                        + "Carry it behind a slice — `["
+                                        + substring(src, named.start, named.length)
+                                        + "]` — which is a pointer, so the size is finite and the recursion "
+                                    + "still works");
+                        }
+                    }
+                    p += 1;
+                }
+                v += 1;
+            }
         }
         c += 1;
     }
@@ -6727,14 +6745,16 @@ function (mutable self: Unit) check_payloads(src: String, application: Int) -> I
             // `dynamic Trait` is still refused — its two cells hold a pointer into storage a
             // variant's payload area does not own, which is an ownership question rather than a
             // width one.
-            let mutable refused: Bool = carried.kind == 49;
-            if carried.kind == 46 {
-                if self.embeds_by_value(src, carried, applied.name_start, applied.name_length) {
-                    refused = true;
-                }
-            }
-            if refused {
-                let variant_name: Token = self.tokens[variant.token];
+            // TWO refusals, and they had one message between them — which sent the reader to
+            // the wrong one. `dynamic Trait` is refused because a variant's payload area does not
+            // own the storage the two cells point at: an OWNERSHIP question. Containment is
+            // refused because the width has no finite answer: a SIZE question, whose fix is a
+            // slice. The old wording said "has no layout here. A variant carries a scalar, a
+            // String, a class or an array" for both — and for `class Node { next: Option<Node> }`
+            // that is false advice twice over, since a variant may carry a class and the thing
+            // with no layout is `Node` itself, not the variant.
+            let variant_name: Token = self.tokens[variant.token];
+            if carried.kind == 49 {
                 let complained: Int = self.complain_at(src, self.nodes[application].token,
                             "`" + self.show_type(src, applied) + "` cannot be made: `"
                             + substring(src, applied.name_start, applied.name_length) + "."
@@ -6742,6 +6762,20 @@ function (mutable self: Unit) check_payloads(src: String, application: Int) -> I
                             + "` would carry " + self.show_type(src, carried)
                             + ", which has no layout here. A variant carries a scalar, a String, a "
                         + "class or an array");
+            }
+            if carried.kind == 46 {
+                if self.embeds_by_value(src, carried, applied.name_start, applied.name_length) {
+                    let complained: Int = self.complain_at(src, self.nodes[application].token,
+                                "`" + self.show_type(src, applied) + "` cannot be made: `"
+                                + substring(src, applied.name_start, applied.name_length) + "."
+                                + substring(src, variant_name.start, variant_name.length)
+                                + "` would carry " + self.show_type(src, carried)
+                                + ", which contains " + self.show_type(src, applied)
+                                + " by value — so it would have to be wider than itself. Hold it "
+                                + "behind a slice — `[" + self.show_type(src, carried)
+                                + "]` — which is a pointer, so the size is finite and the recursion "
+                            + "still works");
+                }
             }
             p += 1;
         }
