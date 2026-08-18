@@ -7487,6 +7487,119 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// The region GROWS, in both compilers, and a value made in the first chunk stays valid.
+///
+/// **Why this test exists in this shape, and why the memory cap is the whole of it.** The arena
+/// used to be ONE chunk, taken at the largest rung the machine would grant. On a 64-bit Linux box
+/// that rung was 4 GiB, so every program in this suite fitted and *nothing here could tell a
+/// growing region from a fixed one* — the change would have been untested by construction, which
+/// is the failure mode this repository has met before: an assertion that cannot fail looks exactly
+/// like coverage.
+///
+/// `ulimit -v` is what makes it falsifiable. Capped at 200 MB the big rungs are refused, the
+/// allocator falls to its smallest chunk, and a program that wants ~24 MB has to ask for more.
+/// Measured against the previous allocator, which is the negative control this test is built on:
+///
+///     old (one chunk)  ->  burxt runtime error: region memory exhausted
+///     new (grows)      ->  allocations: 300000
+///
+/// That is also the wasm and memory-capped-container case reproduced on Linux, which is the case
+/// that motivated the change: `memory.grow` commits, so a wasm program cannot be handed a large
+/// arena up front and must ask for what it touches.
+///
+/// The assertion is on the VALUE, not on the exit status. A canary built in the first chunk is
+/// printed after the cursor has moved several chunks past it, so a chunk that moved, or an index
+/// that wrapped, is a wrong answer rather than a survival.
+#[test]
+fn the_region_grows_in_both_compilers() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("region-growth");
+    fs::create_dir_all(&scratch).unwrap();
+
+    // ~24 MB of live allocation: past the 16 MiB first chunk on a hosted machine, and far past
+    // the 64 KiB chunk the allocator falls back to under the cap below.
+    let program = scratch.join("growth.bx");
+    fs::write(
+        &program,
+        r#"region main {
+    let canary: String = "canary-from-the-first-chunk";
+    let mutable made: Int = 0;
+    let mutable keep: String = "";
+    while made < 300000 {
+        keep = "padding-padding-padding-padding-padding-padding-padding-{made}";
+        made += 1;
+    }
+    print(canary);
+    print("allocations: {made}");
+}
+"#,
+    )
+    .unwrap();
+
+    let stage1 = scratch.join("stage1");
+    assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .status()
+        .expect("burxt")
+        .success());
+
+    for (which, compiler) in [
+        ("stage-0", PathBuf::from(env!("CARGO_BIN_EXE_burxt"))),
+        ("stage-1", stage1.clone()),
+    ] {
+        let exe = scratch.join(format!("growth-{}", which));
+        let built = Command::new(&compiler)
+            .arg("build")
+            .arg(&program)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .expect("build");
+        assert!(
+            built.status.success(),
+            "{} could not build the growth program:\n{}",
+            which,
+            String::from_utf8_lossy(&built.stderr)
+        );
+
+        let out = Command::new(&exe).output().expect("run");
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            said.contains("canary-from-the-first-chunk") && said.contains("allocations: 300000"),
+            "{}: a value made in the first chunk did not survive the cursor moving past it:\n{}{}",
+            which,
+            said,
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        // The half that can actually fail. `ulimit -v` is a Linux shell builtin and macOS does not
+        // honour it the same way, so the cap runs where it means something and the correctness
+        // half above runs everywhere. See the note on `gnu` in the peak-RSS test for the same
+        // split.
+        if cfg!(target_os = "linux") {
+            let capped = Command::new("bash")
+                .arg("-c")
+                .arg(format!("ulimit -v 204800; {}", exe.display()))
+                .output()
+                .expect("bash");
+            let said = String::from_utf8_lossy(&capped.stdout);
+            assert!(
+                said.contains("allocations: 300000"),
+                "{}: with only 200 MB of address space the region did not grow — this is the \
+                 wasm and capped-container case, and the previous one-chunk allocator failed it \
+                 with `region memory exhausted`:\n{}{}",
+                which,
+                said,
+                String::from_utf8_lossy(&capped.stderr)
+            );
+        }
+    }
+}
+
+
 /// **Every runtime guarantee, held against the Burxt backend too.**
 ///
 /// `tests/panic/` is the suite's record of what must FAIL at run time: a broken contract, an

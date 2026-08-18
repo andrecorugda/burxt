@@ -80,11 +80,9 @@ pub struct CodeGen<'ctx> {
     /// lazily created i128 -> i64 checked narrowing helper
     narrow_check_fn: Option<FunctionValue<'ctx>>,
     /// lazily created string byte-scan helpers
-    /// (heap base, bump cursor) globals for region allocation
-    heap: Option<(
-        inkwell::values::GlobalValue<'ctx>,
-        inkwell::values::GlobalValue<'ctx>,
-    )>,
+    /// the bump cursor for region allocation — ONE logical offset across every chunk, so a
+    /// region mark is an integer and the chunk table is `alloc_fn`'s business alone
+    heap: Option<inkwell::values::GlobalValue<'ctx>>,
     alloc_fn: Option<FunctionValue<'ctx>>,
     byte_index_check_fn: Option<FunctionValue<'ctx>>,
     str_eq_fn: Option<FunctionValue<'ctx>>,
@@ -4917,36 +4915,49 @@ impl<'ctx> CodeGen<'ctx> {
     /// Lazily create the bump heap: one chunk, a cursor into it, and its size.
     /// This is NOT a runtime — no collector, no scheduler, no refcounts. Just a
     /// pointer that moves forward and resets when a region ends.
-    fn heap_globals(
-        &mut self,
-    ) -> (
-        inkwell::values::GlobalValue<'ctx>,
-        inkwell::values::GlobalValue<'ctx>,
-    ) {
+    /// The region cursor: ONE logical offset across every chunk.
+    ///
+    /// Keeping it logical rather than a pointer into a particular chunk is what makes a growable
+    /// region cheap — a region MARK is this integer, so `build_region_open` and
+    /// `build_region_close` never learn that chunks exist. A chunk index is this value shifted, an
+    /// offset inside that chunk is this value masked, and both live in `alloc_fn` alone.
+    fn heap_cursor(&mut self) -> inkwell::values::GlobalValue<'ctx> {
         if let Some(g) = self.heap {
             return g;
         }
-        let ptr = self.ctx.ptr_type(AddressSpace::default());
         let i64t = self.ctx.i64_type();
-        let base = self.module.add_global(ptr, None, "burxt.heap.base");
-        base.set_initializer(&ptr.const_null());
         let next = self.module.add_global(i64t, None, "burxt.heap.next");
         next.set_initializer(&i64t.const_zero());
-        *self.heap.insert((base, next))
+        *self.heap.insert(next)
     }
 
-    /// How many bytes the reservation ACTUALLY got, decided at run time by `burxt.alloc`.
+    /// The chunk table: `slots` pointers, all null until the cursor reaches them.
     ///
-    /// This is a global rather than the `CHUNK` constant because the size a machine can give
-    /// is not a property of the program — see the ladder in `alloc_fn`. The exhaustion check
-    /// reads it, so a build that fell back to a smaller rung still reports exhaustion at the
-    /// right boundary instead of running off the end of a chunk it did not get.
-    fn heap_size_global(&mut self) -> inkwell::values::GlobalValue<'ctx> {
-        if let Some(g) = self.module.get_global("burxt.heap.size") {
+    /// A table rather than a linked list because the lookup is on the allocation path: an index
+    /// derived by shifting has to reach its chunk in one load, and walking a list would make the
+    /// cost of an allocation depend on how much the program has already allocated.
+    fn heap_table(&mut self, slots: u32) -> inkwell::values::GlobalValue<'ctx> {
+        if let Some(g) = self.module.get_global("burxt.heap.table") {
+            return g;
+        }
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let arr = ptr.array_type(slots);
+        let g = self.module.add_global(arr, None, "burxt.heap.table");
+        g.set_initializer(&arr.const_zero());
+        g
+    }
+
+    /// log2 of the chunk size, decided at run time by the ladder in `alloc_fn`; zero until then.
+    ///
+    /// A shift rather than the size itself because it is used to divide, and the size is used to
+    /// mask — so this is the form that needs no division. Zero is a safe "not yet" because a real
+    /// chunk is never one byte.
+    fn heap_shift(&mut self) -> inkwell::values::GlobalValue<'ctx> {
+        if let Some(g) = self.module.get_global("burxt.heap.shift") {
             return g;
         }
         let i64t = self.ctx.i64_type();
-        let g = self.module.add_global(i64t, None, "burxt.heap.size");
+        let g = self.module.add_global(i64t, None, "burxt.heap.shift");
         g.set_initializer(&i64t.const_zero());
         g
     }
@@ -5686,7 +5697,7 @@ impl<'ctx> CodeGen<'ctx> {
         // Opening a region brings its allocator into the module: a region and
         // the bump allocator are one mechanism, not two.
         self.alloc_fn()?;
-        let (_, next) = self.heap_globals();
+        let next = self.heap_cursor();
         self.builder
             .build_load(self.ctx.i64_type(), next.as_pointer_value(), "region_mark")
             .map(|v| v.into_int_value())
@@ -5901,82 +5912,77 @@ impl<'ctx> CodeGen<'ctx> {
 
     /// `close` is "put the cursor back" — that is the entire deallocation.
     fn build_region_close(&mut self, mark: IntValue<'ctx>) -> Result<(), String> {
-        let (_, next) = self.heap_globals();
+        let next = self.heap_cursor();
         self.builder
             .build_store(next.as_pointer_value(), mark)
             .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    /// Get (or lazily define) `ptr @burxt.alloc(i64 bytes)`: bump the cursor,
-    /// 8-byte aligned. Exhaustion is a named runtime error, never a silent
-    /// overrun — the same standard every other check in Burxt meets.
+    /// Get (or lazily define) `ptr @burxt.alloc(i64 bytes)`: bump the cursor, 8-byte aligned.
+    /// Exhaustion is a named runtime error, never a silent overrun — the same standard every
+    /// other check in Burxt meets.
+    ///
+    /// # The region GROWS, and that is why no number is chosen here
+    ///
+    /// **History, kept because each step was a wall that turned out to be a number.** This
+    /// reserved 512 MB, then 1 GB, then 4 GB, and each raise was reported as a design constraint
+    /// until somebody measured it. On a 64-bit OS with overcommit the reservation is *virtual*, so
+    /// a program that touches a kilobyte pays for a kilobyte and raising the figure costs nothing
+    /// resident. Then v0.0.261: **that paragraph is true of a 64-bit OS and FALSE of wasm32**,
+    /// which has a 4 GiB address space in total and whose `memory.grow` COMMITS — lazy page
+    /// mapping is what the argument rested on, and wasm has none. So it became a run-time ladder
+    /// rather than a constant, which also keeps `the_ir_is_the_same_for_every_target` passing:
+    /// pointer width never reaches the IR, and a `CHUNK` that varied by triple would.
+    ///
+    /// **What was still wrong, and it is the thing a bigger number could never fix: it could only
+    /// ask ONCE.** One chunk was taken on first use and running out was fatal. That made whatever
+    /// rung the machine granted a hard ceiling — on wasm with `memory.grow` sitting unused, and on
+    /// a 64-bit OS with nothing bounding what became resident. It was not hypothetical:
+    /// `emit.bx`'s own comment records **stage-1 built by itself dying with `region memory
+    /// exhausted` while compiling `main.bx`**, at a margin of 0.53%, breaking the fixpoint. Its
+    /// conclusion is the one that matters — *what is RESIDENT is the real limit and no constant
+    /// moves it.*
+    ///
+    /// So there is no total to choose. The arena is a **table of equal, power-of-two chunks, added
+    /// on demand**, and the ladder now picks the CHUNK size rather than the whole reservation —
+    /// small enough that a memory-capped container or a small device gets one, with the count
+    /// growing to whatever the program actually touches. A program that needs a megabyte holds a
+    /// megabyte on every target; a program that needs a gigabyte asks sixty-four times.
+    ///
+    /// **Why this is contained rather than a rewrite of the memory model:** the cursor stays a
+    /// single logical offset across all chunks, so a region MARK stays a single integer and
+    /// `build_region_open`, `build_region_close` and every `region_marks` site are untouched. A
+    /// chunk index is a shift of the cursor and an offset within it is a mask.
+    ///
+    /// **Verified rather than assumed: nothing depends on the arena being contiguous.** Slice
+    /// growth allocates a fresh buffer and copies the live elements (`build_slice_push`), and a
+    /// String is allocated whole. Chunks are never moved or reallocated, so every pointer handed
+    /// out stays valid for the life of the region.
+    ///
+    /// Two refusals remain, both named, because the alternative to a named refusal here is a
+    /// silent overrun: a single value larger than one chunk, and running out of table slots.
     fn alloc_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
         if let Some(f) = self.alloc_fn {
             return Ok(f);
         }
-        // One reservation, sized for the workload this language is heading toward: a
-        // self-hosted compiler holds an arena of AST nodes, a symbol table and every
-        // interned name for one whole compile inside a single region. 64 MB was
-        // comfortable for test programs and would not survive that.
-        //
-        // The cost is virtual, not resident: `malloc` of this size hands back lazily
-        // mapped pages, so a program that touches a kilobyte pays for a kilobyte.
-        // Exhaustion is still a named error rather than an overrun.
-        // **4 GB since v0.0.222, and the raise is nearly free — which took measuring to believe.**
-        //
-        // The compiler's own peak RSS reached 732 MB of this 1 GB reservation while the parity work
-        // added `diag.bx`, `schema.bx` and `lsp.bx`, and the ceiling test's note said the answer had
-        // to be per-block release (A12) rather than a bigger number. That conflated two different
-        // walls:
-        //
-        //   1. **The RESERVATION** — 1 GB, and hitting it is `region memory exhausted`. Virtual, so
-        //      raising it costs nothing resident. This paragraph's own first sentence said so all
-        //      along: *"a program that touches a kilobyte pays for a kilobyte."*
-        //   2. **Resident usage** — 732 MB actually touched, ~52 KB per line of compiler. That is
-        //      real, it is what a user's machine has to hold, and only A12 fixes it.
-        //
-        // Only (1) was about to stop the compiler from growing, and (1) is a constant. So the
-        // constant moves and A12 stays exactly as urgent as it was for the reason that actually
-        // matters. Another wall that looked like a design constraint and was a number — the ninth
-        // time on this project, and the lesson each time is the same: measure the wall before
-        // planning around it.
-        //
-        // ---
-        //
-        // **The paragraph above is true on a 64-bit OS and FALSE on wasm32, which is why this is a
-        // ladder now rather than one number.** Measured 2026-08-16, running a Burxt program in
-        // node: `wasm32-unknown-unknown` has a 4 GiB address space in total, so a 4 GiB reservation
-        // cannot be satisfied at all — and `memory.grow` COMMITS, so even a reservation that fit
-        // would be resident rather than virtual. "A program that touches a kilobyte pays for a
-        // kilobyte" is a property of lazy page mapping, and wasm has none.
-        //
-        // Two things were wrong here, and only one of them was about wasm:
-        //
-        //   1. **`malloc`'s answer was never checked.** A failed reservation stored a null base and
-        //      the next allocation wrote through it — a silent crash, on any platform, in the one
-        //      function whose doc comment promises "a named runtime error, never a silent overrun".
-        //   2. The size was a compile-time constant, so no target could disagree with it.
-        //
-        // **Why a run-time ladder and not a target-dependent constant**, which was the obvious fix
-        // and is the wrong one: `the_ir_is_the_same_for_every_target` compares emitted IR across
-        // every supported triple — wasm32 and ARM32 among them — and passes today precisely because
-        // pointer width never reaches the IR. A `CHUNK` that varied by triple would break that test
-        // and the M3 claim underneath it ("the same money math, provably identical on web, desktop
-        // and mobile"). Asking the machine at run time keeps every target's IR byte-identical and
-        // fixes (1) at the same time, which a constant does not.
-        //
-        // The rungs: 4 GiB for a 64-bit OS with overcommit, where this succeeds and nothing about
-        // the old behaviour changes; 256 MiB for a memory-capped container; 16 MiB for wasm and
-        // anything else small. Descending by a large factor on purpose — a ladder with close rungs
-        // spends syscalls to discover a number nobody will notice.
-        const CHUNK: u64 = 4 * 1024 * 1024 * 1024;
-        const RUNGS: [u64; 3] = [CHUNK, 256 * 1024 * 1024, 16 * 1024 * 1024];
+        // The chunk-size ladder. Descending by a large factor on purpose — a ladder with close
+        // rungs spends syscalls to discover a number nobody will notice. 16 MiB suits a hosted
+        // program, 1 MiB a memory-capped container or a browser tab, 64 KiB a small device (and
+        // it is one wasm page times sixteen). Each is a power of two so the index is a shift.
+        const SHIFTS: [u32; 3] = [24, 20, 16];
+        // 4096 slots. With the first rung that is 64 GiB of reachable region, and the table costs
+        // 32 KB of zeroed .bss. It is a bound rather than a target: crossing it is a named error,
+        // and a freestanding build will want its own much smaller table with no `malloc` behind it.
+        const SLOTS: u32 = 4096;
         let err = |e: inkwell::builder::BuilderError| e.to_string();
         let saved = self.builder.get_insert_block();
-        let (base, next) = self.heap_globals();
+        let next = self.heap_cursor();
+        let table = self.heap_table(SLOTS);
+        let shift_g = self.heap_shift();
 
         let i64t = self.ctx.i64_type();
+        let i32t = self.ctx.i32_type();
         let i8t = self.ctx.i8_type();
         let ptr = self.ctx.ptr_type(AddressSpace::default());
         let malloc = match self.module.get_function("malloc") {
@@ -5990,14 +5996,21 @@ impl<'ctx> CodeGen<'ctx> {
             .module
             .add_function("burxt.alloc", ptr.fn_type(&[i64t.into()], false), None);
         let entry = self.ctx.append_basic_block(f, "entry");
-        let init_bb = self.ctx.append_basic_block(f, "init_chunk");
-        // One block per rung after the first, plus the block that gives up.
-        let rung_bb: Vec<_> = (1..RUNGS.len())
+        let init_bb = self.ctx.append_basic_block(f, "pick_chunk_size");
+        let rung_bb: Vec<_> = (1..SHIFTS.len())
             .map(|i| self.ctx.append_basic_block(f, &format!("smaller_chunk{}", i)))
             .collect();
         let no_chunk_bb = self.ctx.append_basic_block(f, "no_chunk");
-        let have_bb = self.ctx.append_basic_block(f, "have_chunk");
-        let full_bb = self.ctx.append_basic_block(f, "exhausted");
+        let have_bb = self.ctx.append_basic_block(f, "have_size");
+        let too_big_bb = self.ctx.append_basic_block(f, "value_over_chunk");
+        let big_slots_bb = self.ctx.append_basic_block(f, "big_slots_ok");
+        let big_got_bb = self.ctx.append_basic_block(f, "big_chunk");
+        let fits_bb = self.ctx.append_basic_block(f, "fits_a_chunk");
+        let no_slots_bb = self.ctx.append_basic_block(f, "no_slots");
+        let in_range_bb = self.ctx.append_basic_block(f, "slot_in_range");
+        let grow_bb = self.ctx.append_basic_block(f, "add_chunk");
+        let store_bb = self.ctx.append_basic_block(f, "keep_chunk");
+        let no_room_bb = self.ctx.append_basic_block(f, "exhausted");
         let ok_bb = self.ctx.append_basic_block(f, "ok");
 
         self.builder.position_at_end(entry);
@@ -6005,27 +6018,30 @@ impl<'ctx> CodeGen<'ctx> {
         // round the request up to 8 bytes so every value stays aligned
         let seven = i64t.const_int(7, false);
         let bumped = self.builder.build_int_add(want, seven, "bumped").map_err(err)?;
-        let mask = i64t.const_int(!7u64, false);
-        let size = self.builder.build_and(bumped, mask, "aligned").map_err(err)?;
-        let cur_base = self
+        let mask8 = i64t.const_int(!7u64, false);
+        let size = self.builder.build_and(bumped, mask8, "aligned").map_err(err)?;
+        let cur_shift = self
             .builder
-            .build_load(ptr, base.as_pointer_value(), "base")
+            .build_load(i64t, shift_g.as_pointer_value(), "shift")
             .map_err(err)?
-            .into_pointer_value();
-        let is_null = self.builder.build_is_null(cur_base, "no_chunk").map_err(err)?;
-        self.builder.build_conditional_branch(is_null, init_bb, have_bb).map_err(err)?;
+            .into_int_value();
+        // Zero means "no chunk size decided yet". A real shift is never zero.
+        let undecided = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, cur_shift, i64t.const_zero(), "undecided")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(undecided, init_bb, have_bb).map_err(err)?;
 
-        // One chunk, allocated on first use — the largest rung the machine will give.
-        // Each rung: ask, and if `malloc` said null, drop to the next one. The block a rung
-        // falls through to is the next rung's, and the last rung falls through to giving up.
-        let size_g = self.heap_size_global();
-        for (i, want_bytes) in RUNGS.iter().enumerate() {
+        // Pick the chunk size ONCE: ask for one chunk at each rung and keep the first that is
+        // granted. The chunk itself is kept — it becomes slot 0 — so the probe is not wasted.
+        for (i, sh) in SHIFTS.iter().enumerate() {
             let this_bb = if i == 0 { init_bb } else { rung_bb[i - 1] };
             let next_bb = rung_bb.get(i).copied().unwrap_or(no_chunk_bb);
             self.builder.position_at_end(this_bb);
+            let bytes = i64t.const_int(1u64 << sh, false);
             let chunk = self
                 .builder
-                .build_call(malloc, &[i64t.const_int(*want_bytes, false).into()], "chunk")
+                .build_call(malloc, &[bytes.into()], "chunk")
                 .map_err(err)?;
             let chunk_ptr = match chunk.try_as_basic_value() {
                 inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
@@ -6035,66 +6051,209 @@ impl<'ctx> CodeGen<'ctx> {
             let got_bb = self.ctx.append_basic_block(f, &format!("got_chunk{}", i));
             self.builder.build_conditional_branch(failed, next_bb, got_bb).map_err(err)?;
 
-            // Record BOTH the base and the size that was actually granted. The exhaustion
-            // check below reads the size, so a fallback rung still reports exhaustion at its
-            // own boundary rather than walking off the end of a chunk it never received.
             self.builder.position_at_end(got_bb);
-            self.builder.build_store(base.as_pointer_value(), chunk_ptr).map_err(err)?;
+            let slot0 = unsafe {
+                self.builder.build_gep(
+                    ptr,
+                    table.as_pointer_value(),
+                    &[i32t.const_zero()],
+                    "slot0",
+                )
+            }
+            .map_err(err)?;
+            self.builder.build_store(slot0, chunk_ptr).map_err(err)?;
             self.builder
-                .build_store(size_g.as_pointer_value(), i64t.const_int(*want_bytes, false))
+                .build_store(shift_g.as_pointer_value(), i64t.const_int(*sh as u64, false))
                 .map_err(err)?;
             self.builder.build_unconditional_branch(have_bb).map_err(err)?;
         }
 
-        // Every rung refused. Naming it is the whole point: the old code stored the null and
-        // let the next write find out, which is the silent overrun this function promises not
-        // to be.
+        // Every rung refused. Naming it is the whole point: storing a null and letting the next
+        // write find out is the silent overrun this function promises not to be.
         self.builder.position_at_end(no_chunk_bb);
-        // Word for word what stage-1 emits — `@burxt.no_region_msg` in `main.bx`. Runtime text
-        // is the blind spot this repo already found once: a program that dies correctly can
-        // still say the wrong thing about why, and nothing compares the two compilers' wording
-        // unless it is kept identical by hand.
         self.build_panic(
             "burxt runtime error: could not reserve any region memory — the machine refused \
-             4 GB, 256 MB and 16 MB\n",
+             16 MB, 1 MB and 64 KB\n",
         )?;
 
         self.builder.position_at_end(have_bb);
-        let real_base = self
+        let sh = self
             .builder
-            .build_load(ptr, base.as_pointer_value(), "base2")
+            .build_load(i64t, shift_g.as_pointer_value(), "shift2")
             .map_err(err)?
-            .into_pointer_value();
+            .into_int_value();
+        let chunk_size = self
+            .builder
+            .build_left_shift(i64t.const_int(1, false), sh, "chunk_size")
+            .map_err(err)?;
+        // A value wider than one chunk can never be placed, whatever the cursor is. Checked
+        // BEFORE the straddle skip below, which would otherwise advance for ever looking for
+        // room that does not exist at any offset.
         let cursor = self
             .builder
             .build_load(i64t, next.as_pointer_value(), "cursor")
             .map_err(err)?
             .into_int_value();
-        let after = self.builder.build_int_add(cursor, size, "after").map_err(err)?;
-        let granted = self
+        let within = self
             .builder
-            .build_load(i64t, size_g.as_pointer_value(), "granted")
+            .build_int_sub(chunk_size, i64t.const_int(1, false), "chunk_mask")
+            .map_err(err)?;
+        let over_chunk = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGT, size, chunk_size, "over_chunk")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(over_chunk, too_big_bb, fits_bb).map_err(err)?;
+
+        // A value WIDER THAN A CHUNK gets a chunk of its own, sized to it.
+        //
+        // Without this the growable region would be a regression rather than an improvement:
+        // `read_file` of a 20 MB file fits a 4 GiB reservation and does not fit a 16 MiB chunk, so
+        // refusing here would take away something that worked. Measured before it was written —
+        // the refusal this replaces really did stop a 20 MB read.
+        //
+        // It begins at a chunk BOUNDARY, which is what keeps the index arithmetic honest: the slot
+        // it lands in is one nothing has allocated, and the cursor then jumps past however many
+        // whole chunks the value spans, so the slots it covers are never handed to anything else.
+        // Those slots stay null and cost nothing — a slot number is not memory.
+        self.builder.position_at_end(too_big_bb);
+        let round = self.builder.build_int_add(cursor, within, "round_up").map_err(err)?;
+        let big_idx = self
+            .builder
+            .build_right_shift(round, sh, false, "big_index")
+            .map_err(err)?;
+        let big_span_bytes = self.builder.build_int_add(size, within, "span_bytes").map_err(err)?;
+        let big_span = self
+            .builder
+            .build_right_shift(big_span_bytes, sh, false, "span_chunks")
+            .map_err(err)?;
+        let big_end = self.builder.build_int_add(big_idx, big_span, "big_end").map_err(err)?;
+        let big_past = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGT,
+                big_end,
+                i64t.const_int(SLOTS as u64, false),
+                "big_past_table",
+            )
+            .map_err(err)?;
+        self.builder.build_conditional_branch(big_past, no_slots_bb, big_slots_bb).map_err(err)?;
+
+        self.builder.position_at_end(big_slots_bb);
+        let big = self
+            .builder
+            .build_call(malloc, &[size.into()], "big_chunk")
+            .map_err(err)?;
+        let big_ptr = match big.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
+            _ => return Err("malloc returned void".to_string()),
+        };
+        let big_refused = self.builder.build_is_null(big_ptr, "big_refused").map_err(err)?;
+        self.builder.build_conditional_branch(big_refused, no_room_bb, big_got_bb).map_err(err)?;
+
+        self.builder.position_at_end(big_got_bb);
+        let big_slot = unsafe {
+            self.builder
+                .build_gep(ptr, table.as_pointer_value(), &[big_idx], "big_slot")
+        }
+        .map_err(err)?;
+        self.builder.build_store(big_slot, big_ptr).map_err(err)?;
+        let big_after = self
+            .builder
+            .build_left_shift(big_end, sh, "after_big")
+            .map_err(err)?;
+        self.builder.build_store(next.as_pointer_value(), big_after).map_err(err)?;
+        self.builder.build_return(Some(&big_ptr)).map_err(err)?;
+
+        self.builder.position_at_end(fits_bb);
+        let off = self.builder.build_and(cursor, within, "off").map_err(err)?;
+        let end = self.builder.build_int_add(off, size, "end").map_err(err)?;
+        // An allocation never straddles two chunks: they are separate mappings. If this one
+        // would, skip the tail of the current chunk and start the next. The waste is bounded by
+        // the size of one value, and only ever on a boundary.
+        let straddles = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGT, end, chunk_size, "straddles")
+            .map_err(err)?;
+        let base_of_chunk = self.builder.build_int_sub(cursor, off, "chunk_start").map_err(err)?;
+        let skipped = self
+            .builder
+            .build_int_add(base_of_chunk, chunk_size, "next_chunk_start")
+            .map_err(err)?;
+        let at = self
+            .builder
+            .build_select(straddles, skipped, cursor, "at")
             .map_err(err)?
             .into_int_value();
-        let over = self
+        let at_off = self
             .builder
-            .build_int_compare(inkwell::IntPredicate::UGT, after, granted, "over")
+            .build_select(straddles, i64t.const_zero(), off, "at_off")
+            .map_err(err)?
+            .into_int_value();
+        let idx = self
+            .builder
+            .build_right_shift(at, sh, false, "chunk_index")
             .map_err(err)?;
-        self.builder.build_conditional_branch(over, full_bb, ok_bb).map_err(err)?;
+        let past_table = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGE,
+                idx,
+                i64t.const_int(SLOTS as u64, false),
+                "past_table",
+            )
+            .map_err(err)?;
+        self.builder.build_conditional_branch(past_table, no_slots_bb, in_range_bb).map_err(err)?;
 
-        self.builder.position_at_end(full_bb);
-        // The message no longer names a number, because the number is no longer knowable here:
-        // it is whichever rung the machine granted. Naming "4 GB" when the process is holding
-        // 16 MB would be the most misleading thing this message could say.
+        self.builder.position_at_end(no_slots_bb);
         self.build_panic(
-            "burxt runtime error: region memory exhausted — this process has used all the \
-             region memory the machine would give it\n",
+            "burxt runtime error: region memory exhausted — every chunk slot is in use\n",
+        )?;
+
+        self.builder.position_at_end(in_range_bb);
+        let slot = unsafe {
+            self.builder
+                .build_gep(ptr, table.as_pointer_value(), &[idx], "slot")
+        }
+        .map_err(err)?;
+        let held = self
+            .builder
+            .build_load(ptr, slot, "chunk_base")
+            .map_err(err)?
+            .into_pointer_value();
+        let absent = self.builder.build_is_null(held, "absent").map_err(err)?;
+        self.builder.build_conditional_branch(absent, grow_bb, ok_bb).map_err(err)?;
+
+        // GROW: the cursor has reached a chunk that does not exist yet, so add it. This is the
+        // whole of the change — where this used to be the exhaustion panic, it now asks again.
+        self.builder.position_at_end(grow_bb);
+        let fresh = self
+            .builder
+            .build_call(malloc, &[chunk_size.into()], "fresh_chunk")
+            .map_err(err)?;
+        let fresh_ptr = match fresh.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
+            _ => return Err("malloc returned void".to_string()),
+        };
+        let refused = self.builder.build_is_null(fresh_ptr, "refused").map_err(err)?;
+        self.builder.build_conditional_branch(refused, no_room_bb, store_bb).map_err(err)?;
+        self.builder.position_at_end(store_bb);
+        self.builder.build_store(slot, fresh_ptr).map_err(err)?;
+        self.builder.build_unconditional_branch(ok_bb).map_err(err)?;
+
+        self.builder.position_at_end(no_room_bb);
+        self.build_panic(
+            "burxt runtime error: region memory exhausted — the machine would not give this \
+             process another region chunk\n",
         )?;
 
         self.builder.position_at_end(ok_bb);
-        self.builder.build_store(next.as_pointer_value(), after).map_err(err)?;
-        let out = unsafe { self.builder.build_gep(i8t, real_base, &[cursor], "cell") }
+        let base_phi = self.builder.build_phi(ptr, "base").map_err(err)?;
+        base_phi.add_incoming(&[(&held, in_range_bb), (&fresh_ptr, store_bb)]);
+        let real_base = base_phi.as_basic_value().into_pointer_value();
+        let out = unsafe { self.builder.build_gep(i8t, real_base, &[at_off], "cell") }
             .map_err(err)?;
+        let after = self.builder.build_int_add(at, size, "after").map_err(err)?;
+        self.builder.build_store(next.as_pointer_value(), after).map_err(err)?;
         self.builder.build_return(Some(&out)).map_err(err)?;
 
         if let Some(bb) = saved {

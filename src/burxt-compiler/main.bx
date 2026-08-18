@@ -318,15 +318,22 @@ function module_text(mutable unit: Unit) -> String {
             // written: `burxt.alloc` asks for 4 GB, then 256 MB, then 16 MB, and keeps whichever the
             // machine granted. Saying "reserves 4 GB" to a process holding 16 MB would be the most
             // misleading thing this message could say. Word for word what stage-0's `build_panic` emits.
-            + "@burxt.region_msg = private unnamed_addr constant [120 x i8] "
-            + "c\"burxt runtime error: region memory exhausted — this process has used "
-            + "all the region memory the machine would give it\\0A\\00\"\n"
+            + "@burxt.region_msg = private unnamed_addr constant [111 x i8] "
+            + "c\"burxt runtime error: region memory exhausted — the machine would not "
+            + "give this process another region chunk\\0A\\00\"\n"
             // The OTHER region failure, and a different one: not "used it all" but "never got any".
             // Stage-0 distinguishes them, so stage-1 must too — one message for two causes is how a
             // runtime error stops being advice.
-            + "@burxt.no_region_msg = private unnamed_addr constant [105 x i8] "
+            + "@burxt.no_region_msg = private unnamed_addr constant [104 x i8] "
             + "c\"burxt runtime error: could not reserve any region memory — the machine "
-            + "refused 4 GB, 256 MB and 16 MB\\0A\\00\"\n"
+            + "refused 16 MB, 1 MB and 64 KB\\0A\\00\"\n"
+            // A THIRD region failure, and it is not the same as either. Running out of chunk SLOTS
+            // is a table bound, not the machine refusing memory — a program hitting it is asking for
+            // more region than the table can address, and the answer is a bigger table rather than a
+            // bigger machine. Three causes, three messages: see the note above about advice.
+            + "@burxt.slots_msg = private unnamed_addr constant [77 x i8] "
+            + "c\"burxt runtime error: region memory exhausted — every chunk slot is in "
+            + "use\\0A\\00\"\n"
             + "@burxt.divzero_msg = private unnamed_addr constant [39 x i8] "
             + "c\"burxt runtime error: division by zero\\0A\\00\"\n"
             // The third number was the SOURCE BYTE OFFSET, which is a compiler-writer's number: it

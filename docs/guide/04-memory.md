@@ -420,9 +420,16 @@ back. It does not matter whether the block built three values or three million.
 is no annotation to read, no lifetime to follow across a signature, and nothing an agent can get
 subtly wrong — because the one rule it could break is a compile error that names the line.
 
-**Failure is named, not silent.** The reservation is 1 GB per process and the allocator checks its own
-limit. An allocator that does not check does not fail — it corrupts, and then you are debugging the
-wrong thing. That distinction cost a session in v0.0.73, and is why the check is in both compilers.
+**Failure is named, not silent.** The allocator checks its own limit before every hand-out. An
+allocator that does not check does not fail — it corrupts, and then you are debugging the wrong
+thing. That distinction cost a session in v0.0.73, and is why the check is in both compilers.
+
+**There is no reservation to size.** The region is a series of equal chunks, added when the program
+reaches them, so a process holds what it has touched and not a figure somebody chose. The chunk size
+itself is asked of the machine at startup rather than compiled in — 16 MB, or 1 MB, or 64 KB if that
+is all it will give — which is what lets the same binary shape run on a workstation, in a
+memory-capped container and in a browser tab, where `memory.grow` commits and a large arena taken up
+front would be resident rather than virtual.
 
 ## What it costs
 {: #what-it-costs}
@@ -456,7 +463,7 @@ will meet.
 **Running out is a failure you can hit.**
 
 ```
-burxt runtime error: region memory exhausted — this build reserves 1 GB per process
+burxt runtime error: region memory exhausted — the machine would not give this process another region chunk
 ```
 
 ## When you reach for it

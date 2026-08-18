@@ -122,15 +122,18 @@ below the mark, so declining to free it suffices. They are **different things wh
 host**, because there is no enclosing Burxt frame for the value to belong to. The semantics name a
 place the runtime does not have.
 
-    codegen.rs:83   "(heap base, bump cursor) globals for region allocation"   — ONE cursor
+    heap_cursor         the bump cursor for region allocation                — ONE cursor
     build_region_open                                                          — saves and restores it
 
 So the change is: give `allocates` the second cursor its own definition already implies. Measured
 blast radius in stage-0 — **every allocation funnels through one function**, which is why this is a
 contained change rather than a rewrite:
 
-    heap_globals call sites   3        region_marks references   11
+    heap_cursor call sites    3        region_marks references   11
     alloc_fn call sites       3        region open/close          8
+
+The growable region above is evidence for that count rather than a change to it: it rewrote
+`alloc_fn` entirely and touched none of the eleven, because the cursor stayed one integer.
 
 `emit.bx` shows 81 matches, but most are IR text rather than decision points; the real count wants
 measuring before the work is scheduled.
@@ -165,7 +168,7 @@ tool can read it.**
 
 Andre's, 2026-08-18, and it replaces the two-arena sketch above because it needs **one** strip rather
 than two — which is the constraint that actually bites, since WebAssembly has about 4 GB of address
-space in total and a program reserves 1 GB today.
+space in total and every byte a wasm program reserves is resident rather than virtual.
 
     frame_start = marker                  // record the pointer
        … the frame runs, allocating freely …
@@ -206,29 +209,36 @@ remember — which is the sign the mechanism is the right shape rather than a pa
 
 - ~~**The reservation in a browser.**~~ **The premise was stale and the question was the wrong one.**
   There is no 1 GB constant and no compile-time number to choose: since v0.0.222/v0.0.261 both
-  compilers emit a **run-time ladder** — ask `malloc` for 4 GiB, then 256 MiB, then 16 MiB, keep
-  whichever the machine grants, and record the size that was actually given. It is deliberately a
-  ladder rather than a per-target constant so that `the_ir_is_the_same_for_every_target` keeps
-  passing: pointer width never reaches the IR.
+  compilers emit a **run-time ladder** — and since the region became growable it asks for a CHUNK
+  rather than the whole arena: 16 MiB, then 1 MiB, then 64 KiB, keeping whichever the machine grants.
+  It is deliberately a ladder rather than a per-target constant so that
+  `the_ir_is_the_same_for_every_target` keeps passing: pointer width never reaches the IR.
 
-  **So the size is already asked of the machine. What cannot happen is a second ask.** One chunk is
-  taken on first use and exhaustion is a panic, which means:
+  The size was always asked of the machine. What could not happen was a **second** ask: one chunk was
+  taken on first use and exhaustion was a panic, so whatever rung was granted became a hard ceiling —
+  on wasm32 with `memory.grow` sitting unused, and on a 64-bit OS with nothing bounding what became
+  *resident*. That wall had already been hit for real: **stage-1 built by itself died with `region
+  memory exhausted` compiling `main.bx`**, at a 0.53% margin, and the fixpoint broke.
 
-  - on wasm32, whatever rung is granted is a **hard ceiling**, with `memory.grow` sitting unused;
-  - on a 64-bit OS the 4 GiB is virtual and free, but nothing bounds what becomes *resident*.
+  **BUILT, both compilers, 2026-08-18.** The region is now a table of equal power-of-two chunks added
+  on demand, and the answer needs no number on any platform. The cursor stayed one logical offset, so
+  a mark stayed a single integer and `build_region_open`, `build_region_close` and all eleven
+  `region_marks` sites were untouched — only `alloc_fn` and the IR `emit.bx` writes for it changed. A
+  value wider than one chunk gets a chunk of its own, which was not optional: measured first, the
+  refusal it replaces really did stop `read_file` of a 20 MB file that a 4 GiB arena had held.
 
-  That wall has already been hit for real, and not hypothetically: **stage-1 built by itself died with
-  `region memory exhausted` compiling `main.bx`**, at a 0.53% margin, and the fixpoint broke.
-  `emit.bx`'s own comment draws the conclusion — *"what is RESIDENT is the real limit and no constant
-  moves it."*
+  Held by `the_region_grows_in_both_compilers`, and the shape of that test is the point. On a 64-bit
+  box every program in the suite fitted the old 4 GiB arena, so **nothing here could tell a growing
+  region from a fixed one** — the change would have been untested by construction. `ulimit -v 200 MB`
+  is what makes it falsifiable, and it is the wasm and capped-container case reproduced on Linux:
 
-  **The answer that needs no number on any platform is to grow**, and the shape is contained. Keep the
-  cursor as one logical offset over equal power-of-two chunks: a chunk index is a shift, an offset
-  within it is a mask, and **a mark stays a single integer** — so `build_region_open`,
-  `build_region_close` and all eleven `region_marks` sites are untouched, and only `alloc_fn` changes.
-  Verified safe: nothing assumes the arena is contiguous, because slice growth already *allocates
-  fresh and copies* rather than extending in place. An allocation larger than one chunk needs its own
-  path.
+      old (one chunk)  ->  burxt runtime error: region memory exhausted
+      new (grows)      ->  allocations: 300000
+
+  **Measured, and two things it did NOT do**, because the tempting claims are both false: peak RSS on
+  the compiler's own source is 507,856 KB before and 509,404 KB after, and 200 startups take 0.13 s
+  either way. Growth removes a ceiling. It does not reduce memory and it does not speed anything up —
+  only per-block release (A12) bounds what is resident, exactly as `emit.bx` said.
 
   This is also what makes the freestanding target (§G4) fall out rather than needing its own design: a
   fixed chunk table with no `malloc` behind it is bounded memory, which is the whole requirement on a

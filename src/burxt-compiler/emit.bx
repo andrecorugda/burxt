@@ -4263,13 +4263,13 @@ function (self: Unit) declaration_node(src: String, start: Int, length: Int) -> 
 // opening one remembers where the pointer stood, closing it puts the pointer back, and
 // that is the whole of release — O(1) for any number of allocations.
 function runtime_ir() -> String {
-    return "@burxt.arena = global ptr null\n"
+    return "@burxt.chunks = global [4096 x ptr] zeroinitializer\n"
             + "@burxt.bump = global i64 0\n"
-            // How many bytes the reservation ACTUALLY got — see the ladder in the `init` block
-            // below. A global rather than a constant because the size a machine can give is not a
-            // property of the program, and the exhaustion check has to compare against what was
-            // granted rather than what was asked for.
-            + "@burxt.arena_size = global i64 0\n"
+            // log2 of the CHUNK size, decided at run time by the ladder in `pick` below; zero
+            // until then. A shift rather than the size because it is used to divide, and the size is
+            // used to mask — this is the form that needs no division. Zero is a safe "not yet",
+            // since a real chunk is never one byte. Stage-0 keeps the same pair.
+            + "@burxt.chunk_shift = global i64 0\n"
             + "declare ptr @malloc(i64)\n"
             + "declare i64 @strlen(ptr)\n"
             + "declare i32 @strcmp(ptr, ptr)\n"
@@ -4316,63 +4316,111 @@ function runtime_ir() -> String {
             // moves it.
             + "define i64 @burxt.alloc(i64 %n) \{\n"
             + "entry:\n"
-            + "  %a = load ptr, ptr @burxt.arena\n"
-            + "  %isnull = icmp eq ptr %a, null\n"
-            + "  br i1 %isnull, label %init, label %go\n"
-            // **A descending ladder, not one number, and this is the half that stage-0 got wrong.**
-            // Measured 2026-08-16 by running a Burxt program in node: `wasm32-unknown-unknown` has a
-            // 4 GiB address space in TOTAL, so a 4 GiB reservation can never be satisfied there — and
-            // `memory.grow` commits, so the "reservation is virtual, raising it costs nothing
-            // resident" argument above is a property of lazy page mapping that wasm does not have.
-            // The comment block above stays true of a 64-bit OS and is false of wasm; both halves are
-            // written down because a stale limitation is worse than a stale DONE.
-            //
-            // Stage-1 was already the safer of the two here — it checked `malloc` for null from the
-            // start, where stage-0 stored the answer unchecked and let the next write find out. What
-            // it did instead was give up on the first refusal, which on wasm means every program dies
-            // before its first allocation. So: ask for 4 GiB, then 256 MB, then 16 MB, and only then
-            // refuse. 64-bit with overcommit takes the first rung and nothing changes for it.
-            //
-            // The rungs are far apart on purpose — a ladder with close rungs spends syscalls
-            // discovering a number nobody will notice.
-            + "init:\n"
-            + "  %m = call ptr @malloc(i64 4294967296)\n"
-            + "  %failed = icmp eq ptr %m, null\n"
-            + "  br i1 %failed, label %smaller1, label %mapped4g\n"
-            + "mapped4g:\n"
-            + "  store i64 4294967296, ptr @burxt.arena_size\n"
-            + "  store ptr %m, ptr @burxt.arena\n"
-            + "  br label %go\n"
-            + "smaller1:\n"
-            + "  %m2 = call ptr @malloc(i64 268435456)\n"
-            + "  %failed2 = icmp eq ptr %m2, null\n"
-            + "  br i1 %failed2, label %smaller2, label %mapped256m\n"
-            + "mapped256m:\n"
-            + "  store i64 268435456, ptr @burxt.arena_size\n"
-            + "  store ptr %m2, ptr @burxt.arena\n"
-            + "  br label %go\n"
-            + "smaller2:\n"
-            + "  %m3 = call ptr @malloc(i64 16777216)\n"
-            + "  %failed3 = icmp eq ptr %m3, null\n"
-            + "  br i1 %failed3, label %no_region, label %mapped16m\n"
-            + "mapped16m:\n"
-            + "  store i64 16777216, ptr @burxt.arena_size\n"
-            + "  store ptr %m3, ptr @burxt.arena\n"
-            + "  br label %go\n"
-            + "go:\n"
-            + "  %base = load ptr, ptr @burxt.arena\n"
-            + "  %off = load i64, ptr @burxt.bump\n"
             + "  %padded = add i64 %n, 7\n"
-            + "  %rounded = and i64 %padded, -8\n"
-            + "  %next = add i64 %off, %rounded\n"
-            + "  %granted = load i64, ptr @burxt.arena_size\n"
-            + "  %over = icmp ugt i64 %next, %granted\n"
-            + "  br i1 %over, label %exhausted, label %hand_out\n"
-            + "hand_out:\n"
-            + "  %p = getelementptr i8, ptr %base, i64 %off\n"
-            + "  store i64 %next, ptr @burxt.bump\n"
+            + "  %size = and i64 %padded, -8\n"
+            + "  %sh0 = load i64, ptr @burxt.chunk_shift\n"
+            + "  %undecided = icmp eq i64 %sh0, 0\n"
+            + "  br i1 %undecided, label %pick, label %have\n"
+            // Pick the CHUNK size once, keeping the first rung the machine grants — and the chunk
+            // itself becomes slot 0, so the probe is not wasted. 16 MiB suits a hosted program,
+            // 1 MiB a memory-capped container or a browser tab, 64 KiB a small device. Far apart on
+            // purpose: a ladder with close rungs spends syscalls discovering a number nobody
+            // notices. Each is a power of two, so the chunk index is a shift.
+            + "pick:\n"
+            + "  %m = call ptr @malloc(i64 16777216)\n"
+            + "  %f1 = icmp eq ptr %m, null\n"
+            + "  br i1 %f1, label %smaller1, label %got0\n"
+            + "got0:\n"
+            + "  store ptr %m, ptr @burxt.chunks\n"
+            + "  store i64 24, ptr @burxt.chunk_shift\n"
+            + "  br label %have\n"
+            + "smaller1:\n"
+            + "  %m2 = call ptr @malloc(i64 1048576)\n"
+            + "  %f2 = icmp eq ptr %m2, null\n"
+            + "  br i1 %f2, label %smaller2, label %got1\n"
+            + "got1:\n"
+            + "  store ptr %m2, ptr @burxt.chunks\n"
+            + "  store i64 20, ptr @burxt.chunk_shift\n"
+            + "  br label %have\n"
+            + "smaller2:\n"
+            + "  %m3 = call ptr @malloc(i64 65536)\n"
+            + "  %f3 = icmp eq ptr %m3, null\n"
+            + "  br i1 %f3, label %no_region, label %got2\n"
+            + "got2:\n"
+            + "  store ptr %m3, ptr @burxt.chunks\n"
+            + "  store i64 16, ptr @burxt.chunk_shift\n"
+            + "  br label %have\n"
+            + "have:\n"
+            + "  %sh = load i64, ptr @burxt.chunk_shift\n"
+            + "  %chunk = shl i64 1, %sh\n"
+            + "  %cursor = load i64, ptr @burxt.bump\n"
+            + "  %mask = sub i64 %chunk, 1\n"
+            + "  %over_chunk = icmp ugt i64 %size, %chunk\n"
+            + "  br i1 %over_chunk, label %oversize, label %fits\n"
+            // A value WIDER than a chunk gets a chunk of its own, sized to it. Without this the
+            // growable region would be a regression: `read_file` of a 20 MB file fits a 4 GiB
+            // reservation and does not fit a 16 MiB chunk. It starts at a chunk BOUNDARY so the
+            // slot it lands in is one nothing has allocated, then the cursor jumps past every whole
+            // chunk the value spans, so those slots are never handed to anything else. They stay
+            // null and cost nothing — a slot number is not memory.
+            + "oversize:\n"
+            + "  %round = add i64 %cursor, %mask\n"
+            + "  %bidx = lshr i64 %round, %sh\n"
+            + "  %spanb = add i64 %size, %mask\n"
+            + "  %span = lshr i64 %spanb, %sh\n"
+            + "  %bend = add i64 %bidx, %span\n"
+            + "  %bpast = icmp ugt i64 %bend, 4096\n"
+            + "  br i1 %bpast, label %no_slots, label %big_ask\n"
+            + "big_ask:\n"
+            + "  %big = call ptr @malloc(i64 %size)\n"
+            + "  %bf = icmp eq ptr %big, null\n"
+            + "  br i1 %bf, label %exhausted, label %big_got\n"
+            + "big_got:\n"
+            + "  %bslot = getelementptr ptr, ptr @burxt.chunks, i64 %bidx\n"
+            + "  store ptr %big, ptr %bslot\n"
+            + "  %bafter = shl i64 %bend, %sh\n"
+            + "  store i64 %bafter, ptr @burxt.bump\n"
+            + "  %bint = ptrtoint ptr %big to i64\n"
+            + "  ret i64 %bint\n"
+            // An allocation never straddles two chunks: they are separate mappings. If this one
+            // would, skip the tail of the current chunk and start the next. The waste is bounded by
+            // the size of one value and only ever happens on a boundary.
+            + "fits:\n"
+            + "  %off = and i64 %cursor, %mask\n"
+            + "  %end = add i64 %off, %size\n"
+            + "  %straddles = icmp ugt i64 %end, %chunk\n"
+            + "  %cstart = sub i64 %cursor, %off\n"
+            + "  %skipped = add i64 %cstart, %chunk\n"
+            + "  %at = select i1 %straddles, i64 %skipped, i64 %cursor\n"
+            + "  %atoff = select i1 %straddles, i64 0, i64 %off\n"
+            + "  %idx = lshr i64 %at, %sh\n"
+            + "  %past = icmp uge i64 %idx, 4096\n"
+            + "  br i1 %past, label %no_slots, label %in_range\n"
+            + "in_range:\n"
+            + "  %slot = getelementptr ptr, ptr @burxt.chunks, i64 %idx\n"
+            + "  %held = load ptr, ptr %slot\n"
+            + "  %absent = icmp eq ptr %held, null\n"
+            + "  br i1 %absent, label %grow, label %ok\n"
+            // GROW: the cursor has reached a chunk that does not exist yet, so add it. This is the
+            // whole of the change — where this was the exhaustion panic, it now asks again.
+            + "grow:\n"
+            + "  %fresh = call ptr @malloc(i64 %chunk)\n"
+            + "  %gf = icmp eq ptr %fresh, null\n"
+            + "  br i1 %gf, label %exhausted, label %keep\n"
+            + "keep:\n"
+            + "  store ptr %fresh, ptr %slot\n"
+            + "  br label %ok\n"
+            + "ok:\n"
+            + "  %base = phi ptr [ %held, %in_range ], [ %fresh, %keep ]\n"
+            + "  %p = getelementptr i8, ptr %base, i64 %atoff\n"
+            + "  %after = add i64 %at, %size\n"
+            + "  store i64 %after, ptr @burxt.bump\n"
             + "  %asint = ptrtoint ptr %p to i64\n"
             + "  ret i64 %asint\n"
+            + "no_slots:\n"
+            + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.slots_msg)\n"
+            + "  call void @exit(i32 70)\n"
+            + "  unreachable\n"
             + "exhausted:\n"
             + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.region_msg)\n"
             + "  call void @exit(i32 70)\n"
