@@ -158,15 +158,57 @@ this space has *does this result alias its input* available as a compile-time fa
 same asset that makes `burxt review` possible: **the interesting property is in the signature, so a
 tool can read it.**
 
+### The mechanism: record the mark, and let the frame dispel
+
+Andre's, 2026-08-18, and it replaces the two-arena sketch above because it needs **one** strip rather
+than two — which is the constraint that actually bites, since WebAssembly has about 4 GB of address
+space in total and a program reserves 1 GB today.
+
+    frame_start = marker                  // record the pointer
+       … the frame runs, allocating freely …
+    new_model = update(msg, model)        // built somewhere above the mark
+    copy_down(new_model, frame_start)     // what it learned returns to the original
+    marker = frame_start + size           // dispel: everything else vanishes at once
+
+A frame is a clone. It works in its own space, and when it dispels **everything it made vanishes
+except what it learned**, which returns to the original. The reset is the same O(1) move a region
+already makes; the only addition is carrying one value back across it.
+
+**Copy down only what lies ABOVE the mark.** Anything below already survived the previous dispel and
+does not move, so its pointers stay valid. If a keystroke changed one field and left the item list
+alone, that list is not copied — the new model simply points at where it already is. The cost is
+*what this frame made and kept*, never *the whole application state*, which is the difference between
+this and serialising: the text approach pays for everything on every event.
+
+**This is writable because the compiler already knows the layout.** `burxt layout` prints, for every
+class, its size and the offset and type of every field:
+
+    Model: size 40 align 8
+      +0  Int      (8 bytes)      — a value, nothing to follow
+      +8  [Item]   (24 bytes)     — a slice: pointer, length, capacity
+      +32 String   (8 bytes)      — a pointer into the arena
+
+So `copy_down` is a **per-type function the compiler generates** from a table it already computes. No
+tracing, no roots, no runtime type information, no scanning of anything — the opposite of a
+collector. It walks exactly one value, following exactly the fields that are pointers, and only where
+they point above the mark.
+
+**And it dissolves the relay tension rather than ruling on it.** The previous sketch needed a decision
+about `if nothing_changed { return m; }`, because a returned old model would have pointed into an
+arena about to be reset. Here the result is copied down whichever way it was produced, and a pointer
+already below the mark is left exactly where it is. There is nothing to refuse and no rule to
+remember — which is the sign the mechanism is the right shape rather than a patch over the wrong one.
+
 ### Left to decide before code
 
-- Two cursors, or one cursor and a compacting move of the model between frames? The first is simpler
-  and doubles the reservation; the second keeps one arena and has to rewrite interior pointers, which
-  this language has no machinery for. **Two cursors, unless the reservation is the objection.**
-- What the boundary does when `update` relays rather than builds. Refuse it, or detect it and skip the
-  reset for that frame? Refusing is honest and costs the `return m` branch every UI wants to write.
-- Whether `view(h)` borrows without consuming, which it must, and what that means for the generation
-  check.
+- **The reservation in a browser.** One strip means no doubling, but a 1 GB reserve is still half of
+  wasm32's address space. A UI's model is small; the figure should be a build-time choice rather than
+  the compiler's own number reused.
+- **What `copy_down` does with a cycle.** A model cannot contain one today — there is no way to build
+  a cycle in Burxt's value types — but that is a property worth asserting rather than assuming, since
+  the walker would not terminate if it were ever untrue.
+- **Where the mark lives across a call.** The host holds a handle; the runtime holds the mark that
+  handle's frame began at. That is one more thing the table stores, and it is the natural home for it.
 
 ## Acceptance
 
