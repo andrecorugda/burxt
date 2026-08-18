@@ -262,12 +262,15 @@ The work you stop doing is checking for the mistakes on this page.
 </div>
 
 <p style="font-size:14px; margin-top:2.5rem;">
-<strong>Burxt 1.3.0 is released.</strong> This is the release two real packages were built against: a
-dependency can now reach the standard library with <code>use "std/…"</code>, which is what lets a
-library or a framework live in its own repository instead of inside the compiler. Two already do.
-You can still write a program, test it, debug
-it, serve TCP and fork workers, speak TLS by binding OpenSSL, and ship it. There are no threads and
-no DNS —
+<strong>Burxt 1.4.0 is released.</strong> A Burxt program can now answer an HTTP request and make
+one. <code>lib/http.bx</code> parses a request into a typed <code>HttpRequest</code> — a method, a
+path, a decoded query, headers, a body — over the sockets that already existed, and
+<code>lib/tls.bx</code> binds OpenSSL so a client fetches over <em>verified</em> HTTPS: the chain,
+the hostname, and a named refusal when either fails. Neither needed a compiler change; what was
+missing was the framing between accepting a connection and answering a document.
+It also carries <code>Handle&lt;T&gt;</code>, so a host can hold a typed value between calls instead
+of passing its state as text, and a region that grows on demand rather than taking one arena and
+dying when it runs out. There are still no threads and no DNS —
 <a href="{{ site.baseurl }}/limitations.html">every gap is named, with its reason</a>.
 </p>
 

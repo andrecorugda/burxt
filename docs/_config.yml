@@ -21,8 +21,8 @@ baseurl: ""
 # `the_site_and_the_compiler_agree_on_the_version` in `tests/runner.rs` asserts this equals
 # `Cargo.toml`. Without that it is just a number in a config file, and a stale download link is
 # worse than none: it 404s at the one moment somebody has decided to try the language.
-burxt_version: "1.3.0"
-burxt_series: "1.3"
+burxt_version: "1.4.0"
+burxt_series: "1.4"
 
 # **The milestone log was excluded, and that is REVERSED as of 1.0.0.** The reason it gave was that
 # the log and the specs "stay in git and out of the build rather than being half-styled pages nobody

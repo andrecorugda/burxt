@@ -76,9 +76,24 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 - **Composition-first OOP** — small interfaces, explicit `implement Trait for Type` conformance, static dispatch by default and runtime dispatch only where you write `dynamic`.
 - **Native, cross-platform by design** — one LLVM backend, many targets: desktop, mobile, and web (WebAssembly). The front end knows nothing about any platform, so reach is a configuration problem rather than a rewrite.
 
-## Status — 1.3.0
+## Status — 1.4.0
 
-**Released.** 1.3 is the release that makes 1.2's promise true. 1.2 shipped `use "std/…"` — the
+**Released.** 1.4 is the release that lets a Burxt program answer a request and make one.
+`lib/http.bx` parses a request into an `HttpRequest` and renders an `HttpResponse` over the sockets
+that already existed — a method, a path, a decoded query, headers, a body — and `lib/tls.bx` binds
+OpenSSL so a client can fetch over verified HTTPS. Neither needed a compiler change; what was
+missing was the framing between `net_accept` and a document.
+
+It also carries the first half of M17: `Handle<T>` with `handle_of` and `handle_value`, so a host
+can hold a TYPED value between calls instead of passing its state as text. Plus a growable region —
+the arena adds chunks on demand rather than taking one and dying when it runs out — and four
+refusals that used to be crashes or silence, including a linked list that passed `burxt check` and
+then overflowed the compiler's own stack.
+
+**Two names are reserved that were not before**, per the compatibility promise: `handle_of` and
+`handle_value`. A program that declared either stops compiling, with a named error on the line.
+
+1.3 was the release that made 1.2's promise true. 1.2 shipped `use "std/…"` — the
 prefix that lets a dependency reach the standard library — and then the first two packages built on
 it found that they still could not compile: an update function could not hand back the model it was
 given, and a `pure` view could not call the JSON encoder, because 99 library functions that could
