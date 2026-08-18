@@ -1,6 +1,6 @@
 // **The claim `M15-WEB.md` W6 makes about event handlers, proved HERE and without a framework.**
 //
-// star-burxt turns `::: button on:click=total * 1.5` into exactly this function, and the refusal
+// star-burxt turns `:button: on:click=total * 1.5` into exactly this function, and the refusal
 // below is why a front end written in Burxt can say something no framework whose handlers are
 // closures can: **the compiler judges what happens on a click.** A closure's captured state is
 // invisible to the signature, so there is nothing for a type system to look at; a handler that is
