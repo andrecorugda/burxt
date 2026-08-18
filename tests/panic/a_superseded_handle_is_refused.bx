@@ -1,0 +1,28 @@
+// M17. A handle the host kept after a later call replaced the value.
+//
+// **This is the case an index alone cannot catch, and it is the one that actually happens.**
+// A slot stays live across an update, so an index check passes and the host reads the WRONG
+// value with no diagnostic — the silent use-after-free the whole milestone exists to refuse.
+// So a handle is `(generation, index)` packed into one integer, each slot counts how many times
+// it has been issued, and the count travels with the handle.
+//
+// The table holds 1024 slots and reuses them round-robin, which is deliberate: a UI builds a
+// model per keystroke, so handles are made in the thousands and a table that only grew would be
+// the leak wearing a hat. Reuse is safe precisely BECAUSE the generation moved — and this
+// fixture is what proves it, by filling the table until the first slot comes round again.
+//
+// The message names both generations, because they are the whole of the advice: keep the handle
+// the last call answered with. A message that only said "stale" would leave a reader guessing
+// which call to go back to.
+class Model { label: String, count: Int }
+
+region main {
+    let first: Handle<Model> = handle_of(Model { label: "the original", count: 0 });
+    let mutable made: Int = 0;
+    while made < 1024 {
+        let filler: Handle<Model> = handle_of(Model { label: "filler", count: made });
+        made += 1;
+    }
+    let back: Model = handle_value(first);
+    print("read it anyway: {back.label}");
+}

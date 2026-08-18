@@ -1,0 +1,42 @@
+// M17. A host holds a TYPED value between calls, rather than passing its state as text.
+//
+// The problem this answers: a browser calls into a compiled module on every click, and between
+// two calls there is nowhere for the application's state to be. So it crosses as `String`, comes
+// back as `Json`, and something hand-validates it into a class — surrendering the checking
+// property exactly where a program works hardest.
+//
+// `handle_of` files the value and answers an integer. It is an INDEX into a table, never an
+// address: the language has no `c_address_of` and is not getting one, because a pointer handed
+// to a host is a pointer a host can invent, and a wrong one is type confusion with no
+// diagnostic. The table costs a slot and a lookup and buys three named refusals instead.
+//
+// `Handle<Model>` rather than a bare Int is the point rather than decoration. The runtime tag is
+// what actually protects, since a host can pass any integer at all — but the type argument keeps
+// application state inside the type system, where `burxt review` can see it. That is the whole
+// argument against the mutable global this replaces.
+class Model { label: String, count: Int }
+
+function start(label: String) -> Handle<Model> allocates {
+    return handle_of(Model { label: label, count: 0 });
+}
+
+function bump(h: Handle<Model>) -> Handle<Model> allocates {
+    let old: Model = handle_value(h);
+    return handle_of(Model { label: old.label, count: old.count + 1 });
+}
+
+function describe(h: Handle<Model>) -> String allocates {
+    let m: Model = handle_value(h);
+    return m.label + " at " + to_string(m.count);
+}
+
+region main {
+    let first: Handle<Model> = start("counter");
+    let second: Handle<Model> = bump(first);
+    let third: Handle<Model> = bump(second);
+    // The FIRST handle still reads, because each `bump` took a new slot rather than
+    // overwriting one. Superseding is what a later call to the same slot does, and
+    // tests/panic/a_superseded_handle_is_refused.bx is where that is checked.
+    print(describe(first));
+    print(describe(third));
+}

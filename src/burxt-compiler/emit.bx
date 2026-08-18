@@ -2041,6 +2041,79 @@ function (mutable self: Unit) emit_decimal_print(value: String, scale: Int) -> I
     return self.print_call(format, ", ptr " + sign + ", i64 " + whole + ", i64 " + frac);
 }
 
+// `handle_of(value)` — copy the value into the region, then file it. M17.
+//
+// **The copy is the whole of the correctness here, and leaving it out was a use-after-free.**
+// A class literal is built in a stack `alloca` and only moved to the region where the emitter
+// can see it escaping — and a builtin argument is not one of the places it looks. So filing
+// `first` directly put a pointer into the frame in the table, and the moment the function
+// returned the handle named dead stack. Stage-0 copies for the same reason, out of a struct
+// value. It was loud when it ran, walking the allocator's cursor off the end of the chunk
+// table, but a slightly different program would have read plausible rubbish instead.
+function (mutable self: Unit) emit_handle_of(src: String, argument: Int, first: String,
+        reg: String) -> String {
+    let held: Type = self.type_at(argument);
+    let cells: Int = self.cells_of(src, held);
+    let home: String = self.fresh();
+    let asked: Int = self.write_body("  " + home + " = call i64 @burxt.alloc(i64 "
+            + to_string(cells * 8) + ")\n");
+    let target: String = self.fresh();
+    let cast: Int = self.write_body("  " + target + " = inttoptr i64 " + home + " to ptr\n");
+    let copied: Int = self.copy_cells(src, target, first, cells);
+    let tag: Int = self.handle_tag(src, held.name_start, held.name_length);
+    let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.hold(i64 "
+            + home + ", i64 " + to_string(tag) + ")\n");
+    return reg;
+}
+
+// `handle_value(handle)` — the value back, or one of three named refusals. M17.
+// The handle's kind carries the class it names, which is exactly the tag to demand.
+function (mutable self: Unit) emit_handle_value(src: String, argument: Int, first: String,
+        reg: String) -> String {
+    let handle: Type = self.type_at(argument);
+    let tag: Int = self.handle_tag(src, handle.name_start, handle.name_length);
+    let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.held(i64 "
+            + first + ", i64 " + to_string(tag) + ")\n");
+    return reg;
+}
+
+// FNV-1a over the program's declared type names, then over one class name. M17.
+//
+// **Derived rather than random, and that is a requirement rather than a preference.** The tag
+// exists so a handle issued by one module is refused by another, which a random per-build id
+// would also do — and it would break reproducibility, since the same source would then compile
+// to different bytes. Hashing what the program DECLARES is stable for the same program and
+// different for a different one.
+//
+// **Thirty-two bits, and the first version overflowed.** Burxt has no unsigned type and no
+// wrapping multiply — an overflow is a named runtime error, which is the language working — so
+// masking to 62 bits was not enough: `h * 16777619` on a 62-bit `h` leaves the range. Masking to
+// 32 BEFORE the multiply keeps the product under 2^56 and inside a signed i64, which is ordinary
+// 32-bit FNV-1a. Stage-0 wraps a u64 instead; the two need not agree, because a handle never
+// leaves the binary that issued it and the tag is only ever compared against itself.
+function (mutable self: Unit) handle_tag(src: String, start: Int, length: Int) -> Int {
+    let mutable h: Int = 2166136261;
+    let mutable t: Int = 0;
+    while t < len(self.types) {
+        let named: Token = self.tokens[self.nodes[self.types[t].node].token];
+        let mutable i: Int = 0;
+        while i < named.length {
+            h = bit_and(bit_xor(h, byte_at(src, named.start + i)), 4294967295) * 16777619;
+            i += 1;
+        }
+        h = bit_and(bit_xor(bit_and(h, 4294967295), 255), 4294967295) * 16777619;
+        t += 1;
+    }
+    let mutable j: Int = 0;
+    while j < length {
+        h = bit_and(bit_xor(h, byte_at(src, start + j)), 4294967295) * 16777619;
+        j += 1;
+    }
+    h = bit_and(h, 4294967295);
+    if h == 0 { return 1; }                              // zero is the empty-slot tag
+    return h;
+}
+
 function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String) -> String {
     let list: Node = self.nodes[n.a];
     let mutable first: String = "0";
@@ -2114,6 +2187,17 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
         let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.byte_at(i64 " + first
                 + ", i64 " + second + ")\n");
         return reg;
+    }
+    // M17. Both are one call each, in their OWN functions — and that is a stack decision, not
+    // tidiness. `emit_builtin` sits on the expression recursion, so every local it declares is
+    // paid for at every depth. The first version put twelve of them here and stage-2 stopped
+    // compiling stage-1 at the default 8 MB stack: it wanted 32. A helper is only on the stack
+    // while a handle is actually being emitted, which is never deep.
+    if called == "handle_of" {
+        return self.emit_handle_of(src, self.children[list.a], first, reg);
+    }
+    if called == "handle_value" {
+        return self.emit_handle_value(src, self.children[list.a], first, reg);
     }
     if called == "byte_as_string" {
         let visited: Int = self.write_body("  " + reg
@@ -4262,6 +4346,87 @@ function (self: Unit) declaration_node(src: String, start: Int, length: Int) -> 
 // The bump allocator's MARK is the region:
 // opening one remembers where the pointer stood, closing it puts the pointer back, and
 // that is the whole of release — O(1) for any number of allocations.
+// M17's two runtime functions, in a function of their OWN rather than ninety more terms on
+// `runtime_ir`'s chain — and that is a stack decision with a measurement behind it.
+//
+// **A long `a + b + c + ...` is a left-nested expression TREE**, one level per term, and the
+// compiler recurses through every level to emit it. `runtime_ir` was already a chain of several
+// hundred; adding ninety took stage-2 past the default 8 MB stack, so the Burxt compiler could
+// no longer compile itself. Measured: before, 8 MB was enough; after, it wanted 10 MB; with this
+// split, 8 MB again.
+//
+// Worth knowing beyond this file: in a compiler whose source is its own worst input, the cost of
+// a builder written as one long concatenation is paid by the NEXT stage, not by the reader.
+function handle_runtime_ir() -> String {
+    // M17. `hold` files a value and answers `(generation << 32) | slot`; `held` gives it
+            // back or refuses by name. The generation is what an index alone cannot do: a host
+            // that kept a handle across a later call finds the slot still LIVE, so an index check
+            // passes and it silently reads the wrong value. That is the use-after-free this
+            // exists to refuse, and it is the case that actually happens.
+            //
+            // Stage-1 hands classes around as region pointers already, so nothing is copied here
+            // — where stage-0, whose classes are struct values, has to copy into the region
+            // first. The two compilers agree on BEHAVIOUR and never on representation.
+            return "define i64 @burxt.hold(i64 %p, i64 %tag) \{\n"
+            + "entry:\n"
+            + "  %n = load i64, ptr @burxt.handle.next\n"
+            + "  %slot = and i64 %n, 1023\n"
+            + "  %after = add i64 %n, 1\n"
+            + "  store i64 %after, ptr @burxt.handle.next\n"
+            + "  %gslot = getelementptr i64, ptr @burxt.handle.generation, i64 %slot\n"
+            + "  %was = load i64, ptr %gslot\n"
+            + "  %now = add i64 %was, 1\n"
+            + "  store i64 %now, ptr %gslot\n"
+            + "  %wslot = getelementptr ptr, ptr @burxt.handle.where, i64 %slot\n"
+            + "  %asptr = inttoptr i64 %p to ptr\n"
+            + "  store ptr %asptr, ptr %wslot\n"
+            + "  %tslot = getelementptr i64, ptr @burxt.handle.tag, i64 %slot\n"
+            + "  store i64 %tag, ptr %tslot\n"
+            + "  %high = shl i64 %now, 32\n"
+            + "  %packed = or i64 %high, %slot\n"
+            + "  ret i64 %packed\n\}\n\n"
+            + "define i64 @burxt.held(i64 %h, i64 %want) \{\n"
+            + "entry:\n"
+            + "  %slot = and i64 %h, 4294967295\n"
+            + "  %gen = lshr i64 %h, 32\n"
+            + "  %past = icmp uge i64 %slot, 1024\n"
+            + "  br i1 %past, label %unknown, label %in_range\n"
+            + "in_range:\n"
+            + "  %gslot = getelementptr i64, ptr @burxt.handle.generation, i64 %slot\n"
+            + "  %live = load i64, ptr %gslot\n"
+            // A slot at generation zero was never issued, so this is the same failure as an index
+            // past the end — saying "superseded" about a value that never existed would send the
+            // reader looking for a call that never happened.
+            + "  %never = icmp eq i64 %live, 0\n"
+            + "  br i1 %never, label %unknown, label %live_slot\n"
+            + "live_slot:\n"
+            + "  %same = icmp eq i64 %gen, %live\n"
+            + "  br i1 %same, label %same_gen, label %stale\n"
+            + "same_gen:\n"
+            + "  %tslot = getelementptr i64, ptr @burxt.handle.tag, i64 %slot\n"
+            + "  %held_tag = load i64, ptr %tslot\n"
+            + "  %matches = icmp eq i64 %held_tag, %want\n"
+            + "  br i1 %matches, label %ok, label %wrong_type\n"
+            + "ok:\n"
+            + "  %wslot = getelementptr ptr, ptr @burxt.handle.where, i64 %slot\n"
+            + "  %value = load ptr, ptr %wslot\n"
+            + "  %asint = ptrtoint ptr %value to i64\n"
+            + "  ret i64 %asint\n"
+            + "unknown:\n"
+            + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.handle_unknown_msg)\n"
+            + "  call void @exit(i32 70)\n"
+            + "  unreachable\n"
+            + "stale:\n"
+            + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.handle_stale_msg, "
+            + "i64 %gen, i64 %live)\n"
+            + "  call void @exit(i32 70)\n"
+            + "  unreachable\n"
+            + "wrong_type:\n"
+            + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.handle_type_msg)\n"
+            + "  call void @exit(i32 70)\n"
+            + "  unreachable\n\}\n\n";
+}
+
 function runtime_ir() -> String {
     return "@burxt.chunks = global [4096 x ptr] zeroinitializer\n"
             + "@burxt.bump = global i64 0\n"
@@ -4270,6 +4435,14 @@ function runtime_ir() -> String {
             // used to mask — this is the form that needs no division. Zero is a safe "not yet",
             // since a real chunk is never one byte. Stage-0 keeps the same pair.
             + "@burxt.chunk_shift = global i64 0\n"
+            // M17's table. Three parallel arrays and a cursor: where a held value is, which
+            // generation issued it, and what type it was. 1024 slots, reused round-robin — a UI
+            // builds a model per keystroke, so what matters is that reuse is SAFE (the generation
+            // moves) rather than that the table is large. Stage-0 keeps the same four.
+            + "@burxt.handle.where = global [1024 x ptr] zeroinitializer\n"
+            + "@burxt.handle.generation = global [1024 x i64] zeroinitializer\n"
+            + "@burxt.handle.tag = global [1024 x i64] zeroinitializer\n"
+            + "@burxt.handle.next = global i64 0\n"
             + "declare ptr @malloc(i64)\n"
             + "declare i64 @strlen(ptr)\n"
             + "declare i32 @strcmp(ptr, ptr)\n"
@@ -4436,6 +4609,7 @@ function runtime_ir() -> String {
             //
             // Reading n bytes used to cost n squared, because a bounds check is a length and a length
             // was a strlen. 102400 statements took 31.67 seconds; they take 0.05 now.
+            + handle_runtime_ir()
             + "define i64 @burxt.alloc_string(i64 %len) \{\n"
             + "entry:\n"
             + "  %total = add i64 %len, 9\n"

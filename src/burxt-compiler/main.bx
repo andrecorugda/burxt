@@ -334,6 +334,23 @@ function module_text(mutable unit: Unit) -> String {
             + "@burxt.slots_msg = private unnamed_addr constant [77 x i8] "
             + "c\"burxt runtime error: region memory exhausted — every chunk slot is in "
             + "use\\0A\\00\"\n"
+            // M17's three, and they are three rather than one for the reason the two above are
+            // two: a check that cannot tell its failures apart sends the reader to the wrong one.
+            // Never issued is a bug in the integer a host kept; superseded is a bug in WHEN it
+            // used one, and the numbers are the whole of the advice; a wrong type is a wiring
+            // mistake no retry will fix. Word for word what stage-0 emits.
+            + "@burxt.handle_unknown_msg = private unnamed_addr constant [145 x i8] "
+            + "c\"burxt runtime error: this handle was never issued by this module. An "
+            + "integer that did not come from a call into this module names nothing "
+            + "here.\\0A\\00\"\n"
+            + "@burxt.handle_stale_msg = private unnamed_addr constant [204 x i8] "
+            + "c\"burxt runtime error: this handle refers to a value that was replaced by a "
+            + "later call. It was issued at generation %lld and the live one is generation "
+            + "%lld \\E2\\80\\94 use the handle the last call answered with.\\0A\\00\"\n"
+            + "@burxt.handle_type_msg = private unnamed_addr constant [160 x i8] "
+            + "c\"burxt runtime error: this handle names a value of a different type, or came "
+            + "from a different module. A handle is only meaningful to the module that issued "
+            + "it.\\0A\\00\"\n"
             + "@burxt.divzero_msg = private unnamed_addr constant [39 x i8] "
             + "c\"burxt runtime error: division by zero\\0A\\00\"\n"
             // The third number was the SOURCE BYTE OFFSET, which is a compiler-writer's number: it
