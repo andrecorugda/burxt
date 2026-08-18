@@ -502,6 +502,20 @@ function (mutable self: Unit) scan_punct(src: String, from: Int, stop: Int) -> I
         self.errors += 1;
         return from + 1;
     }
+    // `%` is the percent literal, so a `%` reaching here is somebody reaching for modulo — and
+    // `byte 37 starts no token` sent a reader off to design around a language without one.
+    // Measured: star-burxt lost minutes to it while writing a game, then met `/`'s message three
+    // lines later and had the answer. Word for word what stage-0 emits; `/` is the standard both
+    // are trying to meet, because it names the ambiguity, shows it with a number, and lists every
+    // answer — one of which is this one.
+    if one == 37 {
+        print("error: `%` is the percent literal — `5%` is five percent of something — so it is "
+                + "not modulo. The remainder of `a` divided by `b` is `remainder(a, b)`; the two "
+                + "divisions are `divide_floor(a, b)` and `divide_toward_zero(a, b)`, which is "
+                + "the same choice `/` on two Ints asks you to make");
+        self.errors += 1;
+        return from + 1;
+    }
     print("error: byte " + to_string(one) + " starts no token");
     self.errors += 1;
     return from + 1;

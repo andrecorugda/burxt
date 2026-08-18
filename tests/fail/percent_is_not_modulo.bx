@@ -1,0 +1,21 @@
+// `%` reached for as modulo.
+//
+// It used to answer `unexpected character: '%'` — a lexer's byte report, with nothing to act on.
+// star-burxt met it while writing a game, spent minutes believing the finding was *a language
+// without modulo*, and started designing around it. Three lines later they typed `at / WIDTH` and
+// got the message that already knew the answer:
+//
+//     error: `/` on two Ints would have to round, and one operator cannot say which way: -7
+//     divided by 2 is -3 rounding toward zero and -4 rounding down. Say which you mean —
+//     `divide_floor(a, b)`, `divide_toward_zero(a, b)`, or `remainder(a, b)` for the remainder.
+//
+// Two messages about the same arithmetic, one file apart, and only one of them knew anything —
+// and `remainder` is the answer to both. `%` now says what `/` says, in both compilers.
+//
+// `%` is not merely unclaimed: it is the PERCENT LITERAL, so `5%` is legal and this is not. That is
+// what makes the guess safe — a `%` where a literal cannot be is somebody reaching for modulo.
+region main {
+    let seed: Int = 7;
+    let next: Int = (seed * 1103515245 + 12345) % 2147483648;
+    print(next);
+}

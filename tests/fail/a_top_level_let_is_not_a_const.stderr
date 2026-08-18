@@ -1,0 +1,1 @@
+there is a top-level `let WIDTH`, but a function body cannot see one

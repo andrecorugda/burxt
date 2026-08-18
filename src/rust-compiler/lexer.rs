@@ -486,6 +486,28 @@ impl<'a> Lexer<'a> {
             );
         }
 
+        // `%` is the PERCENT LITERAL — `5%` is five percent — so a `%` here is almost always
+        // somebody reaching for modulo, and `unexpected character: '%'` sent a reader off to
+        // design around a language without it. Measured: star-burxt lost minutes to exactly that
+        // while writing a game, then hit `/`'s message three lines later and had the answer.
+        //
+        // **`/` is the standard this has to meet**, and it is worth quoting because it is what a
+        // good refusal looks like: it names the ambiguity, shows it with a number, and lists every
+        // answer. One of those answers is this one, which is why the detour was avoidable.
+        //
+        // Named HERE beside `#` rather than in the parser, for the same reason `#` is: the lexer is
+        // where the character is met, and a reader who typed it wants to know what it means, not
+        // which production rejected it.
+        if c == '%' {
+            return Err(
+                "`%` is the percent literal — `5%` is five percent of something — so it is not \
+                 modulo. The remainder of `a` divided by `b` is `remainder(a, b)`; the two \
+                 divisions are `divide_floor(a, b)` and `divide_toward_zero(a, b)`, which is the \
+                 same choice `/` on two Ints asks you to make"
+                    .to_string(),
+            );
+        }
+
         Err(format!("unexpected character: {:?}", c))
     }
 

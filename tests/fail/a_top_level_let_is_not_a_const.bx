@@ -1,0 +1,29 @@
+// A top-level `let` read from inside a function, which is the `const` slip.
+//
+// **Stage-1 accepted this and printed a WRONG NUMBER.** The bindings table is one flat array for
+// the whole program, so a top-level `let` sat in it while a function body was checked, and the body
+// resolved a name to a binding that does not exist where the body runs — reading it as ZERO:
+//
+//     let OFFSET: Int = 1000;
+//     pure function shifted(at: Int) -> Int { return at + OFFSET; }
+//     print(shifted(5));                          -> 5, where the answer is 1005
+//
+// A silent wrong answer, in the compiler written in the language that exists to refuse them. And
+// **definition order decided it**: the same `let` written AFTER the function was correctly refused,
+// because the table was empty when the body was read. That is the third time in one day stage-1's
+// answer depended on declaration order.
+//
+// Fixed with a binding FLOOR — `find_binding` searches no lower than the body it is inside —
+// mirroring `type_binding_floor`, which exists a few hundred lines up for the same accident one
+// level down.
+//
+// The message is stage-0's, and it is here because the refusal alone was not the useful part:
+// `unknown variable` sent a reader to the scope rules when the answer is one word. star-burxt lost
+// time to exactly that while writing a component, which is how this was found.
+let WIDTH: Int = 16;
+
+pure function row_of(at: Int) -> Int {
+    return divide_floor(at, WIDTH);
+}
+
+print(row_of(40));

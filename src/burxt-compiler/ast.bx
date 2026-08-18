@@ -558,6 +558,11 @@ class Unit {
     // scoped correctly on the way OUT — a base taken before, truncated after — and not on the way
     // IN, which is the half nobody had needed until two calls to one generic nested.
     type_binding_floor: Int,
+    // The same idea for value bindings, and for the same reason one level down: the bindings table
+    // is one flat array for the whole program, so a function body could see a top-level `let` that
+    // does not exist where the body runs. Stage-0 refuses that; stage-1 read the value as ZERO and
+    // printed a wrong number. `find_binding` searches no lower than this.
+    binding_floor: Int,
     // The effects the function being checked ADMITS, as a bitmask, and whose signature said so.
     //
     // ALL SIX at the top level — 63, every bit set — because top-level code may reach anything. There

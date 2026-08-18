@@ -423,6 +423,10 @@ pub struct TypeChecker {
     /// share one path, and so a use site can hand the already-lowered literal straight to
     /// codegen. That is why `codegen.rs` has no idea `const` exists.
     consts: HashMap<String, (Type, TypedExprKind)>,
+    /// Names bound by a TOP-LEVEL `let`, so `unknown variable` can tell the one slip that looks
+    /// like a scope problem and is a keyword problem. A function body cannot see a top-level
+    /// `let` — only a `const` — and the difference is one word.
+    top_level_lets: Vec<String>,
     /// function name -> (parameter types, return type); collected up front so
     /// functions may be defined in any order and call each other.
     fns: HashMap<String, (Vec<Type>, Type)>,
@@ -909,6 +913,7 @@ impl TypeChecker {
             env: HashMap::new(),
             dyn_source: HashMap::new(),
             consts: HashMap::new(),
+            top_level_lets: Vec::new(),
             fns: HashMap::new(),
             fn_param_names: HashMap::new(),
             generics: HashMap::new(),
@@ -2438,6 +2443,13 @@ impl TypeChecker {
     /// every one of its use sites and the real error is the smallest thing on screen. The
     /// same reason `recover_from` binds an annotated `let` whose initializer failed.
     fn fold_consts(&mut self, prog: &Program) {
+        // Gathered here because it must be known BEFORE any function body is checked, and this
+        // pre-pass already runs first. Only the names — the types are irrelevant to the advice.
+        for s in &prog.stmts {
+            if let StmtKind::Let { name, .. } = &s.kind {
+                self.top_level_lets.push(name.clone());
+            }
+        }
         for c in &prog.consts {
             self.current_span.set(c.span);
             self.error_located.set(false);
@@ -9450,6 +9462,20 @@ impl TypeChecker {
                     name, en, name
                 );
             }
+        }
+        // **A top-level `let` of this very name, one line up, is the likeliest thing here** —
+        // and `unknown variable` sends a reader to the scope rules when the answer is a keyword.
+        // A function body sees `const`, never a top-level `let`, and star-burxt lost time to the
+        // difference while writing a component. The name being bound at the top is a strong
+        // signal precisely because nothing else explains it.
+        if self.top_level_lets.iter().any(|n| n == name) {
+            return format!(
+                "unknown variable: {} — there is a top-level `let {}`, but a function body cannot \
+                 see one: a `let` at the top belongs to the program's own statements, which run \
+                 after the functions are defined. Write `const {}` instead and every function can \
+                 read it.",
+                name, name, name
+            );
         }
         format!("unknown variable: {}", name)
     }

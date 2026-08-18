@@ -1834,8 +1834,22 @@ function (mutable self: Unit) associated_at(src: String, node: Int) -> Int {
 function (mutable self: Unit) find_binding(src: String, start: Int, length: Int) -> Int {
     self.find_binding_calls += 1;
     // Backwards: the innermost binding with this name is the one in scope.
+    //
+    // **Never below the FLOOR, and leaving that out was a silent wrong answer.** The bindings
+    // table is one flat array for the whole program, so a top-level `let` sat in it while a
+    // function body was checked — and a body that named it resolved to a binding that does not
+    // exist where the body runs. Stage-0 refuses that; stage-1 accepted it and read the value as
+    // ZERO:
+    //
+    //     let OFFSET: Int = 1000;
+    //     pure function shifted(at: Int) -> Int { return at + OFFSET; }
+    //     print(shifted(5));                     -> 5, where the answer is 1005
+    //
+    // Definition order decided it — the same `let` written AFTER the function was correctly
+    // refused, because the table was empty when the body was read. Third time today that stage-1's
+    // answer depended on declaration order; see `61887cc` and the containment fix.
     let mutable i: Int = len(self.bindings) - 1;
-    while i >= 0 {
+    while i >= self.binding_floor {
         if spans_equal(src, self.bindings[i].start, self.bindings[i].length, start, length) {
             return i;
         }
@@ -5756,6 +5770,11 @@ function (mutable self: Unit) first_allocation_in(src: String, node: Int) -> Str
 function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
     let item: Node = self.nodes[index];
     let base: Int = len(self.bindings);
+    // A body sees ITS OWN bindings and nothing outside them. Saved and restored rather than set to
+    // `base` and forgotten, because a body is checked inside another one for an `implement` block
+    // — the same shape `type_binding_floor` uses a few hundred lines up, for the same accident.
+    let outer_binding_floor: Int = self.binding_floor;
+    self.binding_floor = base;
     self.depth += 1;
     // A11's half of the depth bookkeeping: everything pushed at THIS depth is a parameter or a
     // receiver, and the body's own block goes one deeper. That is the only way to tell a
@@ -5945,6 +5964,7 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
     self.allowed_effects = outer_effects;
     self.effects_owner = outer_owner;
     let dropped: Int = truncate(self.bindings, base);
+    self.binding_floor = outer_binding_floor;
     self.depth -= 1;
     self.param_depth = outer_param_depth;
     self.in_caller_region = outer_caller;

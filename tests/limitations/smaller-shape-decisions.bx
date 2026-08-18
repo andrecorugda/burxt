@@ -1,6 +1,9 @@
 // CLAIM: Smaller shape decisions
 // HOLDS: refused
-// REFUSED-BECAUSE: unexpected character: '%'
+// REFUSED-BECAUSE: `%` is the percent literal
+// NOTE: this line used to read `unexpected character: '%'`, and the gate caught the change the day
+//       the message was improved — which is the branch working rather than a nuisance. The CLAIM
+//       did not move: `%` is still not modulo. Only what the compiler says about it did.
 // WHY: stands for the group. `%` is the percent literal, never modulo — the one most likely to
 //      be added by somebody who missed the reason.
 region main {
