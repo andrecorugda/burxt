@@ -129,21 +129,25 @@ cannot corrupt a balance*, derived from a declared invariant rather than from a 
 remembered, and shipping that half-done would be worse than not shipping it. Separate processes get
 the same guarantee the coarse way: two workers share no memory, so there is nothing to corrupt.
 
-### TCP and HTTP, yes. TLS by binding. No DNS
+### TCP, HTTP and TLS, yes. No DNS
 
 `lib/net.bx` opens, binds, accepts, reads and writes TCP sockets, both as a server and as a client.
 A Burxt program answers HTTP requests. What is missing above it:
 
-- **No TLS *library*** — and writing one is not the plan. Binding one is the recorded decision: this
-  language gives no control over instruction timing, and a hand-rolled handshake that *looks* fine is
-  exactly the failure it exists to refuse.
+- ~~**No TLS *library***~~ — **`lib/tls.bx` ships it**, and writing one was never the plan: the
+  primitives are BOUND, because this language gives no control over instruction timing and a
+  hand-rolled handshake that *looks* fine is the silent wrong answer it exists to refuse.
 
-  **Binding one already works, with no compiler change.** Measured 2026-08-18: six
-  `external function` declarations against OpenSSL, built with `burxt build client.bx -lssl -lcrypto`,
-  completing a **TLS 1.3** handshake to a public host and reporting the negotiated version. So the gap
-  is `lib/tls.bx`, a wrapper nobody has written, rather than a capability the language lacks — and
-  this bullet said otherwise until it was measured, one paragraph above the note recording that the
-  same thing had already happened to the sentence about opening a connection at all.
+  **It verifies, and all three parts are needed together.** The system CA store, `SSL_VERIFY_PEER`,
+  and the hostname checked against the certificate. Without the second, OpenSSL never builds the
+  chain and `SSL_get_verify_result` answers OK *vacuously* — so a program can set a hostname, read
+  0, and have verified nothing. Measured: no CA store gives verify code 20, a hostname outside the
+  certificate gives 62, and `https_get` refuses both by name. Link with `-lssl -lcrypto`; CI does
+  not run it, and `a_burxt_program_fetches_over_verified_https -- --ignored` is where it lives and
+  why.
+
+  Still absent inside it: no client certificates, no session resumption, no ALPN — so no HTTP/2.
+
 - ~~**No HTTP**~~ — **`lib/http.bx` ships it**, both halves, over the sockets that already existed.
   A request is parsed into an `HttpRequest` (method, path, decoded query, headers, body), a
   `Handler` interface is what a server takes since Burxt has no function values, and a client

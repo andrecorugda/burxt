@@ -36,6 +36,7 @@ Everything the language has. **Read out of the compiler**, not from memory: the 
 <li><a href="os.html"><span><code>lib/os.bx</code></span> <span class="what">the machine the program is running on</span></a></li>
 <li><a href="net.html"><span><code>lib/net.bx</code></span> <span class="what">TCP, over the pointer wall</span></a></li>
 <li><a href="http.html"><span><code>lib/http.bx</code></span> <span class="what">HTTP/1.1 over the sockets `net.bx` already opens</span></a></li>
+<li><a href="tls.html"><span><code>lib/tls.bx</code></span> <span class="what">TLS by BINDING OpenSSL, which is the recorded decision rather than a shortcut</span></a></li>
 <li><a href="time.html"><span><code>lib/time.bx</code></span> <span class="what">dates and durations, in whole seconds, in UTC</span></a></li>
 <li><a href="random.html"><span><code>lib/random.bx</code></span> <span class="what">a SEEDED generator, and the name says seeded</span></a></li>
 <li><a href="log.html"><span><code>lib/log.bx</code></span> <span class="what">four levels, a threshold from the environment, and stderr</span></a></li>

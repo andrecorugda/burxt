@@ -7719,6 +7719,108 @@ fn every_limitation_the_docs_claim_is_still_true() {
 }
 
 
+
+/// A Burxt program fetches a page over VERIFIED HTTPS, and refuses a certificate that is not for
+/// the host it asked for.
+///
+/// **`#[ignore]`, and the reason is stated rather than assumed.** This needs two things the rest of
+/// the suite does not: `-lssl -lcrypto` on the link line, and a real host on the network. A test
+/// that quietly passes when either is missing is worse than one that says it did not run — and
+/// `lib/tls.bx` is the one module in the library whose whole content is a security posture, so a
+/// vacuous pass here is the most expensive kind there is.
+///
+///     cargo test --release a_burxt_program_fetches_over_verified_https -- --ignored
+///
+/// **What it proves, and each part was measured while the module was written:**
+///
+///   * a real 200 with a real body over TLS 1.3 — the module is not a stub;
+///   * `tls_verify_explained` names 20 and 62 rather than printing a number, because a reader who
+///     has no trusted issuer and a reader who has somebody else's valid certificate have different
+///     problems;
+///   * **the control: a hostname no certificate could cover is REFUSED.** That is the assertion the
+///     module exists for, and it is the one that nearly passed for the wrong reason — my first
+///     version used `wrong.example.com` against 1.1.1.1 and verified CLEAN, because that
+///     certificate really does carry `*.example.com`. The control was testing a case where the
+///     defect could not appear. `attacker.invalid` is outside any certificate, which is what makes
+///     it falsifiable.
+///
+/// Without `SSL_set_verify(ssl, SSL_VERIFY_PEER, NULL)` OpenSSL never builds the chain and
+/// `SSL_get_verify_result` answers OK vacuously — so a program can set a hostname, read 0, and have
+/// verified nothing. That is why this test asserts a REFUSAL and not only a success.
+#[test]
+#[ignore = "needs -lssl -lcrypto and a host on the network; run with --ignored"]
+fn a_burxt_program_fetches_over_verified_https() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("https");
+    fs::create_dir_all(&scratch).unwrap();
+    let program = scratch.join("fetch.bx");
+    fs::write(
+        &program,
+        r#"use "std/tls.bx";
+region main {
+    match https_get(1, 1, 1, 1, "one.one.one.one", "/") {
+        Error(why) => { print("FETCH FAILED " + why); }
+        Ok(r) => { print("status {r.status} bytes {len(r.body)}"); }
+    }
+    print(tls_verify_explained(20));
+    print(tls_verify_explained(62));
+    match https_get(1, 1, 1, 1, "attacker.invalid", "/") {
+        Ok(r) => { print("ACCEPTED A MISMATCHED CERTIFICATE"); }
+        Error(why) => { print("refused: " + why); }
+    }
+}
+"#,
+    )
+    .unwrap();
+    let exe = scratch.join("fetch");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(&program)
+        .arg("-o")
+        .arg(&exe)
+        .arg("-lssl")
+        .arg("-lcrypto")
+        .env("BURXT_LIB", root.join("lib"))
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "could not build an HTTPS client — is libssl-dev installed?\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let out = Command::new(&exe).output().expect("run");
+    let said = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        said.contains("status 200"),
+        "no 200 over HTTPS — the network, or the module:\n{}",
+        said
+    );
+    assert!(
+        !said.contains("bytes 0"),
+        "a 200 with an empty body means the read loop ended early:\n{}",
+        said
+    );
+    assert!(
+        said.contains("no issuer for this certificate") && said.contains("not for this host"),
+        "the verify codes stopped naming what they mean:\n{}",
+        said
+    );
+    // The one that matters.
+    assert!(
+        !said.contains("ACCEPTED A MISMATCHED CERTIFICATE"),
+        "**a certificate for another host was accepted.** Verification is off, and a handshake \
+         that succeeds proves nothing:\n{}",
+        said
+    );
+    assert!(
+        said.contains("refused: the TLS handshake with attacker.invalid failed"),
+        "the mismatched certificate was refused, but not by the path this asserts:\n{}",
+        said
+    );
+    eprintln!("HTTPS: a verified 200, and a mismatched certificate refused");
+}
+
 /// The three handle refusals, from OUTSIDE — which is the only place they are reachable.
 ///
 /// **This suite could not test them, structurally.** A never-issued handle, a handle from

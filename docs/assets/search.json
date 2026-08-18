@@ -3466,6 +3466,69 @@
  },
  {
   "kind": "class",
+  "name": "TlsLink",
+  "text": "lib/tls.bx",
+  "url": "/reference/tls.html#tlslink",
+  "where": "class TlsLink { context: CPointer, ssl: CPointer, fd: Int, protocol: String }"
+ },
+ {
+  "kind": "function",
+  "name": "tls_verify_explained",
+  "text": "lib/tls.bx",
+  "url": "/reference/tls.html#tls-verify-explained",
+  "where": "pure function tls_verify_explained(code: Int) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "tls_connect",
+  "text": "lib/tls.bx",
+  "url": "/reference/tls.html#tls-connect",
+  "where": "function tls_connect(a: Int, b: Int, c: Int, d: Int, port: Int, host: String)"
+ },
+ {
+  "kind": "function",
+  "name": "tls_write",
+  "text": "lib/tls.bx",
+  "url": "/reference/tls.html#tls-write",
+  "where": "function tls_write(link: TlsLink, text: String) -> Option<Int> touches network"
+ },
+ {
+  "kind": "function",
+  "name": "tls_read",
+  "text": "lib/tls.bx",
+  "url": "/reference/tls.html#tls-read",
+  "where": "function tls_read(link: TlsLink, limit: Int) -> Option<String> allocates touches network"
+ },
+ {
+  "kind": "function",
+  "name": "tls_close",
+  "text": "lib/tls.bx",
+  "url": "/reference/tls.html#tls-close",
+  "where": "function tls_close(link: TlsLink) -> Bool touches network"
+ },
+ {
+  "kind": "function",
+  "name": "https_send_request",
+  "text": "lib/tls.bx",
+  "url": "/reference/tls.html#https-send-request",
+  "where": "function https_send_request(a: Int, b: Int, c: Int, d: Int, port: Int, host: String,"
+ },
+ {
+  "kind": "function",
+  "name": "https_get",
+  "text": "lib/tls.bx",
+  "url": "/reference/tls.html#https-get",
+  "where": "function https_get(a: Int, b: Int, c: Int, d: Int, host: String, path: String)"
+ },
+ {
+  "kind": "function",
+  "name": "https_post",
+  "text": "lib/tls.bx",
+  "url": "/reference/tls.html#https-post",
+  "where": "function https_post(a: Int, b: Int, c: Int, d: Int, host: String, path: String,"
+ },
+ {
+  "kind": "class",
   "name": "DateTime",
   "text": "lib/time.bx",
   "url": "/reference/time.html#datetime",

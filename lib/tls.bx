@@ -1,0 +1,246 @@
+// lib/tls.bx — TLS by BINDING OpenSSL, which is the recorded decision rather than a shortcut.
+//
+// `docs/limitations.md` says why Burxt does not implement TLS: this language gives no control over
+// instruction timing or cache behaviour, and a hand-rolled handshake that *looks* fine is exactly
+// the silent wrong answer it exists to refuse. So the primitives are bound, never written, and the
+// same rule sends AES, ChaCha20, RSA and the curves the same way.
+//
+// **Nothing here needed a compiler change.** A TLS 1.3 handshake worked from a Burxt program with
+// six `external function` declarations before this file existed; what was missing was a module, and
+// the page said "No TLS" for two weeks after v1.0.0 shipped because nobody had tried.
+//
+// ---- the security posture, and every part of it was MEASURED ------------------------------------
+//
+// **A handshake that succeeds proves nothing on its own**, and this file exists to make that
+// impossible to get wrong by accident. Three things have to be true together:
+//
+//   1. `SSL_CTX_set_default_verify_paths` — the system CAs. Without them the chain cannot be built:
+//      measured, `SSL_connect` answers -1 and the verify result is **20**, no local issuer.
+//   2. `SSL_set_verify(ssl, SSL_VERIFY_PEER, NULL)` — **without this the chain is never checked at
+//      all, and `SSL_get_verify_result` answers OK vacuously.** That is the trap: a program can set
+//      a hostname, read a verify result of 0, and have verified nothing.
+//   3. `SSL_set1_host` — the hostname, checked against the certificate. Measured against a name no
+//      certificate could cover: `SSL_connect` answers -1 and the verify result is **62**, hostname
+//      mismatch.
+//
+// **And the control that nearly fooled me is worth the paragraph.** My first wrong-hostname test
+// used `wrong.example.com` against 1.1.1.1 and verified CLEAN — which read as "verification is not
+// working". It was working: `SSL_get0_peername` reported the matched name as `*.example.com`, which
+// that certificate really does carry. The control was testing a case where the defect could not
+// appear. A name genuinely outside the certificate is what makes the check falsifiable.
+//
+// ---- what this does not do -----------------------------------------------------------------
+//
+//   * **No DNS**, so a caller passes four octets and the hostname separately. The hostname is not
+//     decoration: it is the SNI sent and the name verified, so passing the wrong one is refused.
+//   * **No client certificates**, no session resumption, no ALPN — so no HTTP/2.
+//   * **Blocking**, like `net.bx` beneath it.
+//
+// Link with `-lssl -lcrypto`. That is a build-time fact this file cannot state for you.
+use "option.bx";
+use "result.bx";
+use "string.bx";
+use "net.bx";
+use "os.bx";
+use "http.bx";
+
+external function TLS_client_method() -> CPointer;
+external function SSL_CTX_new(method: CPointer) -> CPointer touches network;
+external function SSL_CTX_set_default_verify_paths(ctx: CPointer) -> CInt touches files;
+external function SSL_CTX_free(ctx: CPointer) -> Int;
+external function SSL_new(ctx: CPointer) -> CPointer;
+external function SSL_free(ssl: CPointer) -> Int;
+external function SSL_set_fd(ssl: CPointer, fd: i32) -> CInt;
+external function SSL_set1_host(ssl: CPointer, host: String) -> CInt;
+external function SSL_set_verify(ssl: CPointer, mode: i32, callback: CPointer) -> Int;
+// `SSL_set_tlsext_host_name` is a MACRO, so a language with no preprocessor calls what it expands
+// to: SSL_ctrl(ssl, SSL_CTRL_SET_TLSEXT_HOSTNAME = 55, TLSEXT_NAMETYPE_host_name = 0, name).
+external function SSL_ctrl(ssl: CPointer, cmd: i32, larg: Int, parg: String) -> Int;
+external function SSL_connect(ssl: CPointer) -> CInt touches network;
+external function SSL_get_verify_result(ssl: CPointer) -> Int;
+external function SSL_get_version(ssl: CPointer) -> CPointer;
+external function SSL_write(ssl: CPointer, buffer: String, length: i32) -> CInt touches network;
+external function SSL_read(ssl: CPointer, buffer: CPointer, length: i32) -> CInt touches network;
+external function SSL_shutdown(ssl: CPointer) -> CInt touches network;
+external function malloc(size: Int) -> CPointer;
+external function free(p: CPointer) -> Int;
+
+// An open, VERIFIED connection. There is no way to make one that is not verified: `tls_connect` is
+// the only constructor and it refuses rather than answering an unverified link.
+class TlsLink { context: CPointer, ssl: CPointer, fd: Int, protocol: String }
+
+// What a verify result means, for the codes a caller actually meets. The number is kept in the
+// message because it is what an OpenSSL manual is indexed by.
+pure function tls_verify_explained(code: Int) -> String allocates {
+    if code == 0 { return "verified"; }
+    if code == 20 {
+        return "could not build a chain to a trusted root (" + to_string(code)
+                + ") — the system CA store had no issuer for this certificate";
+    }
+    if code == 62 {
+        return "the certificate is valid but is not for this host (" + to_string(code)
+                + ") — the name asked for is not one it carries";
+    }
+    if code == 10 { return "the certificate has expired (" + to_string(code) + ")"; }
+    if code == 9 { return "the certificate is not valid yet (" + to_string(code) + ")"; }
+    if code == 18 { return "the certificate is self-signed (" + to_string(code) + ")"; }
+    if code == 19 {
+        return "the chain ends in a self-signed certificate that is not trusted here ("
+                + to_string(code) + ")";
+    }
+    return "the certificate was refused, OpenSSL verify code " + to_string(code);
+}
+
+// Open TCP, then TLS, verifying the chain AND the hostname. Refuses with a reason a reader can act
+// on rather than answering a link that might be worthless.
+function tls_connect(a: Int, b: Int, c: Int, d: Int, port: Int, host: String)
+        -> Result<TlsLink, String> allocates touches network, files, input {
+    let method: CPointer = TLS_client_method();
+    if c_is_null(method) { return Result.Error("OpenSSL would not give a TLS client method"); }
+    let context: CPointer = SSL_CTX_new(method);
+    if c_is_null(context) { return Result.Error("OpenSSL would not make a TLS context"); }
+    // The system CA store. A 0 here means the chain can never be built, so say so now rather than
+    // let every connection fail with a puzzling verify code.
+    if SSL_CTX_set_default_verify_paths(context) != 1 {
+        let freed: Int = SSL_CTX_free(context);
+        return Result.Error("no system certificate store was found, so no chain could be verified");
+    }
+    match net_connect_ipv4(a, b, c, d, port) {
+        None => {
+            let freed: Int = SSL_CTX_free(context);
+            return Result.Error("could not open TCP to " + to_string(a) + "." + to_string(b) + "."
+                    + to_string(c) + "." + to_string(d) + ":" + to_string(port));
+        }
+        Some(fd) => {
+            let ssl: CPointer = SSL_new(context);
+            if c_is_null(ssl) {
+                let shut: Bool = net_close(fd);
+                let freed: Int = SSL_CTX_free(context);
+                return Result.Error("OpenSSL would not make a TLS connection object");
+            }
+            let bound: Int = SSL_set_fd(ssl, fd);
+            // SNI, so a virtual host serves the right certificate at all.
+            let named: Int = SSL_ctrl(ssl, 55, 0, host);
+            // The hostname to VERIFY. Without this a valid certificate for any host would pass.
+            let expected: Int = SSL_set1_host(ssl, host);
+            // SSL_VERIFY_PEER = 1, and without it neither of the two lines above is enforced.
+            let checking: Int = SSL_set_verify(ssl, 1, os_env_missing());
+            let shook: Int = SSL_connect(ssl);
+            let verdict: Int = SSL_get_verify_result(ssl);
+            if shook != 1 {
+                let closed: Int = SSL_free(ssl);
+                let gone: Bool = net_close(fd);
+                let freed: Int = SSL_CTX_free(context);
+                return Result.Error("the TLS handshake with " + host + " failed: "
+                        + tls_verify_explained(verdict));
+            }
+            // Belt and braces: a handshake that succeeded with a bad verdict should be impossible
+            // once `SSL_VERIFY_PEER` is set, and this file is not the place to assume it.
+            if verdict != 0 {
+                let closed: Int = SSL_free(ssl);
+                let gone: Bool = net_close(fd);
+                let freed: Int = SSL_CTX_free(context);
+                return Result.Error("the TLS handshake with " + host
+                            + " completed but the certificate was not acceptable: "
+                        + tls_verify_explained(verdict));
+            }
+            return Result.Ok(TlsLink {
+                    context: context, ssl: ssl, fd: fd,
+                    protocol: c_string_at(SSL_get_version(ssl))
+                    });
+        }
+    }
+}
+
+function tls_write(link: TlsLink, text: String) -> Option<Int> touches network {
+    let wrote: Int = SSL_write(link.ssl, text, len(text));
+    if wrote <= 0 { return Option.None; }
+    return Option.Some(wrote);
+}
+
+// Up to `limit` bytes. `None` at end of stream or on error, which a caller reads as "stop".
+function tls_read(link: TlsLink, limit: Int) -> Option<String> allocates touches network {
+    if limit <= 0 { return Option.None; }
+    let buffer: CPointer = malloc(limit);
+    if c_is_null(buffer) { return Option.None; }
+    let got: Int = SSL_read(link.ssl, buffer, limit);
+    if got <= 0 {
+        let released: Int = free(buffer);
+        return Option.None;
+    }
+    // `c_bytes_at` rather than `c_string_at`: TLS carries bytes and does not NUL-terminate them,
+    // and a String built by scanning for a NUL would stop at the first zero byte in a payload.
+    let bytes: [Int] = c_bytes_at(buffer, got);
+    let released: Int = free(buffer);
+    return Option.Some(from_bytes(bytes));
+}
+
+function tls_close(link: TlsLink) -> Bool touches network {
+    let said: Int = SSL_shutdown(link.ssl);
+    let closed: Int = SSL_free(link.ssl);
+    let gone: Bool = net_close(link.fd);
+    let freed: Int = SSL_CTX_free(link.context);
+    return gone;
+}
+
+// ---- HTTPS, which is the point of all of it ----------------------------------------------------
+
+// One request over TLS, and the response. The same shape as `http_send_request` and deliberately
+// so: a caller moving from HTTP to HTTPS changes the function name and the port.
+function https_send_request(a: Int, b: Int, c: Int, d: Int, port: Int, host: String,
+        method: String, path: String, extra: [HttpHeader], body: String)
+        -> Result<HttpResponse, String> allocates touches network, files, input {
+    match tls_connect(a, b, c, d, port, host) {
+        Error(why) => { return Result.Error(why); }
+        Ok(link) => {
+            let mutable chunks: [String] = [];
+            let line: Int = push(chunks, method + " " + path + " HTTP/1.1\r\n");
+            let named: Int = push(chunks, "Host: " + host + "\r\n");
+            let closing: Int = push(chunks, "Connection: close\r\n");
+            let sized: Int = push(chunks, "Content-Length: " + to_string(len(body)) + "\r\n");
+            let mutable i: Int = 0;
+            while i < len(extra) {
+                let one: Int = push(chunks, extra[i].name + ": " + extra[i].value + "\r\n");
+                i += 1;
+            }
+            let blank: Int = push(chunks, "\r\n");
+            let sent: Int = push(chunks, body);
+            match tls_write(link, string_join_chunks(chunks)) {
+                None => {
+                    let shut: Bool = tls_close(link);
+                    return Result.Error("the TLS connection opened and the request would not write");
+                }
+                Some(wrote) => { }
+            }
+            let mutable text: String = "";
+            let mutable reading: Bool = true;
+            while reading {
+                match tls_read(link, 16384) {
+                    None => { reading = false; }
+                    Some(chunk) => {
+                        if len(chunk) == 0 { reading = false; } else { text = text + chunk; }
+                    }
+                }
+            }
+            let shut: Bool = tls_close(link);
+            if len(text) == 0 {
+                return Result.Error("the server closed the TLS connection without answering");
+            }
+            return http_parse_response(text);
+        }
+    }
+}
+
+function https_get(a: Int, b: Int, c: Int, d: Int, host: String, path: String)
+        -> Result<HttpResponse, String> allocates touches network, files, input {
+    let none: [HttpHeader] = [];
+    return https_send_request(a, b, c, d, 443, host, "GET", path, none, "");
+}
+
+function https_post(a: Int, b: Int, c: Int, d: Int, host: String, path: String,
+        content_type: String, body: String) -> Result<HttpResponse, String>
+        allocates touches network, files, input {
+    let mutable extra: [HttpHeader] = [];
+    let typed: Int = push(extra, HttpHeader { name: "Content-Type", value: content_type });
+    return https_send_request(a, b, c, d, 443, host, "POST", path, extra, body);
+}
