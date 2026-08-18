@@ -18,11 +18,16 @@ Ordinary semantic versioning, stated so nothing is assumed:
 | bump | means |
 |---|---|
 | **major** — `2.0.0` | a program that compiled may stop compiling, or may compile and mean something different |
-| **minor** — `1.1.0` | new things exist; everything that compiled still compiles and still means the same |
+| **minor** — `1.1.0` | new things exist; everything that compiled still compiles and still means the same — **with one exception, [below](#the-one-way-a-minor-can-break-a-program)**: a new builtin reserves its name |
 | **patch** — `1.0.1` | something was wrong and is now right; no new surface |
 
 A **patch adds nothing.** Not a function, not a keyword, not a flag. If it adds anything, it is a
 minor, and calling it a patch would break the only rule a version number carries.
+
+**The minor row carries its exception rather than stating an absolute the next section withdraws**,
+and that is deliberate. This page decides version numbers, so a reader who reads the table and stops
+has to get an answer that is true — not one corrected somewhere they did not reach. The exception is
+real and it fired on 2026-08-18, when `handle_of` and `handle_value` became builtins.
 
 ### The one way a minor can break a program
 
