@@ -374,6 +374,18 @@ pub struct TypedProgram {
     pub fns: Vec<TypedFn>,
     pub methods: Vec<TypedMethod>,
     pub vtables: Vec<TypedVTable>,
+    /// Every interface's method signatures, by name and slot order — **from the DECLARATION, not
+    /// from an implementation.**
+    ///
+    /// The emitter needs these to build an indirect call's function type, and it used to read them
+    /// off a vtable. That works for every interface somebody implements and fails for one nobody
+    /// does: a program declaring an interface, taking a `dynamic` of it, and implementing it
+    /// nowhere got `codegen bug: no signature for Greeter.greet` — an internal error, for eight
+    /// ordinary lines. `lib/http.bx` made it reachable through the standard library, because it
+    /// declares `Handler` and a program using only the client half never implements one.
+    ///
+    /// Carried from here because the checker is what validated them, and an impl is a copy.
+    pub interface_slots: HashMap<String, Vec<(Vec<Type>, Type)>>,
     pub stmts: Vec<TypedStmt>,
 }
 
@@ -3577,7 +3589,36 @@ impl TypeChecker {
         // the process exit reclaims the arena whole. Its inner blocks are, which is where
         // the loop in §3 lives.
         let stmts = self.place_releases(&[], stmts, false);
-        Ok(TypedProgram { structs, enums, externs, fns, methods, vtables, stmts })
+        // Signatures for every interface DECLARED, including generic instantiations, so the
+        // emitter never has to find an implementer to learn a shape.
+        let mut interface_slots: HashMap<String, Vec<(Vec<Type>, Type)>> = HashMap::new();
+        for (name, sigs) in self.interfaces.iter() {
+            interface_slots.insert(
+                name.clone(),
+                sigs.iter()
+                    .map(|m| {
+                        (
+                            m.parameters.iter().map(|p| p.ty.clone()).collect::<Vec<_>>(),
+                            m.ret.clone(),
+                        )
+                    })
+                    .collect(),
+            );
+        }
+        for (name, sigs) in self.interfaces_made.borrow().iter() {
+            interface_slots.insert(
+                name.clone(),
+                sigs.iter()
+                    .map(|m| {
+                        (
+                            m.parameters.iter().map(|p| p.ty.clone()).collect::<Vec<_>>(),
+                            m.ret.clone(),
+                        )
+                    })
+                    .collect(),
+            );
+        }
+        Ok(TypedProgram { structs, enums, externs, fns, methods, vtables, stmts, interface_slots })
     }
 
     /// An impl must satisfy its trait EXACTLY: every declared method present,

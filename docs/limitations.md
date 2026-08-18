@@ -129,7 +129,7 @@ cannot corrupt a balance*, derived from a declared invariant rather than from a 
 remembered, and shipping that half-done would be worse than not shipping it. Separate processes get
 the same guarantee the coarse way: two workers share no memory, so there is nothing to corrupt.
 
-### TCP, yes. TLS by binding. No HTTP, no DNS
+### TCP and HTTP, yes. TLS by binding. No DNS
 
 `lib/net.bx` opens, binds, accepts, reads and writes TCP sockets, both as a server and as a client.
 A Burxt program answers HTTP requests. What is missing above it:
@@ -144,7 +144,13 @@ A Burxt program answers HTTP requests. What is missing above it:
   is `lib/tls.bx`, a wrapper nobody has written, rather than a capability the language lacks — and
   this bullet said otherwise until it was measured, one paragraph above the note recording that the
   same thing had already happened to the sentence about opening a connection at all.
-- **No HTTP**, in the sense that a request is bytes and parsing it is your code.
+- ~~**No HTTP**~~ — **`lib/http.bx` ships it**, both halves, over the sockets that already existed.
+  A request is parsed into an `HttpRequest` (method, path, decoded query, headers, body), a
+  `Handler` interface is what a server takes since Burxt has no function values, and a client
+  answers an `HttpResponse`. What is still absent inside it, named rather than discovered: **no
+  chunked transfer encoding** (a body is read by `Content-Length` or REFUSED, never truncated),
+  **no keep-alive** (one request per connection, and `Connection: close` is sent so a client knows),
+  and no DNS, so a client takes four octets.
 - **No DNS**, and this one is a single missing builtin rather than a design problem. An address is
   four octets today — `net_connect_ipv4(93, 184, 216, 34, 80)`.
 

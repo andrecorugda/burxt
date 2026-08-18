@@ -3291,6 +3291,181 @@
  },
  {
   "kind": "class",
+  "name": "HttpHeader",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#httpheader",
+  "where": "class HttpHeader { name: String, value: String }"
+ },
+ {
+  "kind": "class",
+  "name": "HttpRequest",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#httprequest",
+  "where": "class HttpRequest"
+ },
+ {
+  "kind": "class",
+  "name": "HttpResponse",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#httpresponse",
+  "where": "class HttpResponse"
+ },
+ {
+  "kind": "function",
+  "name": "http_parse_request",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-parse-request",
+  "where": "pure function http_parse_request(text: String) -> Result<HttpRequest, String> allocates"
+ },
+ {
+  "kind": "function",
+  "name": "http_header",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-header",
+  "where": "pure function http_header(request: HttpRequest, name: String) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "http_content_length",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-content-length",
+  "where": "pure function http_content_length(request: HttpRequest) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "http_query_params",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-query-params",
+  "where": "pure function http_query_params(request: HttpRequest) -> Option<[Param]> allocates"
+ },
+ {
+  "kind": "function",
+  "name": "http_form_params",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-form-params",
+  "where": "pure function http_form_params(request: HttpRequest) -> Option<[Param]> allocates"
+ },
+ {
+  "kind": "function",
+  "name": "http_response",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-response",
+  "where": "pure function http_response(status: Int, content_type: String, body: String) -> HttpResponse allocates"
+ },
+ {
+  "kind": "function",
+  "name": "http_html",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-html",
+  "where": "pure function http_html(body: String) -> HttpResponse allocates"
+ },
+ {
+  "kind": "function",
+  "name": "http_text",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-text",
+  "where": "pure function http_text(body: String) -> HttpResponse allocates"
+ },
+ {
+  "kind": "function",
+  "name": "http_json",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-json",
+  "where": "pure function http_json(body: String) -> HttpResponse allocates"
+ },
+ {
+  "kind": "function",
+  "name": "http_not_found",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-not-found",
+  "where": "pure function http_not_found() -> HttpResponse allocates"
+ },
+ {
+  "kind": "function",
+  "name": "http_with_header",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-with-header",
+  "where": "pure function http_with_header(response: HttpResponse, name: String, value: String) -> HttpResponse allocates"
+ },
+ {
+  "kind": "function",
+  "name": "http_render_response",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-render-response",
+  "where": "pure function http_render_response(response: HttpResponse) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "http_parse_response",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-parse-response",
+  "where": "pure function http_parse_response(text: String) -> Result<HttpResponse, String> allocates"
+ },
+ {
+  "kind": "function",
+  "name": "http_response_header",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-response-header",
+  "where": "pure function http_response_header(response: HttpResponse, name: String) -> Option<String>"
+ },
+ {
+  "kind": "interface",
+  "name": "Handler",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#handler",
+  "where": "interface Handler"
+ },
+ {
+  "kind": "function",
+  "name": "http_read_request",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-read-request",
+  "where": "function http_read_request(fd: Int, limit: Int) -> Result<HttpRequest, String>"
+ },
+ {
+  "kind": "function",
+  "name": "http_send_response",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-send-response",
+  "where": "function http_send_response(fd: Int, response: HttpResponse) -> Bool allocates touches network"
+ },
+ {
+  "kind": "function",
+  "name": "http_serve_one",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-serve-one",
+  "where": "function http_serve_one(server: Int, handler: dynamic Handler, limit: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "http_serve",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-serve",
+  "where": "function http_serve(port: Int, handler: dynamic Handler, limit: Int) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "http_send_request",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-send-request",
+  "where": "function http_send_request(a: Int, b: Int, c: Int, d: Int, port: Int, host: String,"
+ },
+ {
+  "kind": "function",
+  "name": "http_get",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-get",
+  "where": "function http_get(a: Int, b: Int, c: Int, d: Int, port: Int, host: String, path: String)"
+ },
+ {
+  "kind": "function",
+  "name": "http_post",
+  "text": "lib/http.bx",
+  "url": "/reference/http.html#http-post",
+  "where": "function http_post(a: Int, b: Int, c: Int, d: Int, port: Int, host: String, path: String,"
+ },
+ {
+  "kind": "class",
   "name": "DateTime",
   "text": "lib/time.bx",
   "url": "/reference/time.html#datetime",

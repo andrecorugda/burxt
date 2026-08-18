@@ -1,0 +1,28 @@
+// An interface declared, a function that takes one, and NO implementation anywhere.
+//
+// **This was `codegen bug: no signature for Greeter.greet` — an internal error, for eight ordinary
+// lines.** The emitter builds an indirect call's function type from the method's signature, and it
+// read that off a VTABLE. Every interface somebody implements has one; an interface nobody
+// implements has none, so there was nothing to read and the program was refused by a message that
+// blames the compiler rather than telling anyone what to do.
+//
+// **It shipped in v1.3.0 and every release before it**, and nothing found it because nothing had
+// declared an interface a consumer might not implement — until a library did. `lib/http.bx`
+// declares `Handler` for its server, so any program using only the CLIENT half met this, which is
+// how it was found: by writing the client, not by reading the emitter.
+//
+// The signature now comes from the DECLARATION, carried through `TypedProgram`. That is the right
+// source on its own terms as well: an implementation matches the interface, so reading it off an
+// implementation is reading a copy of the authority rather than the authority.
+interface Greeter {
+    function greet(self, who: String) -> String
+        }
+
+// Taking one is what makes the emitter need the signature. Never called, and it does not need to
+// be — declaring the parameter is enough.
+function ask(g: dynamic Greeter, who: String) -> String allocates {
+    return g.greet(who);
+}
+
+let names: [String] = [];
+print("an interface with no implementation is still a program");

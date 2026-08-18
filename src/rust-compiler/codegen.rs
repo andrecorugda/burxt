@@ -376,6 +376,21 @@ impl<'ctx> CodeGen<'ctx> {
         // Shared by every interface object of that pair — the instance carries
         // only two words. Emitted BEFORE any body, since a body may build a
         // interface object or dispatch through one.
+        // **The signature of an interface method comes from the INTERFACE, not from whoever
+        // happened to implement it.** This used to be read off a vtable, which meant a program
+        // that declared an interface, took a `dynamic` of it, and implemented it NOWHERE had no
+        // signature to build an indirect call from — and said so as `codegen bug: no signature
+        // for Greeter.greet`, an internal error reaching a user for writing eight ordinary lines.
+        //
+        // It is reachable through the standard library: `lib/http.bx` declares `Handler` and
+        // `http_serve` takes one, so any program using only the CLIENT half hit it. Present in
+        // v1.3.0 and every release before it, because nothing had declared an interface a
+        // consumer might not implement until a library did.
+        //
+        // The declaration is also the right source on its own terms: an impl matches the
+        // signature, so reading it from an impl is reading a copy.
+        self.interface_slots = prog.interface_slots.clone();
+
         for vt in &prog.vtables {
             let ptr = self.ctx.ptr_type(AddressSpace::default());
             let fns: Vec<PointerValue> = vt
@@ -398,9 +413,10 @@ impl<'ctx> CodeGen<'ctx> {
             self.vtables
                 .insert((vt.interface_name.clone(), vt.concrete.clone()), global);
 
-            // Record each slot's signature once, so an indirect call can build
-            // the right function type. Every impl of an interface matches the
-            // trait's signatures exactly, so the first one speaks for all.
+            // Record each slot's signature once, so an indirect call can build the right
+            // function type. Every impl of an interface matches the trait's signatures exactly,
+            // so the first one speaks for all — **and when there are NO impls, none of them
+            // does.** That is filled in from the declarations below, before any of this runs.
             self.interface_slots.entry(vt.interface_name.clone()).or_insert_with(|| {
                 vt.slots
                     .iter()

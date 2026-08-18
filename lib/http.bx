@@ -1,0 +1,504 @@
+// lib/http.bx — HTTP/1.1 over the sockets `net.bx` already opens.
+//
+// **Why this is Burxt's and not a framework's.** A request arriving on a socket is untrusted bytes
+// becoming typed values, and that boundary is the one thing this language exists to make checkable:
+// an `HttpRequest` whose fields carry contracts is a fact `burxt review` can diff between versions. Put
+// the parser in a framework and the interesting property leaves the type system. It is the same
+// call `lib/html.bx` got when star-burxt moved to its own repository — one escaping implementation,
+// in the place where being right is checkable — and `lib/cgi.bx` is the precedent: HTTP protocol
+// has lived in the standard library since it existed. Routing a request to a page is MEANING, and
+// that belongs to whoever is building the framework.
+//
+// **Nothing here is new capability.** `net_listen`, `net_accept`, `net_connect_ipv4`, `net_read`
+// and `net_write` have all worked since v1.1.0, and `cgi.bx` already percent-decodes. What was
+// missing was the framing in between: a method, a path, headers, a status line. A server written
+// without it takes an opaque String and answers a document, which is a renderer.
+//
+// ---- what this slice does NOT do, named rather than discovered ---------------------------------
+//
+//   * **No chunked transfer encoding.** A body is read by `Content-Length` or not at all. A request
+//     with `Transfer-Encoding: chunked` is REFUSED by name rather than half-read, because a body
+//     silently truncated is the wrong answer this language exists to avoid.
+//   * **No DNS**, so a client takes four octets. `getaddrinfo` already returns 0 from a Burxt
+//     program; what is missing is one builtin to read a pointer back out of C memory. See
+//     `docs/limitations.md`.
+//   * **No TLS here.** `lib/tls.bx` wraps that, and an https client goes through it.
+//   * **No keep-alive.** One request, one response, one connection. `Connection: close` is sent.
+use "option.bx";
+use "result.bx";
+use "string.bx";
+use "net.bx";
+use "cgi.bx";
+
+// Prefixed by hand, like every other name in this library. `cgi.bx` already has a `Request` and
+// `use` concatenates sources into one buffer, so there is nothing to be namespaced apart — see
+// `docs/limitations.md` on the absence of a registry and of namespacing. `Param` is deliberately
+// NOT redefined here: it comes from `cgi.bx` and one decoded name/value pair should be one type.
+class HttpHeader { name: String, value: String }
+
+// A request, parsed. `target` is what arrived on the wire; `path` and `query` are it split, with
+// the path percent-decoded and the query left encoded because `http_query` is what decodes it —
+// decoding before splitting is how a `%3D` in a value becomes an extra `=`.
+class HttpRequest {
+    method: String,
+    target: String,
+    path: String,
+    query: String,
+    version: String,
+    headers: [HttpHeader],
+    body: String
+        }
+
+class HttpResponse {
+    status: Int,
+    headers: [HttpHeader],
+    body: String
+        }
+
+// ---- reading a request -------------------------------------------------------------------------
+
+// The wire format, or a refusal that says which part was wrong.
+//
+// Every failure names the part rather than the whole: a reader who gets "no request line" and a
+// reader who gets "no blank line after the headers" have different problems, and one message for
+// both sends one of them to the wrong place.
+pure function http_parse_request(text: String) -> Result<HttpRequest, String> allocates {
+    let head_and_body: Option<(String, String)> = string_split_once(text, "\r\n\r\n");
+    let mutable head: String = "";
+    let mutable body: String = "";
+    match head_and_body {
+        Some(halves) => { head = halves.0; body = halves.1; }
+        None => {
+            // Tolerated on purpose: a hand-written client, or a test, that used bare newlines.
+            // The wire says CRLF and the world sends LF, so refusing would reject correct-enough
+            // input for a rule nobody outside a spec follows.
+            match string_split_once(text, "\n\n") {
+                Some(halves) => { head = halves.0; body = halves.1; }
+                None => { return Result.Error("no blank line after the headers, so where the body starts is not knowable"); }
+            }
+        }
+    }
+    let lines: [String] = string_lines(head);
+    if len(lines) == 0 {
+        return Result.Error("no request line: an HTTP request starts `METHOD /path HTTP/1.1`");
+    }
+    let words: [String] = string_split_space(string_trim(lines[0]));
+    if len(words) != 3 {
+        return Result.Error("a request line is three words — `METHOD /path HTTP/1.1` — and this has "
+                + to_string(len(words)));
+    }
+    let target: String = words[1];
+    let mutable path: String = target;
+    let mutable query: String = "";
+    match string_split_once(target, "?") {
+        Some(halves) => { path = halves.0; query = halves.1; }
+        None => { }
+    }
+    let decoded: Option<String> = cgi_decode_path(path);
+    match decoded {
+        Some(clean) => { path = clean; }
+        None => { return Result.Error("the path has a percent-escape that is not two hex digits"); }
+    }
+    let mutable headers: [HttpHeader] = [];
+    let mutable i: Int = 1;
+    while i < len(lines) {
+        let line: String = string_trim(lines[i]);
+        if len(line) > 0 {
+            match string_split_once(line, ":") {
+                Some(halves) => {
+                    let added: Int = push(headers, HttpHeader {
+                            name: string_trim(halves.0),
+                            value: string_trim(halves.1)
+                            });
+                }
+                None => {
+                    return Result.Error("a header is `Name: value` and this line has no colon: " + line);
+                }
+            }
+        }
+        i += 1;
+    }
+    let request: HttpRequest = HttpRequest {
+        method: string_to_upper_ascii(words[0]),
+        target: target,
+        path: path,
+        query: query,
+        version: words[2],
+        headers: headers,
+        body: body
+            };
+    // A body this cannot read is refused rather than truncated. See the header comment.
+    match http_header(request, "transfer-encoding") {
+        Some(coding) => {
+            if string_contains(string_to_lower_ascii(coding), "chunked") {
+                return Result.Error("`Transfer-Encoding: chunked` is not read yet, and a body read "
+                        + "partly would be worse than one refused. Send `Content-Length` instead");
+            }
+        }
+        None => { }
+    }
+    return Result.Ok(request);
+}
+
+// A header by name, case-insensitively, because the wire does not agree on capitalisation and a
+// lookup that did would find `Content-Length` and miss `content-length`.
+pure function http_header(request: HttpRequest, name: String) -> Option<String> {
+    let mutable i: Int = 0;
+    while i < len(request.headers) {
+        if string_equals_ignore_case(request.headers[i].name, name) {
+            return Option.Some(request.headers[i].value);
+        }
+        i += 1;
+    }
+    return Option.None;
+}
+
+// How many bytes of body the headers say to expect. `None` when the header is absent or is not a
+// number — the caller decides whether that means zero or means refuse.
+pure function http_content_length(request: HttpRequest) -> Option<Int> {
+    match http_header(request, "content-length") {
+        None => { return Option.None; }
+        Some(text) => { return string_parse_int(string_trim(text)); }
+    }
+}
+
+// The query string, decoded into name/value pairs. Uses `cgi.bx`'s decoder rather than a second
+// one: two percent-decoders is two chances to disagree about `+`.
+pure function http_query_params(request: HttpRequest) -> Option<[Param]> allocates {
+    return cgi_params(request.query);
+}
+
+// A form-encoded body, decoded the same way.
+pure function http_form_params(request: HttpRequest) -> Option<[Param]> allocates {
+    return cgi_params(request.body);
+}
+
+// ---- writing a response ------------------------------------------------------------------------
+
+pure function http_response(status: Int, content_type: String, body: String) -> HttpResponse allocates {
+    let mutable headers: [HttpHeader] = [];
+    let typed: Int = push(headers, HttpHeader { name: "Content-Type", value: content_type });
+    let sized: Int = push(headers, HttpHeader { name: "Content-Length", value: to_string(len(body)) });
+    // One request per connection in this slice, so say so rather than let a client wait.
+    let closed: Int = push(headers, HttpHeader { name: "Connection", value: "close" });
+    return HttpResponse { status: status, headers: headers, body: body };
+}
+
+pure function http_html(body: String) -> HttpResponse allocates {
+    return http_response(200, "text/html; charset=utf-8", body);
+}
+
+pure function http_text(body: String) -> HttpResponse allocates {
+    return http_response(200, "text/plain; charset=utf-8", body);
+}
+
+pure function http_json(body: String) -> HttpResponse allocates {
+    return http_response(200, "application/json", body);
+}
+
+pure function http_not_found() -> HttpResponse allocates {
+    return http_response(404, "text/plain; charset=utf-8", "not found\n");
+}
+
+// One more header on a response. Answers a NEW response rather than mutating, so a handler can
+// build one from another without the caller wondering which of the two changed.
+pure function http_with_header(response: HttpResponse, name: String, value: String) -> HttpResponse allocates {
+    let mutable headers: [HttpHeader] = [];
+    let mutable i: Int = 0;
+    while i < len(response.headers) {
+        let kept: Int = push(headers, response.headers[i]);
+        i += 1;
+    }
+    let added: Int = push(headers, HttpHeader { name: name, value: value });
+    return HttpResponse { status: response.status, headers: headers, body: response.body };
+}
+
+// The bytes to put on the socket.
+//
+// `cgi_status_text` supplies **the code AND the reason** — it answers `"200 OK"`, not `"OK"` —
+// which is right for CGI's `Status:` header and is the whole line here. Writing the code again in
+// front of it produced `HTTP/1.1 200 200 OK`, and it was invisible until the bytes were printed:
+// both halves were correct and the composition was not. Reusing it keeps the two transports from
+// disagreeing about what 404 is called, which is worth the sharp edge as long as it is named.
+pure function http_render_response(response: HttpResponse) -> String allocates {
+    let mutable chunks: [String] = [];
+    let line: Int = push(chunks, "HTTP/1.1 " + cgi_status_text(response.status) + "\r\n");
+    let mutable i: Int = 0;
+    while i < len(response.headers) {
+        let one: Int = push(chunks, response.headers[i].name + ": " + response.headers[i].value + "\r\n");
+        i += 1;
+    }
+    let blank: Int = push(chunks, "\r\n");
+    let body: Int = push(chunks, response.body);
+    return string_join_chunks(chunks);
+}
+
+// A response read back from a server, for the client half.
+pure function http_parse_response(text: String) -> Result<HttpResponse, String> allocates {
+    let mutable head: String = "";
+    let mutable body: String = "";
+    match string_split_once(text, "\r\n\r\n") {
+        Some(halves) => { head = halves.0; body = halves.1; }
+        None => {
+            match string_split_once(text, "\n\n") {
+                Some(halves) => { head = halves.0; body = halves.1; }
+                None => { return Result.Error("no blank line after the response headers"); }
+            }
+        }
+    }
+    let lines: [String] = string_lines(head);
+    if len(lines) == 0 { return Result.Error("no status line"); }
+    let words: [String] = string_split_space(string_trim(lines[0]));
+    if len(words) < 2 {
+        return Result.Error("a status line is `HTTP/1.1 200 OK` and this is: " + lines[0]);
+    }
+    let status: Option<Int> = string_parse_int(words[1]);
+    let mutable code: Int = 0;
+    match status {
+        Some(n) => { code = n; }
+        None => { return Result.Error("the status is not a number: " + words[1]); }
+    }
+    let mutable headers: [HttpHeader] = [];
+    let mutable i: Int = 1;
+    while i < len(lines) {
+        let line: String = string_trim(lines[i]);
+        if len(line) > 0 {
+            match string_split_once(line, ":") {
+                Some(halves) => {
+                    let added: Int = push(headers, HttpHeader {
+                    name: string_trim(halves.0), value: string_trim(halves.1) });
+                }
+                None => { }
+            }
+        }
+        i += 1;
+    }
+    return Result.Ok(HttpResponse { status: code, headers: headers, body: body });
+}
+
+pure function http_response_header(response: HttpResponse, name: String) -> Option<String> {
+    let mutable i: Int = 0;
+    while i < len(response.headers) {
+        if string_equals_ignore_case(response.headers[i].name, name) {
+            return Option.Some(response.headers[i].value);
+        }
+        i += 1;
+    }
+    return Option.None;
+}
+
+// ---- serving -----------------------------------------------------------------------------------
+
+// What a server does with a request. The interface IS the handler, because Burxt has no function
+// values — and `dynamic Handler` is one in all but name, which is the recorded decision rather than
+// a workaround (`docs/limitations.md`, "No closures"). `lib/fn.bx`'s `Mapper` and `Predicate` are
+// the precedent.
+//
+// A caller binds its handler to a variable before passing it: an interface object borrows the
+// storage it refers to, so a literal has nowhere to be borrowed from, and the compiler says so.
+interface Handler {
+    function handle(self, request: HttpRequest) -> HttpResponse
+        }
+
+// Read one request off an accepted connection.
+//
+// **Two reads, and the second is what makes a body arrive.** `net_read` answers what one `recv`
+// gave, which for a request with a body is usually the head and some of it. So: read until the
+// blank line is in hand, then keep reading until `Content-Length` bytes of body have arrived. A
+// server that read once and parsed would work on every hand-typed request and truncate every real
+// POST — the class of bug that passes a demo and fails a form.
+function http_read_request(fd: Int, limit: Int) -> Result<HttpRequest, String>
+        allocates touches network, input {
+    let mutable text: String = "";
+    let mutable reading: Bool = true;
+    while reading {
+        match net_read(fd, limit) {
+            None => { reading = false; }
+            Some(chunk) => {
+                if len(chunk) == 0 {
+                    reading = false;
+                } else {
+                    text = text + chunk;
+                    if string_contains(text, "\r\n\r\n") || string_contains(text, "\n\n") {
+                        reading = false;
+                    }
+                }
+            }
+        }
+    }
+    if len(text) == 0 {
+        return Result.Error("the connection closed before a request arrived");
+    }
+    let mutable parsed: Result<HttpRequest, String> = http_parse_request(text);
+    match parsed {
+        Error(why) => { return Result.Error(why); }
+        Ok(request) => {
+            match http_content_length(request) {
+                None => { return Result.Ok(request); }
+                Some(want) => {
+                    if len(request.body) >= want {
+                        return Result.Ok(request);
+                    }
+                    // The head arrived and the body has not, all of it. Keep reading.
+                    let mutable body: String = request.body;
+                    let mutable more: Bool = true;
+                    while more && len(body) < want {
+                        match net_read(fd, limit) {
+                            None => { more = false; }
+                            Some(chunk) => {
+                                if len(chunk) == 0 { more = false; } else { body = body + chunk; }
+                            }
+                        }
+                    }
+                    if len(body) < want {
+                        return Result.Error("the connection closed with " + to_string(len(body))
+                                    + " of " + to_string(want) + " body bytes — a body read partly is "
+                                + "worse than one refused");
+                    }
+                    return Result.Ok(HttpRequest {
+                            method: request.method, target: request.target, path: request.path,
+                            query: request.query, version: request.version, headers: request.headers,
+                            body: body
+                            });
+                }
+            }
+        }
+    }
+}
+
+function http_send_response(fd: Int, response: HttpResponse) -> Bool allocates touches network {
+    match net_write(fd, http_render_response(response)) {
+        None => { return false; }
+        Some(written) => { return written > 0; }
+    }
+}
+
+// Serve one connection: read, hand to the handler, answer, close. Answers whether a response was
+// written, so a caller's loop can count failures rather than guess.
+//
+// **A malformed request is answered with 400 rather than dropped.** A client that gets nothing back
+// cannot tell a rejection from a hang, and "the server closed on me" is the least actionable thing
+// a server can say.
+function http_serve_one(server: Int, handler: dynamic Handler, limit: Int) -> Bool
+        allocates touches network, input {
+    match net_accept(server) {
+        None => { return false; }
+        Some(fd) => {
+            let mutable answered: Bool = false;
+            match http_read_request(fd, limit) {
+                Error(why) => {
+                    answered = http_send_response(fd, http_response(400,
+                            "text/plain; charset=utf-8", why + "\n"));
+                }
+                Ok(request) => {
+                    answered = http_send_response(fd, handler.handle(request));
+                }
+            }
+            let shut: Bool = net_close(fd);
+            return answered;
+        }
+    }
+}
+
+// Listen, then serve until something stops answering. `None` when the port could not be taken —
+// which is the one failure a caller can act on, by choosing another.
+//
+// **No fork here on purpose.** `os_fork` exists and a pre-forked server is written with it, but how
+// many workers and how they are supervised is an application's decision, not a protocol's. This
+// serves one connection at a time and says so; `http_serve_one` is what a forking loop calls.
+function http_serve(port: Int, handler: dynamic Handler, limit: Int) -> Option<Int>
+        allocates touches network, input {
+    match net_listen(port, 16) {
+        None => { return Option.None; }
+        Some(server) => {
+            let mutable served: Int = 0;
+            let mutable running: Bool = true;
+            while running {
+                if http_serve_one(server, handler, limit) {
+                    served += 1;
+                } else {
+                    running = false;
+                }
+            }
+            let shut: Bool = net_close(server);
+            return Option.Some(served);
+        }
+    }
+}
+
+// ---- asking ------------------------------------------------------------------------------------
+
+// One request to a server at a known address, and the response.
+//
+// **Four octets rather than a hostname, and that is a language gap rather than a design choice.**
+// `getaddrinfo` already returns 0 from a Burxt program; what is missing is one builtin to read a
+// pointer back out of C memory, so the `addrinfo` chain cannot be walked. `docs/limitations.md`
+// carries the measurement. When that builtin lands this grows a `http_get_host` beside it and this
+// function does not change.
+//
+// `host` is still needed because HTTP/1.1 requires a `Host:` header and a virtual host answers by
+// it — so the name travels even when the address does not come from it.
+function http_send_request(a: Int, b: Int, c: Int, d: Int, port: Int, host: String,
+        method: String, path: String, extra: [HttpHeader], body: String)
+        -> Result<HttpResponse, String> allocates touches network, input {
+    match net_connect_ipv4(a, b, c, d, port) {
+        None => {
+            return Result.Error("could not connect to " + to_string(a) + "." + to_string(b) + "."
+                    + to_string(c) + "." + to_string(d) + ":" + to_string(port));
+        }
+        Some(fd) => {
+            let mutable chunks: [String] = [];
+            let line: Int = push(chunks, method + " " + path + " HTTP/1.1\r\n");
+            let named: Int = push(chunks, "Host: " + host + "\r\n");
+            let closing: Int = push(chunks, "Connection: close\r\n");
+            let sized: Int = push(chunks, "Content-Length: " + to_string(len(body)) + "\r\n");
+            let mutable i: Int = 0;
+            while i < len(extra) {
+                let one: Int = push(chunks, extra[i].name + ": " + extra[i].value + "\r\n");
+                i += 1;
+            }
+            let blank: Int = push(chunks, "\r\n");
+            let sent_body: Int = push(chunks, body);
+            match net_write(fd, string_join_chunks(chunks)) {
+                None => {
+                    let shut: Bool = net_close(fd);
+                    return Result.Error("the connection opened and the request would not write");
+                }
+                Some(written) => { }
+            }
+            // Read to close. `Connection: close` is what makes this terminate, and it is why this
+            // slice sends it rather than offering keep-alive.
+            let mutable text: String = "";
+            let mutable reading: Bool = true;
+            while reading {
+                match net_read(fd, 65536) {
+                    None => { reading = false; }
+                    Some(chunk) => {
+                        if len(chunk) == 0 { reading = false; } else { text = text + chunk; }
+                    }
+                }
+            }
+            let shut: Bool = net_close(fd);
+            if len(text) == 0 {
+                return Result.Error("the server closed without answering");
+            }
+            return http_parse_response(text);
+        }
+    }
+}
+
+// The common case.
+function http_get(a: Int, b: Int, c: Int, d: Int, port: Int, host: String, path: String)
+        -> Result<HttpResponse, String> allocates touches network, input {
+    let none: [HttpHeader] = [];
+    return http_send_request(a, b, c, d, port, host, "GET", path, none, "");
+}
+
+// A POST with a body and a content type.
+function http_post(a: Int, b: Int, c: Int, d: Int, port: Int, host: String, path: String,
+        content_type: String, body: String) -> Result<HttpResponse, String>
+        allocates touches network, input {
+    let mutable extra: [HttpHeader] = [];
+    let typed: Int = push(extra, HttpHeader { name: "Content-Type", value: content_type });
+    return http_send_request(a, b, c, d, port, host, "POST", path, extra, body);
+}

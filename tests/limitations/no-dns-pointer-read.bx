@@ -1,4 +1,4 @@
-// CLAIM: TCP, yes. TLS by binding. No HTTP, no DNS
+// CLAIM: TCP and HTTP, yes. TLS by binding. No DNS
 // HOLDS: refused
 // REFUSED-BECAUSE: unknown function: c_pointer_at
 // WHY: DNS is blocked by exactly one thing — there is no way to read a POINTER back out of C

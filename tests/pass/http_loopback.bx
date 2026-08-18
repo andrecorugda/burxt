@@ -1,0 +1,89 @@
+// A Burxt HTTP server answering a Burxt HTTP client, both halves of `lib/http.bx`, in one program.
+//
+// **Why a pass fixture rather than a runner invariant**, following `net_loopback.bx`: it needs
+// nothing outside itself. `net_listen_any_port` takes a port the kernel chooses, so two of these
+// running at once cannot collide, and `os_fork` supplies the client. A fixed port would make the
+// suite fail for a reason that is not about HTTP.
+//
+// **The parent is the CLIENT and the child is the server**, which is the way round that avoids the
+// race the port-choosing solves half of: the listener exists before the fork, so the child is
+// serving on a socket that is already bound and the client cannot arrive early.
+//
+// What this actually proves, beyond "it compiled": a request line and headers are parsed, a
+// percent-escape in a query is decoded, a `Content-Length` body arrives whole, a status line and
+// headers are rendered in a form the client half reads back, and a 404 is a 404.
+use "../../lib/http.bx";
+use "../../lib/os.bx";
+
+class Pages { name: String }
+implement Handler for Pages {
+    function (self) handle(request: HttpRequest) -> HttpResponse allocates {
+        if request.path == "/" {
+            return http_text(self.name + " at the root\n");
+        }
+        if request.path == "/echo" {
+            match http_query_params(request) {
+                None => { return http_text("bad query\n"); }
+                Some(ps) => {
+                    match cgi_param(ps, "say") {
+                        None => { return http_text("no say\n"); }
+                        Some(v) => { return http_text("said " + v + "\n"); }
+                    }
+                }
+            }
+        }
+        if request.method == "POST" {
+            return http_text("body was " + to_string(len(request.body)) + " bytes\n");
+        }
+        return http_not_found();
+    }
+}
+
+function talk() -> Int allocates touches network, commands, input, clock {
+    let pages: Pages = Pages { name: "galactic" };
+    match net_listen_any_port(16) {
+        None => { print("could not listen"); return 1; }
+        Some(server) => {
+            match net_port_of(server) {
+                None => { print("no port"); return 1; }
+                Some(port) => {
+                    // A safety net, exactly as `net_loopback.bx` has: if either half wedges,
+                    // the process dies rather than holding the suite open.
+                    let own: Int = alarm(20);
+                    if os_fork() == 0 {
+                        // The child SERVES, and prints nothing — so the parent's output is the
+                        // whole of this fixture's stdout and the two cannot interleave.
+                        let mutable n: Int = 0;
+                        while n < 3 {
+                            let served: Bool = http_serve_one(server, pages, 65536);
+                            n += 1;
+                        }
+                        let shut: Bool = net_close(server);
+                        return 0;
+                    }
+                    // `listen` ran before the fork, so the backlog queues a connection whether or
+                    // not `accept` is running yet — the race `net_loopback.bx` documents. The
+                    // sleep is belt and braces and costs nothing once.
+                    let waited: Bool = os_sleep(50);
+                    match http_get(127, 0, 0, 1, port, "localhost", "/") {
+                        Error(why) => { print("root failed: " + why); }
+                        Ok(r) => { print("root {r.status}: " + string_trim(r.body)); }
+                    }
+                    match http_get(127, 0, 0, 1, port, "localhost", "/echo?say=hello%20galactic") {
+                        Error(why) => { print("echo failed: " + why); }
+                        Ok(r) => { print("echo {r.status}: " + string_trim(r.body)); }
+                    }
+                    match http_post(127, 0, 0, 1, port, "localhost", "/submit",
+                            "application/x-www-form-urlencoded", "name=ada&role=first") {
+                        Error(why) => { print("post failed: " + why); }
+                        Ok(r) => { print("post {r.status}: " + string_trim(r.body)); }
+                    }
+                    let reaped: Int = os_wait_for_child();
+                    let done: Bool = net_close(server);
+                    return 0;
+                }
+            }
+        }
+    }
+}
+let r: Int = talk();

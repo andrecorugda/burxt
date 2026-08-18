@@ -1,4 +1,4 @@
-// CLAIM: TCP, yes. TLS by binding. No HTTP, no DNS
+// CLAIM: TCP and HTTP, yes. TLS by binding. No DNS
 // HOLDS: accepted
 // WHY: the INVERSE guard, and the reason this file exists. This page said flatly "No TLS" for
 //      two weeks after v1.0.0 shipped, while six `external function` declarations and
