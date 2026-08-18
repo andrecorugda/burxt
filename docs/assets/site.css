@@ -247,27 +247,25 @@ body {
  * and then 19 and then 24; the shared glyph is the thing to measure. */
 .bar .eco a { display: block; transition: transform var(--quick); }
 .bar .eco a:hover { transform: translateY(-1px); }
-/* TWO heights, and the difference is typographic rather than arbitrary.
+/* 16px, chosen by RENDERING and not by arithmetic — after four sizes derived from measurements
+ * were each wrong.
  *
- * The eye compares LETTERS, not boxes. Measured on the rendered pixels: the Burxt lockup at 22px
- * puts its "burxt" letters at 13.3px — and at a shared 22px the subproject marks put theirs at
- * 14.7px and 17.6px, which is why they read bigger than the mark they sit beside. Andre's
- * screenshot drew an arrow from them to the lockup: make these match that.
+ * **The measurement that broke every one of them: `burxt-lockup-light.png` carries an opaque WHITE
+ * TILE behind its `b`, filling all 360px of the box.** `getbbox()` reports alpha, so it answered
+ * "100% ink, the b is the tallest element" — and I built four numbers on top of an invisible
+ * rectangle. Measuring the ORANGE instead: the visible ink spans y 64..295, **232px, 64% of the
+ * box**, so at `height: 22px` the lockup shows 14.18px of ink, not 22. The `-light` and `-dark`
+ * names are about the BAR the tile has to disappear into, not about the letters, which are #E8502A
+ * in both. BMX found this and measured it to the pixel.
  *
- * They need different numbers because they contain different letters. `mx` is x-height only — no
- * ascender, no descender — while `star-` has a `t` that reaches full ascender height, the same as
- * the `t` in `burxt`. So a single height makes one of them wrong, and matching the letters is what
- * matching the marks means.
+ * **And 14.18 is still not the answer, which is the part worth keeping.** `burxt` is set bold and
+ * `mx` is weight 500, so equal letter heights at unequal stroke weight do not look equal — the eye
+ * integrates INK, not height. At 14px these read small and at 22px they read large. 16px is where
+ * they match, established by screenshotting the live page at 14/15/16/18 through headless Chrome and
+ * comparing the four. BMX arrived at the same 16 independently, by rendering their own bar.
  *
- *     bmx     15px   x-height letters against `burxt`'s x-height
- *     star-b  17px   ascender against `burxt`'s ascender
- *
- * Chosen by compositing the real assets at candidate sizes and LOOKING, after three sizes picked by
- * arithmetic were each rejected. The `b` glyph is a red herring here: it is 100% of every box, so it
- * matches at any shared height while the letters do not. */
-.bar .eco a.bmx img   { height: 15px; }
-.bar .eco a.starb img { height: 17px; }
-.bar .eco img { width: auto; display: block; }
+ * One height for both marks, so there is no per-mark exception to maintain. */
+.bar .eco img { height: 16px; width: auto; display: block; }
 @media (max-width: 900px) { .bar .eco { display: none; } }
 
 /* On the landing page the same two marks appear at a readable size, in a row that says what each
