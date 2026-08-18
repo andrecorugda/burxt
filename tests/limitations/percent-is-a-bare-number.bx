@@ -1,0 +1,12 @@
+// CLAIM: A percent is a number, and the `%` is the only thing that says so
+// HOLDS: accepted
+// WHY: the INVERSE guard, and the only shape that fits. This is a claim that something WRONG is
+//      currently accepted, so the probe has to compile — the day a `Percent` type makes it a
+//      refusal, this goes red and the page has to be rewritten. A `refused` probe here would be
+//      a claim about the fix rather than about today.
+use "../../lib/decimal.bx";
+
+let amount: Decimal<2> = 80.00;
+// 1000.00, not 10.00 — and accepted, which is the whole content of the claim.
+let wrong: Decimal<2> = decimal2_percent_of(amount, 12.5);
+print(to_string(wrong));

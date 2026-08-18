@@ -1,0 +1,20 @@
+// The one place on Burxt's money surface that accepts a silent wrong answer, pinned so it cannot
+// drift unnoticed while the design decision is open.
+//
+// `rate` is a FRACTION. A percent literal is one — `12.5%` IS `0.125` at scale 4 — so a bare
+// `12.5` is a hundred times too big and widening a scale is safe, which means nothing refuses it.
+//
+// **No contract can catch it, and that is the finding rather than an excuse.** The two spellings
+// are the same value by the time the function sees them: `requires rate < 1` would refuse the bug
+// AND refuse `150%`, a legitimate markup. The information is destroyed at the literal, so only a
+// distinct type could keep it — which is a decision about the flagship claim, not a patch.
+//
+// Reported by star-burxt from a real money example, where the first thing they wrote was the
+// wrong one. This fixture exists so that the day the design changes, this output changes with it
+// and somebody has to look.
+use "../../lib/decimal.bx";
+
+let amount: Decimal<2> = 80.00;
+print("literal 12.5% -> " + to_string(decimal2_percent_of(amount, 12.5%)));
+print("bare 0.125    -> " + to_string(decimal2_percent_of(amount, 0.125)));
+print("bare 12.5     -> " + to_string(decimal2_percent_of(amount, 12.5)));

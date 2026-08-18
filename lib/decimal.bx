@@ -208,6 +208,26 @@ pure function decimal2_round_to(value: Decimal<2>, places: Int) -> Decimal<2>
 //
 // A `Decimal<4>` for the rate because that is what a percent literal is: `8.25%` is `0.0825`
 // held at scale 4, per `spec/1.0/A4.7-SIGNATURE-GRAMMAR.md`.
+//
+// ---- ⚠ THE SHARP EDGE, and it is about money -------------------------------------------------
+//
+// **`rate` is a FRACTION, so a bare number here is a hundred times too big and nothing refuses
+// it.** Measured, reported by star-burxt from a real example:
+//
+//     decimal2_percent_of(80.00, 12.5%)   ->    10.00      what was meant
+//     decimal2_percent_of(80.00, 12.5)    ->  1000.00      accepted, and 100x too much
+//
+// The `%` carries the whole meaning and the type system carries none of it: `12.5%` IS `0.125`,
+// so the two spellings are the same value by the time this function sees them and **no contract
+// can tell them apart.** `requires rate < 1` would catch `12.5` and would also refuse `150%`,
+// which is a legitimate markup — the information is destroyed at the literal, and only a
+// distinct TYPE could keep it.
+//
+// That makes this the one place on the money surface where Burxt accepts a silent wrong answer,
+// in the direction of charging somebody a hundred times too much. It is written down here rather
+// than left for the next person to find, and the fix is a design decision on the flagship claim
+// rather than a patch: see `docs/limitations.md`. **Write the literal.** `12.5%`, never `0.125`
+// and never `12.5` — the literal is the only spelling that says what it means.
 pure function decimal2_percent_of(amount: Decimal<2>, rate: Decimal<4>) -> Decimal<2> {
     let exact: Decimal<6> = amount * rate;
     // Scale 6 is four places past the penny, so the divisor is 10^4.

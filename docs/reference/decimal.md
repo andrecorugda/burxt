@@ -28,7 +28,7 @@ Burxt's headline is that `$0.10 / 3` is a question you have to answer rather tha
 | [`decimal2_abs`](#decimal2-abs) | function | The distance from zero. **`requires` the value is not the most negative one**, for the reason `math_abs` states: the two |
 | [`decimal2_sign`](#decimal2-sign) | function | -1, 0 or 1. No precondition and none needed: nothing is negated, so the most negative value answers -1 rather than trapp |
 | [`decimal2_round_to`](#decimal2-round-to) | function | `value` rounded to `places` decimal places, still typed `Decimal<2>`. `places` is 0, 1 or 2: whole currency units, tenth |
-| [`decimal2_percent_of`](#decimal2-percent-of) | function | `rate` of `amount`, rounded half-even to the penny. `decimal2_percent_of($100.00, 8.25%)` is `$8.25` exactly, with nothi |
+| [`decimal2_percent_of`](#decimal2-percent-of) | function | **`rate` is a FRACTION, so a bare number here is a hundred times too big and nothing refuses it.** Measured, reported by |
 | [`money_split`](#money-split) | function | * **`parts` larger than the penny count.** `money_split($0.02, 5)` is |
 | [`decimal4_ticks`](#decimal4-ticks) | function | The count of ten-thousandths. `decimal4_ticks(8.25%)` is `825`. |
 | [`decimal4_from_ticks`](#decimal4-from-ticks) | function | — |
@@ -135,15 +135,18 @@ pure function decimal2_round_to(value: Decimal<2>, places: Int) -> Decimal<2>
 pure function decimal2_percent_of(amount: Decimal<2>, rate: Decimal<4>) -> Decimal<2>
 ```
 
-`rate` of `amount`, rounded half-even to the penny. `decimal2_percent_of($100.00, 8.25%)` is `$8.25` exactly, with nothing to round.
+**`rate` is a FRACTION, so a bare number here is a hundred times too big and nothing refuses it.** Measured, reported by star-burxt from a real example:
 
-The interesting case is half a penny. `decimal2_percent_of($0.01, 50%)` is `$0.00` and `decimal2_percent_of($0.03, 50%)` is `$0.02` — both are ties, and each goes to the even penny count rather than both going up. Half-up would answer `$0.01` and `$0.02`, which is a penny created out of nothing on every other tie.
+```burxt
+ decimal2_percent_of(80.00, 12.5%)   ->    10.00      what was meant
+ decimal2_percent_of(80.00, 12.5)    ->  1000.00      accepted, and 100x too much
+```
 
-**The multiplication is done in Decimal, not in Int, and that is deliberate.** `amount * rate` is an exact `Decimal<6>` and the language traps if that product overflows; doing it as `cents * ticks` in Int would silently need an overflow guard this function would then have to answer for. Letting the language trap keeps one rule for overflow instead of two.
+The `%` carries the whole meaning and the type system carries none of it: `12.5%` IS `0.125`, so the two spellings are the same value by the time this function sees them and **no contract can tell them apart.** `requires rate < 1` would catch `12.5` and would also refuse `150%`, which is a legitimate markup — the information is destroyed at the literal, and only a distinct TYPE could keep it.
 
-A `Decimal<4>` for the rate because that is what a percent literal is: `8.25%` is `0.0825` held at scale 4, per `spec/1.0/A4.7-SIGNATURE-GRAMMAR.md`.
+That makes this the one place on the money surface where Burxt accepts a silent wrong answer, in the direction of charging somebody a hundred times too much. It is written down here rather than left for the next person to find, and the fix is a design decision on the flagship claim rather than a patch: see `docs/limitations.md`. **Write the literal.** `12.5%`, never `0.125` and never `12.5` — the literal is the only spelling that says what it means.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L211)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L231)
 
 ### `money_split`
 {: #money-split}
@@ -171,7 +174,7 @@ pure function money_split(total: Decimal<2>, parts: Int) -> [Decimal<2>]
  `lib/array.bx`'s `array_min` records the same call for the same reason.
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L259)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L279)
 
 ### `decimal4_ticks`
 {: #decimal4-ticks}
@@ -182,7 +185,7 @@ pure function decimal4_ticks(value: Decimal<4>) -> Int
 
 The count of ten-thousandths. `decimal4_ticks(8.25%)` is `825`.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L292)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L312)
 
 ### `decimal4_from_ticks`
 {: #decimal4-from-ticks}
@@ -191,7 +194,7 @@ The count of ten-thousandths. `decimal4_ticks(8.25%)` is `825`.
 pure function decimal4_from_ticks(ticks: Int) -> Decimal<4>
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L309)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L329)
 
 ### `decimal4_is_zero`
 {: #decimal4-is-zero}
@@ -200,7 +203,7 @@ pure function decimal4_from_ticks(ticks: Int) -> Decimal<4>
 pure function decimal4_is_zero(value: Decimal<4>) -> Bool
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L314)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L334)
 
 ### `decimal4_abs`
 {: #decimal4-abs}
@@ -209,7 +212,7 @@ pure function decimal4_is_zero(value: Decimal<4>) -> Bool
 pure function decimal4_abs(value: Decimal<4>) -> Decimal<4>
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L319)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L339)
 
 ### `decimal4_sign`
 {: #decimal4-sign}
@@ -218,7 +221,7 @@ pure function decimal4_abs(value: Decimal<4>) -> Decimal<4>
 pure function decimal4_sign(value: Decimal<4>) -> Int
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L329)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L349)
 
 ### `decimal6_ticks`
 {: #decimal6-ticks}
@@ -229,7 +232,7 @@ pure function decimal6_ticks(value: Decimal<6>) -> Int
 
 The count of millionths.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L349)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L369)
 
 ### `decimal6_from_ticks`
 {: #decimal6-from-ticks}
@@ -238,7 +241,7 @@ The count of millionths.
 pure function decimal6_from_ticks(ticks: Int) -> Decimal<6>
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L366)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L386)
 
 ### `decimal6_is_zero`
 {: #decimal6-is-zero}
@@ -247,7 +250,7 @@ pure function decimal6_from_ticks(ticks: Int) -> Decimal<6>
 pure function decimal6_is_zero(value: Decimal<6>) -> Bool
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L371)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L391)
 
 ### `decimal7_ticks`
 {: #decimal7-ticks}
@@ -258,7 +261,7 @@ pure function decimal7_ticks(value: Decimal<7>) -> Int
 
 The count of ten-millionths. The integer `magnitude_of_squared` searches for by hand; this is the same search named once, and `lib/vector.bx` predates it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L382)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L402)
 
 ### `decimal7_from_ticks`
 {: #decimal7-from-ticks}
@@ -267,7 +270,7 @@ The count of ten-millionths. The integer `magnitude_of_squared` searches for by 
 pure function decimal7_from_ticks(ticks: Int) -> Decimal<7>
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L399)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L419)
 
 ### `decimal7_is_zero`
 {: #decimal7-is-zero}
@@ -276,7 +279,7 @@ pure function decimal7_from_ticks(ticks: Int) -> Decimal<7>
 pure function decimal7_is_zero(value: Decimal<7>) -> Bool
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L404)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L424)
 
 ### `decimal7_abs`
 {: #decimal7-abs}
@@ -285,7 +288,7 @@ pure function decimal7_is_zero(value: Decimal<7>) -> Bool
 pure function decimal7_abs(value: Decimal<7>) -> Decimal<7>
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L409)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L429)
 
 ### `decimal7_sign`
 {: #decimal7-sign}
@@ -294,7 +297,7 @@ pure function decimal7_abs(value: Decimal<7>) -> Decimal<7>
 pure function decimal7_sign(value: Decimal<7>) -> Int
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L419)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L439)
 
 ### `divide_round_half_even`
 {: #divide-round-half-even}
@@ -311,7 +314,7 @@ Written once, in Int, and shared by every scale — which is the payoff of conve
 
 `divide_floor` rather than truncation here, and unlike `money_split` that is the right choice: flooring makes the leftover non-negative for negative `n` too, so "is this a tie" is one comparison instead of two. -5 with step 10 gives quotient -1 and leftover 5, a tie, and the even neighbour is 0 — which is `decimal2_round_to(-$0.05, 1)` being `$0.00`, the mirror of the positive case. Half-even is symmetric about zero, and `tests/pass/decimal_helpers.bx` checks that over every penny in a range rather than on the four examples above.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L453)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L473)
 
 
 {% endraw %}

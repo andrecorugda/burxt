@@ -193,6 +193,30 @@ behaviour, and RSA and the elliptic curves need arbitrary-precision integers, wh
 not have — `Decimal` is a scaled i64 capped at scale 18. Hand-rolling them would produce ciphertext
 that looks perfectly fine, which is exactly the silent wrong answer this language exists to refuse.
 
+### A percent is a number, and the `%` is the only thing that says so
+
+**This is the one place on the money surface where Burxt accepts a silent wrong answer**, and it is
+here rather than buried because the direction of the error is charging somebody too much.
+
+```burxt
+decimal2_percent_of(80.00, 12.5%)   //    10.00 — what was meant
+decimal2_percent_of(80.00, 12.5)    //  1000.00 — accepted, a hundred times too much
+```
+
+A percent literal *is* a `Decimal<4>`: `12.5%` holds `0.125`. So the rate parameter is a fraction,
+a bare number is a valid fraction, and widening a scale is safe — nothing refuses it.
+
+**No contract can catch it.** By the time the function sees its argument the two spellings are the
+same value, so `requires rate < 1` would refuse the mistake and also refuse `150%`, which is a
+legitimate markup. The information is destroyed at the literal, and only a distinct TYPE could keep
+it — which is a change to the flagship claim rather than a patch, and it is open rather than
+decided.
+
+**Until it is decided: write the literal.** `12.5%`, never `0.125` and never `12.5`. Held by
+`tests/pass/a_percent_literal_is_not_a_bare_number`, so the day this changes the output changes with
+it. Found by star-burxt writing a real money example, where the wrong spelling was the first one
+they reached for.
+
 ### A secret cannot be zeroed
 
 There is no `zeroise`. A String lives until its region closes, so a key stays resident after the code
