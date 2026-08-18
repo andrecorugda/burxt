@@ -233,7 +233,11 @@ body {
 }
 .bar .eco a { display: block; opacity: 0.62; transition: opacity var(--quick); }
 .bar .eco a:hover { opacity: 1; }
-.bar .eco img { height: 15px; width: auto; display: block; }
+/* 14px, matching the link text beside it — and it means 14px now that the wordmark viewBoxes are
+ * cropped to their ink. Before cropping, `height: 15px` rendered SIX pixels of letter, because 60%
+ * of the delivered box was empty; the mark read as an afterthought next to a 22px lockup that is
+ * 100% ink. One height for every mark is only correct when every box is exactly its letters. */
+.bar .eco img { height: 14px; width: auto; display: block; }
 @media (max-width: 900px) { .bar .eco { display: none; } }
 
 /* On the landing page the same two marks appear at a readable size, in a row that says what each
@@ -247,13 +251,13 @@ body {
 }
 .eco-row a { display: block; text-decoration: none; }
 .eco-row a:hover { text-decoration: none; }
-.eco-row img { height: 30px; width: auto; display: block; margin-bottom: 0.5rem; }
+.eco-row img { height: 24px; width: auto; display: block; margin-bottom: 0.6rem; }
 .eco-row span { display: block; font-size: 13px; color: var(--ink-2); max-width: 22rem; }
 
 /* A wordmark used INSIDE a list of names — the reference index, where these two sit under the
  * `lib/` modules. Sized to the surrounding text's cap height rather than its line box, for the
  * same reason as the bar: an image of a word set to the text size reads smaller than the text. */
-.eco-mark { height: 16px; width: auto; display: inline-block; vertical-align: -3px; }
+.eco-mark { height: 14px; width: auto; display: inline-block; vertical-align: -2px; }
 
 /* Search, at EVERY width.
  *

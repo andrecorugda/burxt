@@ -78,3 +78,21 @@ and centres it at 70% of the box, so all three have the same margin — and
 script makes. The 70% is not taste: the shipped `.bx` icon filled 86% of its height, which at 48px
 left four clear pixels and put the glyph against the filename in the tree.
 
+### Two traps in these files, both found by measuring rather than reading
+
+**The viewBoxes are CROPPED to the ink and the delivered ones were not.** As dropped, the wordmarks
+carried 60% empty height — `height: 15px` in a stylesheet rendered SIX pixels of letter, beside a
+lockup that is 100% ink at 22px. Cropping removes a per-mark height override rather than adding one:
+one shared height is correct only when every box is exactly its letters. BMX found this by pointing
+the icon rule — *crop to the ink first* — at the wordmarks, where it was truer than for the icons.
+
+Measured from the 1:1 transparent PNG rather than `getBBox`: `getBBox` on a `<text>` returns the
+layout box including the full em, which reads 138 tall where the inked pixels are 96. **An eye
+compares letters**, so ink is the number that matters.
+
+**A transparent wordmark still contains a `<rect>`** — it is the `b`'s vertical stroke, `#E8502A`.
+The thing that makes the opaque variants unusable on a tinted surface is a **white** rect the size
+of the canvas, not the presence of the tag. A guard that greps for `<rect` refuses a good asset the
+day somebody draws a glyph with one; BMX wrote exactly that guard first and it failed the correct
+file.
+
