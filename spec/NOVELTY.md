@@ -407,6 +407,62 @@ Not inference in Burxt, not a model format, not a tokeniser. The language's cont
 **wall around what the model says** — the same contribution it makes at the C boundary
 (`as scaled`) and at the tool boundary (candidate 7). Three boundaries, one idea.
 
+## 9. The Naruto memory model — a copying reclaim with no roots and no tracing
+
+**Named by Andre, 2026-08-18. Specified in [`M17-HANDLES.md`](M17-HANDLES.md); not built.**
+
+**Novelty: the synthesis, not the parts. Buildable: yes, and costed.**
+
+A frame is a shadow clone. It works in its own space, and when it dispels **everything it made
+vanishes except what it learned**, which returns to the original.
+
+    frame_start = marker              // record the mark
+       … the frame allocates freely …
+    copy_down(result, frame_start)    // what it learned returns
+    marker = frame_start + size       // dispel — the rest vanishes at once
+
+**The name is doing work, not decorating.** "Shadow clone" states the semantics in a way
+"region with copy-back" does not: independent scratch, total disappearance, and exactly one thing
+carried home. A reader who knows the metaphor knows the mechanism, and this project already names
+things this way — *the pointer wall*, *the wall pattern*, *a search scoped to one spelling*.
+
+### What is genuinely different, stated carefully
+
+Copying collectors are old, and arena-plus-copy-out is a known C idiom. **Neither is what this is**,
+and the difference is two properties that come from the language rather than the runtime:
+
+1. **No roots and no tracing.** Every copying collector must first discover what is live, from a root
+   set, by tracing. Here the compiler already knows: exactly one value escapes a frame, and its type
+   is in the signature. There is nothing to discover, so there is no trace, no root set, and no
+   scanning of anything.
+
+2. **The walker is generated per type from a layout the compiler already computes.** `burxt layout`
+   prints every field's offset and whether it is a pointer. So `copy_down` is ordinary generated code,
+   not a runtime that reflects over values. Burxt has no reflection and does not gain any here.
+
+3. **Only what lies above the mark is copied.** Anything below survived the previous dispel and does
+   not move. So unchanged substructure costs nothing — a keystroke that edits one field does not copy
+   the list beside it. The cost is *what this frame made and kept*, never the whole state.
+
+### What is NOT claimed
+
+- **Not that copying reclaim is new.** It is not. Cheney published in 1970.
+- **Not that this is a general collector.** It reclaims a frame, not a heap, and it works precisely
+  because the escaping value is singular and statically known. Point it at a general object graph and
+  it has nothing to do.
+- **Not that it is unprecedented.** Region inference, escape analysis and arena copy-out all exist.
+  The claim is the **combination**: a copying reclaim that needs no root set because an effect
+  signature already names what escapes, with the walker generated from static layout. I know of no
+  language doing that, and "I know of none" is a weaker statement than "there is none" — recorded as
+  the weaker one deliberately.
+
+### Why it is Burxt's rather than portable
+
+It rests on three things this language has and most do not: `allocates` naming what outlives a call,
+`relay_params` knowing whether a result aliases its input, and a layout table with no reflection
+attached. Remove any one and the mechanism needs a tracer. That is the same asset behind
+`burxt review` — **the interesting property is in the signature, so a tool can read it.**
+
 ## What is NOT claimed here
 
 Kept explicit so the register stays honest:

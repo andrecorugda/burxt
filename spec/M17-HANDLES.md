@@ -158,7 +158,10 @@ this space has *does this result alias its input* available as a compile-time fa
 same asset that makes `burxt review` possible: **the interesting property is in the signature, so a
 tool can read it.**
 
-### The mechanism: record the mark, and let the frame dispel
+### The mechanism: the Naruto memory model
+
+**Named by Andre, 2026-08-18 — "Naruto memory model, Burxt original".** Registered as
+[`NOVELTY.md`](NOVELTY.md) §9, with what is and is not claimed about it stated there.
 
 Andre's, 2026-08-18, and it replaces the two-arena sketch above because it needs **one** strip rather
 than two — which is the constraint that actually bites, since WebAssembly has about 4 GB of address
