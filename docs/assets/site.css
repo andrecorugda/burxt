@@ -231,13 +231,20 @@ body {
   padding-left: 1.75rem;
   border-left: 1px solid var(--hair);
 }
-.bar .eco a { display: block; opacity: 0.62; transition: opacity var(--quick); }
-.bar .eco a:hover { opacity: 1; }
-/* 14px, matching the link text beside it — and it means 14px now that the wordmark viewBoxes are
- * cropped to their ink. Before cropping, `height: 15px` rendered SIX pixels of letter, because 60%
- * of the delivered box was empty; the mark read as an afterthought next to a 22px lockup that is
- * 100% ink. One height for every mark is only correct when every box is exactly its letters. */
-.bar .eco img { height: 14px; width: auto; display: block; }
+/* ICONS here rather than wordmarks, and at FULL STRENGTH.
+ *
+ * Two things were wrong with the first version. A wordmark at 14px is thin orange letterforms with
+ * no mass, so beside a 22px lockup it read as an afterthought — and `opacity: 0.62`, copied from the
+ * text links, turned Burxt's orange into a muddy brown. **Dimming a brand colour is not the same
+ * move as dimming grey text**: grey at 62% is quieter grey, orange at 62% is a different colour.
+ *
+ * An icon carries the orange as a SHAPE, which survives being small in a way letters do not. The
+ * document is BMX, the gear is star-burxt, and the bare `b` stays Burxt's alone — so the three read
+ * as a family in the bar exactly as they do in a file tree. The wordmarks keep the landing row,
+ * where there is room for letters to be read as words. */
+.bar .eco a { display: block; transition: transform var(--quick); }
+.bar .eco a:hover { transform: translateY(-1px); }
+.bar .eco img { height: 19px; width: auto; display: block; }
 @media (max-width: 900px) { .bar .eco { display: none; } }
 
 /* On the landing page the same two marks appear at a readable size, in a row that says what each

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="42.19 18.56 154.7 226.9" width="154.7" height="226.9">
+      <path d="M40 20 H150 L200 70 V236 Q200 244 192 244 H48 Q40 244 40 236 Z"
+            fill="#FFF3EC" stroke="#E8502A" stroke-width="7" stroke-linejoin="round"/>
+      <path d="M150 20 L200 70 H158 Q150 70 150 62 Z" fill="#E8502A" opacity="0.25"/>
+      <path d="M150 20 L200 70 H158 Q150 70 150 62 Z" fill="none" stroke="#E8502A" stroke-width="5" stroke-linejoin="round"/>
+    <g transform="translate(120,150) scale(0.42) translate(-100,-110)"><rect x="34" y="18" width="26" height="184" rx="6" fill="#E8502A"/><circle cx="109" cy="139" r="62" fill="#E8502A"/><g fill="#FFFFFF"><polygon points="78,106 94,106 140,166 124,166"/><polygon points="140,106 124,106 78,166 94,166"/></g></g><rect x="30" y="196" width="120" height="40" rx="8" fill="#E8502A"/><text x="90" y="225" font-family="Liberation Sans, Arial, sans-serif" font-size="26" font-weight="700" fill="#FFFFFF" text-anchor="middle">BMX</text></svg>
