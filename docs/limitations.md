@@ -139,9 +139,14 @@ A Burxt program answers HTTP requests. What is missing above it:
   this bullet said otherwise until it was measured, one paragraph above the note recording that the
   same thing had already happened to the sentence about opening a connection at all.
 - **No HTTP**, in the sense that a request is bytes and parsing it is your code.
-- **No DNS.** An address is four octets — `net_connect_ipv4(93, 184, 216, 34, 80)` — because
-  `getaddrinfo` hands back a pointer buried inside a chain of structs, and reading a pointer out of
-  C's memory is a door still shut.
+- **No DNS**, and this one is a single missing builtin rather than a design problem. An address is
+  four octets today — `net_connect_ipv4(93, 184, 216, 34, 80)`.
+
+  Measured 2026-08-18: **`getaddrinfo` itself already succeeds from a Burxt program**, returning `0`
+  for a real hostname, and `c_bytes_at` reads back the eight bytes it wrote — a genuine heap address.
+  What cannot be done is turn those eight bytes into a `CPointer` again, so the `addrinfo` chain
+  cannot be walked. `c_string_at`, `c_bytes_at` and `c_bytes_to` all cross the wall; the mirror that
+  reads a POINTER field out of a C struct does not exist yet.
 - **Blocking, with no timeouts.** `net_accept` waits.
 
 This section said *"It cannot open a network connection"* until it was measured. It could: every
