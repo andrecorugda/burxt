@@ -1,0 +1,8 @@
+// CLAIM: Cryptography: some built, most deliberately not
+// HOLDS: absent
+// TERMS: aes, chacha, ed25519, x25519, argon2, bcrypt, scrypt
+// WHY: these are BOUND, never written here — no control over instruction timing, and the
+//      curves need arbitrary-precision integers the language does not have. A hand-rolled one
+//      appearing in `lib/` is the failure this whole section exists to prevent, and it would
+//      look perfectly fine while being wrong.
+

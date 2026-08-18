@@ -1,0 +1,9 @@
+// CLAIM: No `unsafe`, no reflection, no conditional compilation
+// HOLDS: refused
+// REFUSED-BECAUSE: expected `=`, `+=`, `-=` or `*=`, found `{`
+// WHY: an escape hatch is the one thing that would make every other guarantee conditional.
+region main {
+    unsafe {
+        print("through the wall");
+    }
+}

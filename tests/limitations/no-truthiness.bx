@@ -1,0 +1,10 @@
+// CLAIM: No null, no truthiness, no `unwrap`
+// HOLDS: refused
+// REFUSED-BECAUSE: an `if` condition must be a Bool
+// WHY: a number standing in for a condition is the whole of truthiness. If this compiles,
+//      `if items` means something and the page is wrong.
+region main {
+    if 1 {
+        print("truthy");
+    }
+}

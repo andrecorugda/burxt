@@ -1,0 +1,8 @@
+// CLAIM: C interoperation is limited on purpose
+// HOLDS: refused
+// REFUSED-BECAUSE: expected a type, found `function`
+// WHY: the specific limit is that C cannot call INTO Burxt. `sqlite3_exec`, `signal` and
+//      `qsort` all want a callback; if this compiles, that door opened and three sections of
+//      this page move.
+external function signal(number: CInt, handler: function(CInt) -> Int) -> CPointer;
+region main { print(1); }

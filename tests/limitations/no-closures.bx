@@ -1,0 +1,10 @@
+// CLAIM: No closures
+// HOLDS: refused
+// REFUSED-BECAUSE: expected a type, found `function`
+// WHY: the single largest cluster of library gaps depends on this staying true — `map`,
+//      `filter`, `fold`, `sort_by`. If a function value compiles, four library headers are
+//      wrong at once.
+function apply_twice(f: function(Int) -> Int, x: Int) -> Int {
+    return f(f(x));
+}
+region main { print(1); }

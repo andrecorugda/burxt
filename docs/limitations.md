@@ -97,17 +97,23 @@ suite missed.
 
 ## Not yet — real gaps
 
-### No dependency management
+### No package registry, and no transitive resolution
 
-There is no manifest, no lockfile, no registry. `use "path.bx"` resolves textually, relative to the
-file. You can vendor code; you cannot depend on a version of it.
+**Most of this section used to say "no dependency management" and was wrong on three counts.** There
+is a manifest — `burxt.package`. There is a lockfile — `burxt fetch` writes `burxt.lock`, pinning
+exact commits. And there is a visibility marker: `public` is a keyword in both compilers, the
+boundary is the **package** rather than the file, and reaching a declaration that is not `public`
+is a named refusal. Two packages depend on Burxt this way today.
 
-There is also no visibility marker yet — every declaration in a file a program `use`s is visible to it.
-That changes with dependency management: the keyword is **`public`**, spelled out like everything else in
-this language, and the boundary is the **package** rather than the file. `use` concatenates sources into one
-buffer, so a file boundary does not exist at runtime for anything to be private across; a package boundary
-will. Everything stays visible inside a package, and only `public` declarations are importable by a package
-that depends on it.
+What is actually missing:
+
+- **No registry.** A dependency is a git URL and a commit, written out. That is an operational
+  commitment rather than a language feature, and it is not scheduled.
+- **Resolution is FLAT.** Only the root manifest's dependencies are read, so a package cannot bring
+  its own: an application depending on star-burxt must also declare `bmx` itself, under the same
+  name star uses. One level from breaking quietly, and the fix is scheduled rather than done.
+- **No version constraint.** A manifest pins a commit; it cannot say `requires burxt >= 1.3`. The
+  first thing that needs it is a package's own CI, not a user.
 
 ### No threads. Processes, yes
 

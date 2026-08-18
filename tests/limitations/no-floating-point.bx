@@ -1,0 +1,12 @@
+// CLAIM: No floating point
+// HOLDS: refused
+// REFUSED-BECAUSE: unknown type `Float`
+// WHY: if a float type is ever accepted, the identity claim of this language changed and every
+//      page about exact money is describing a different product.
+// NOTE: the body deliberately does not USE the binding. With `print("{ratio}")` here the first
+//      error read `unknown variable: ratio` — a knock-on from the refusal, and the reason the
+//      gate matches anywhere in the output rather than on the first line.
+region main {
+    let ratio: Float = 1.5;
+    print("built");
+}

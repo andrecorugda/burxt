@@ -1093,6 +1093,11 @@ function declared_home(path: String) -> Bool {
     if path == "tests/fail" { return true; }
     if path == "tests/panic" { return true; }
     if path == "tests/review" { return true; }
+    // One probe per claim on `docs/limitations.md`: a program that must still be refused, or
+    // still compile, so a published limitation cannot quietly stop being true. Its own home
+    // rather than a corner of `tests/fail`, because a fail fixture asserts the COMPILER is
+    // right and these assert the PAGE is.
+    if path == "tests/limitations" { return true; }
     // The BMX format's own conformance suite, vendored. Judged by somebody else's rules, which
     // is why it is neither `tests/support` (harnesses we wrote) nor a verdict directory.
     if path == "tests/bmx-conformance" { return true; }

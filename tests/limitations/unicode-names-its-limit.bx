@@ -1,0 +1,10 @@
+// CLAIM: Unicode is ASCII-correct, and the names say so
+// HOLDS: refused
+// REFUSED-BECAUSE: unknown function: string_to_upper
+// WHY: the rule is that the NAME carries the limit — `string_upper_ascii`, never `to_upper`.
+//      An unqualified case conversion appearing is precisely the silent wrong answer this
+//      language refuses: it would mangle every non-ASCII string without saying so.
+region main {
+    let shout: String = string_to_upper("straße");
+    print(shout);
+}

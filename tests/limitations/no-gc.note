@@ -1,0 +1,8 @@
+// CLAIM: No GC, no reference counting, no runtime
+// HOLDS: by-inspection
+// WHY: this is a claim about what the emitted binary CONTAINS, not about what a program may
+//      write, so no source probe can reach it. Nothing a user types is refused because there
+//      is no collector.
+// WHAT-WOULD-CHECK-IT: a link-time assertion that a compiled program pulls in no collector and
+//      no refcount helper — the emitted IR calls `malloc` and nothing else for memory. That is
+//      a real check and it belongs with the packaging tests rather than here.

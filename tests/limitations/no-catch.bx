@@ -1,0 +1,12 @@
+// CLAIM: No catch or recover
+// HOLDS: refused
+// REFUSED-BECAUSE: expected `=`, `+=`, `-=` or `*=`, found `{`
+// WHY: a failure exits 70 and there is no handler. A `catch` that parses means a program can
+//      swallow a contract violation, which is the opposite of what contracts are for.
+region main {
+    try {
+        print("body");
+    } catch (problem) {
+        print("caught");
+    }
+}

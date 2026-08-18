@@ -1,0 +1,9 @@
+// CLAIM: No threads. Processes, yes
+// HOLDS: refused
+// REFUSED-BECAUSE: expected a type, found `function`
+// WHY: threads need `pthread_create`, which takes a FUNCTION POINTER — C calling back into
+//      Burxt, the door this page says is shut. A signature that names a Burxt function as a
+//      C argument is the smallest way to ask for it.
+external function pthread_create(thread: CPointer, attributes: CPointer,
+        start: function() -> Int, argument: CPointer) -> CInt;
+region main { print(1); }

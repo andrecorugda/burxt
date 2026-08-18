@@ -1,0 +1,11 @@
+// CLAIM: Nothing runs on a phone or in a browser yet
+// HOLDS: by-inspection
+// WHY: objects DO compile for wasm32, aarch64-apple-darwin and six more triples, and
+//      `the_ir_is_the_same_for_every_target` proves the IR is identical across all of them.
+//      What is missing is LINKING and a host — a sysroot per platform, an NDK shell, signing,
+//      JS glue. A compile probe would pass and prove nothing, which is worse than no probe.
+// WHAT-WOULD-CHECK-IT: running a linked artefact on each target in CI. That is the packaging
+//      matrix (roadmap G3), and when it exists this note becomes a real test.
+// CAREFUL: `examples/wasm/` already runs a Burxt island in node. So the honest reading of this
+//      heading is "no supported, packaged path", not "nothing runs" — and if that distinction
+//      stops being made on the page, this note is the thing that should have caught it.

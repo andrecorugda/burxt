@@ -7487,6 +7487,237 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+
+/// Every limitation this project publishes is still true, and every one is guarded.
+///
+/// **The defect this exists for is the one the suite structurally cannot see.** A green suite
+/// proves the compiler does what its fixtures say. It says nothing about a page claiming the
+/// compiler *cannot* do something it has done for months — and that direction is the worse one,
+/// because a wrong DONE is found the moment somebody tries the feature, while a wrong CANNOT is
+/// never tried at all. It silently removes work from the plan and sends a reader away.
+///
+/// Measured on 2026-08-18, all on pages that shipped:
+///
+///   `docs/limitations.md`  "No TLS"                    — six externs and `-lssl` complete a
+///                                                        TLS 1.3 handshake, no compiler change
+///   `docs/limitations.md`  "no manifest, no lockfile,   — `burxt.package`, `burxt.lock` and
+///                           no visibility marker yet"     `public` all ship, and two packages
+///                                                        already depend on Burxt this way
+///   `docs/comparison.md`   "a formatter | none yet"     — `burxt fmt`, both compilers
+///   guide + library + example, four places
+///                          "an enum inside an enum has  — `Option<Colour>` compiles and runs;
+///                           no finite size"               the rule stopped being a proxy two
+///                                                        WEEKS BEFORE v1.0.0 was tagged
+///
+/// So a claim now carries a probe, and the probe is a program. `tests/limitations/NAME.bx`
+/// declares the heading it guards and what must still happen to it:
+///
+///   HOLDS: refused   the program must NOT compile. If it does, the limitation is gone.
+///   HOLDS: accepted  the program MUST compile — the inverse guard, for a page that understates
+///                    what already works. "No TLS" needed this one, and a suite made only of
+///                    refusals could never have caught it.
+///   HOLDS: absent    no `lib/` module mentions any of the TERMS. For "there is no X at all",
+///                    where a compile probe naming one spelling would miss every other.
+///
+/// A claim no probe can reach gets `NAME.note` with `HOLDS: by-inspection`, and it must say
+/// **what would check it** — so the escape hatch costs an argument rather than a shrug, and the
+/// four that use it are visible in the output of every run rather than invisible by omission.
+///
+/// **Both directions, because either alone rots.** Every `###` heading must be claimed by some
+/// probe, so a new limitation cannot be published unguarded; and every probe must name a heading
+/// that exists, so renaming one orphans its probe loudly instead of quietly. That second half is
+/// the one this project has been caught by before — a sweep that asked module → page and never
+/// page → module could not see a dropped page.
+///
+/// **Stage-0 only, deliberately.** A `refused` probe proves less under stage-1, whose checker
+/// covers a subset: it has refused things for the wrong reason before — a fixture "rejected" only
+/// because contract brackets would not parse. A refusal is evidence about a rule only from the
+/// compiler that has the rule.
+#[test]
+fn every_limitation_the_docs_claim_is_still_true() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let page = fs::read_to_string(root.join("docs/limitations.md")).unwrap();
+    let headings: Vec<String> = page
+        .lines()
+        .filter_map(|l| l.strip_prefix("### ").map(|h| h.trim().to_string()))
+        .collect();
+    assert!(
+        headings.len() >= 15,
+        "only {} headings found in docs/limitations.md — the page changed shape and this gate is \
+         reading it wrongly, which would pass while guarding nothing",
+        headings.len()
+    );
+
+    let dir = root.join("tests/limitations");
+    let mut claimed: Vec<String> = Vec::new();
+    let mut problems: Vec<String> = Vec::new();
+    let mut by_inspection: Vec<String> = Vec::new();
+    let mut checked = 0;
+    let scratch = scratch_dir("limitations");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let mut probes: Vec<PathBuf> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            matches!(p.extension().and_then(|e| e.to_str()), Some("bx") | Some("note"))
+        })
+        .collect();
+    probes.sort();
+
+    for probe in &probes {
+        let name = probe.file_name().unwrap().to_string_lossy().into_owned();
+        let text = fs::read_to_string(probe).unwrap();
+        let field = |key: &str| -> Option<String> {
+            text.lines()
+                .find_map(|l| l.trim_start().strip_prefix("// ")?.strip_prefix(key)?.strip_prefix(":"))
+                .map(|v| v.trim().to_string())
+        };
+        let (Some(claim), Some(holds)) = (field("CLAIM"), field("HOLDS")) else {
+            problems.push(format!("{}: needs a `// CLAIM:` and a `// HOLDS:` line", name));
+            continue;
+        };
+        if !text.contains("// WHY:") {
+            problems.push(format!(
+                "{}: needs a `// WHY:` line saying what going stale would mean. A probe without \
+                 one is a rule nobody can judge when it fires",
+                name
+            ));
+        }
+        if !headings.iter().any(|h| *h == claim) {
+            problems.push(format!(
+                "{}: claims `{}`, which is not a heading in docs/limitations.md. Either the \
+                 heading was renamed and this probe is orphaned, or the claim is a typo — and an \
+                 orphaned probe guards nothing while looking like it does",
+                name, claim
+            ));
+            continue;
+        }
+        claimed.push(claim.clone());
+
+        match holds.as_str() {
+            "by-inspection" => {
+                if !text.contains("// WHAT-WOULD-CHECK-IT:") {
+                    problems.push(format!(
+                        "{}: `by-inspection` must say WHAT-WOULD-CHECK-IT. The escape hatch is \
+                         allowed to cost an argument and not allowed to cost nothing",
+                        name
+                    ));
+                }
+                by_inspection.push(claim);
+            }
+            "absent" => {
+                let Some(terms) = field("TERMS") else {
+                    problems.push(format!("{}: `absent` needs a `// TERMS:` list", name));
+                    continue;
+                };
+                let mut found = Vec::new();
+                for entry in fs::read_dir(root.join("lib")).unwrap() {
+                    let f = entry.unwrap().path();
+                    if f.extension().and_then(|e| e.to_str()) != Some("bx") {
+                        continue;
+                    }
+                    let body = fs::read_to_string(&f).unwrap().to_lowercase();
+                    for term in terms.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()) {
+                        // A declaration, not a mention: `lib/` prose discusses what is absent and
+                        // saying so must not trip the guard that says it is absent.
+                        if body.lines().any(|l| {
+                            let l = l.trim_start();
+                            !l.starts_with("//") && l.contains(term)
+                        }) {
+                            found.push(format!("{} in {}", term, f.file_name().unwrap().to_string_lossy()));
+                        }
+                    }
+                }
+                if !found.is_empty() {
+                    problems.push(format!(
+                        "{}: the page claims `{}` and the library now mentions {}. Either it \
+                         arrived and the page is stale, or something took a name the page reserves",
+                        name, claim, found.join(", ")
+                    ));
+                }
+                checked += 1;
+            }
+            "refused" | "accepted" => {
+                let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+                    .arg("check")
+                    .arg(probe)
+                    .env("BURXT_LIB", root.join("lib"))
+                    .current_dir(&scratch)
+                    .output()
+                    .expect("burxt check");
+                let refused = !out.status.success();
+                let said = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                if holds == "refused" && !refused {
+                    problems.push(format!(
+                        "{}: the page claims `{}` and this program COMPILES. Either the rule was \
+                         relaxed and the page is stale, or the probe stopped exercising it",
+                        name, claim
+                    ));
+                }
+                // WHY it was refused, not just THAT it was — the hole this closes was found
+                // while writing these. The float probe was refused with `unknown variable:
+                // ratio`, a knock-on from the real refusal, and a probe that had merely been
+                // MISTYPED would have looked exactly the same and guarded nothing. Matched
+                // anywhere in the output, because the first error is not always the reader's:
+                // `unknown type Float` was the second of two here.
+                if holds == "refused" {
+                    match field("REFUSED-BECAUSE") {
+                        None => problems.push(format!(
+                            "{}: a `refused` probe must say `// REFUSED-BECAUSE:` — otherwise a \
+                             typo refuses it just as convincingly as the rule does",
+                            name
+                        )),
+                        Some(because) if refused && !said.contains(&because) => {
+                            problems.push(format!(
+                                "{}: refused, but not for the stated reason. Expected to see \
+                                 `{}` and got:\n{}",
+                                name, because, said
+                            ))
+                        }
+                        Some(_) => {}
+                    }
+                }
+                if holds == "accepted" && refused {
+                    problems.push(format!(
+                        "{}: the page describes `{}` and this program is now REFUSED, so \
+                         something that worked stopped working:\n{}",
+                        name, claim, said
+                    ));
+                }
+                checked += 1;
+            }
+            other => problems.push(format!(
+                "{}: unknown `HOLDS: {}` — expected refused, accepted, absent or by-inspection",
+                name, other
+            )),
+        }
+    }
+
+    for heading in &headings {
+        if !claimed.iter().any(|c| c == heading) {
+            problems.push(format!(
+                "docs/limitations.md publishes `{}` and nothing in tests/limitations/ guards it. \
+                 A limitation with no probe is the shape that went stale four times on 2026-08-18",
+                heading
+            ));
+        }
+    }
+
+    eprintln!(
+        "{} limitation claims, {} guarded by a running probe, {} by inspection: {}",
+        headings.len(),
+        checked,
+        by_inspection.len(),
+        by_inspection.join("; ")
+    );
+    assert!(problems.is_empty(), "\n{}", problems.join("\n\n"));
+}
+
 /// The region GROWS, in both compilers, and a value made in the first chunk stays valid.
 ///
 /// **Why this test exists in this shape, and why the memory cap is the whole of it.** The arena
@@ -9366,6 +9597,11 @@ fn the_repository_layout_is_declared() {
         // Inside `tests/`, because that is where a helper is most tempting to misfile.
         ("tests/pass", "programs that must compile, run, and print their `.stdout`"),
         ("tests/fail", "programs that must be REFUSED, with the reason in `.stderr`"),
+        (
+            "tests/limitations",
+            "one probe per claim on `docs/limitations.md` — a program that must still be \
+             refused, or still compile, so a limitation cannot go stale unnoticed",
+        ),
         ("tests/panic", "programs that must compile and then die at run time"),
         ("tests/review", "`old.bx`/`new.bx`/`.expect` triples for `burxt review`"),
         (

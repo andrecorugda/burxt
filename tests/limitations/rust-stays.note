@@ -1,0 +1,7 @@
+// CLAIM: Rust is not going away
+// HOLDS: by-inspection
+// WHY: a statement about how the project is built, not about the language. Stage-0 is the
+//      trust anchor and one half of the differential.
+// WHAT-WOULD-CHECK-IT: `every_rust_module_has_a_burxt_counterpart_or_a_reason` already holds
+//      the relationship between the two compilers, and the fixpoint test holds that both
+//      still agree. Between them the claim is guarded; it just is not guarded from here.

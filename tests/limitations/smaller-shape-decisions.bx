@@ -1,0 +1,9 @@
+// CLAIM: Smaller shape decisions
+// HOLDS: refused
+// REFUSED-BECAUSE: unexpected character: '%'
+// WHY: stands for the group. `%` is the percent literal, never modulo — the one most likely to
+//      be added by somebody who missed the reason.
+region main {
+    let left: Int = 7 % 2;
+    print("{left}");
+}

@@ -1,0 +1,11 @@
+// CLAIM: No package registry, and no transitive resolution
+// HOLDS: by-inspection
+// WHY: the absence of a REGISTRY is the absence of a service, which no compile probe can
+//      observe. Flat resolution could be probed, but only by fetching over the network, and a
+//      gate that needs the network fails for reasons that are not about the claim.
+// WHAT-WOULD-CHECK-IT: a fixture package whose own manifest names a dependency, asserting the
+//      consumer is told to declare it. Worth doing when transitive resolution is scheduled —
+//      the test and the fix arrive together.
+// NOTE: this heading said "no dependency management" until 2026-08-18 and was wrong three ways
+//      over — manifest, lockfile and `public` all ship. That is the reason this whole gate
+//      exists, and it was found by hand rather than by any test.

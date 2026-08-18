@@ -1,0 +1,7 @@
+// CLAIM: No inheritance
+// HOLDS: refused
+// REFUSED-BECAUSE: expected `{`, found `extends`
+// WHY: dropped at v0.0.46 and recorded as final. A subclass compiling would reverse it.
+class Account { balance: Int }
+class Savings extends Account { rate: Int }
+region main { print(1); }

@@ -1,0 +1,6 @@
+// CLAIM: A secret cannot be zeroed
+// HOLDS: absent
+// TERMS: zeroise, zeroize, wipe_secret
+// WHY: a String lives until its region closes and nothing overwrites region memory. If a
+//      wipe primitive lands, this limitation is gone and the security note above it changes.
+

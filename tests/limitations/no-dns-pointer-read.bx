@@ -1,0 +1,12 @@
+// CLAIM: TCP, yes. TLS by binding. No HTTP, no DNS
+// HOLDS: refused
+// REFUSED-BECAUSE: unknown function: c_pointer_at
+// WHY: DNS is blocked by exactly one thing — there is no way to read a POINTER back out of C
+//      memory, so the `addrinfo` chain cannot be walked. `getaddrinfo` itself already returns 0
+//      from a Burxt program. When this compiles, DNS is reachable and the bullet is stale.
+external function calloc(count: Int, size: Int) -> CPointer;
+region main {
+    let out: CPointer = calloc(1, 8);
+    let first: CPointer = c_pointer_at(out, 0);
+    print("{c_is_null(first)}");
+}
