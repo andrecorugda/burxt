@@ -2,6 +2,7 @@
 //!
 //! Usage:
 //!   burxt lsp                              language server over stdio
+//!   burxt where   <import>                 where a package import lands on disk
 //!   burxt check <file.bx>                  parse and typecheck only, no codegen
 //!   burxt check -                          ... reading the program from stdin
 //!   burxt build <file.bx> [link arguments...]   compile to a native executable
@@ -89,6 +90,109 @@ fn compile_main() {
         }
     }
 
+    // `burxt where <import>` — where a package import lands on this machine.
+    //
+    // **Asked for by star-burxt, and the reason is the point.** star reads `.sbmx` files itself, so
+    // this compiler never sees them; to publish a reusable component library it has to turn a package
+    // name into a directory, which is derived from `burxt.package`, `burxt.lock` and a cache-key rule
+    // that is deliberately NOT a contract — `cache_key` is documented as derived rather than stored,
+    // readable only so a human browsing the directory can tell what they are looking at. A second
+    // implementation of that rule, on the path every user's build takes, is the "two implementations
+    // of one thing" failure this repository keeps finding; and the one that already existed could not
+    // see a **path** dependency at all, because nothing about one goes near `.burxt/packages`.
+    //
+    // So the layout stays private and the ANSWER becomes public. It takes the string a `use` takes,
+    // rather than a package name and a path to join, so a caller passes through what the user wrote
+    // instead of splitting it and rebuilding it — and a bare name is the same question with no rest.
+    // Both go through `Manifest::dependency_root`, which every build already depends on: an entry
+    // point that could drift from the resolver would recreate the problem one level down.
+    if arguments.len() == 3 && arguments[1] == "where" {
+        let import = &arguments[2];
+        let quit = |message: String| -> ! {
+            eprintln!("burxt where: {}", message);
+            std::process::exit(1);
+        };
+        let package = match manifest::Manifest::discover(Path::new(".")) {
+            Err(e) => quit(e),
+            Ok(None) => quit(format!(
+                "no `{}` here or in any directory above. A package import is resolved against the \
+                 manifest that declares the dependency; without one there is nothing to resolve.",
+                manifest::MANIFEST_NAME
+            )),
+            Ok(Some(package)) => package,
+        };
+        let first = import.split('/').next().unwrap_or(import);
+        let Some(found) = (match import.split_once('/') {
+            Some(_) => package.resolve_package_import(import),
+            None => package.dependency_root(import),
+        }) else {
+            // Naming the manifest that was consulted, because the usual cause is the right question
+            // asked in the wrong directory, and a bare "no such dependency" cannot tell you that.
+            quit(format!(
+                "`{}` is not a dependency of `{}`, declared at {}. `{}` lists: {}",
+                first,
+                package.name,
+                package.root.join(manifest::MANIFEST_NAME).display(),
+                manifest::MANIFEST_NAME,
+                if package.dependencies.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    package.dependencies.keys().cloned().collect::<Vec<_>>().join(", ")
+                }
+            ))
+        };
+        // **Three different absences, three different answers**, because collapsing them is the
+        // failure this command was written next to: `burxt lsp` reported an unresolvable import as a
+        // syntax error for months because one return value carried two meanings. A dependency that
+        // was never fetched, a vendored directory that is not on this machine, and a file that is
+        // simply not in the package are three separate mistakes with three separate remedies, and
+        // "Run `burxt fetch`" is actively wrong for two of them.
+        let root = package.dependency_root(first).expect("the lookup above found it");
+        if !root.exists() {
+            match &package.dependencies[first].source {
+                manifest::Source::Git { .. } => quit(format!(
+                    "`{}` needs the dependency `{}`, and it has not been fetched. Run `burxt fetch`.",
+                    import, first
+                )),
+                // `burxt fetch` answers "nothing to fetch — every dependency is a local directory",
+                // so sending them there would be a dead end. The directory is the whole problem.
+                manifest::Source::Path(dir) => quit(format!(
+                    "`{}` is a local directory dependency at `{}`, and {} does not exist. Nothing \
+                     can fetch it — either the path in `{}` is wrong or the checkout is missing.",
+                    first,
+                    dir,
+                    // The manifest's directory resolves; the dependency's does not, so canonicalise
+                    // the part that exists rather than printing `./../vendor/x` at somebody.
+                    std::fs::canonicalize(&package.root)
+                        .unwrap_or_else(|_| package.root.clone())
+                        .join(dir)
+                        .display(),
+                    manifest::MANIFEST_NAME
+                )),
+            }
+        }
+        if !found.exists() {
+            // "present" rather than "fetched": a path dependency is never fetched, and telling
+            // someone their vendored directory has been fetched is a small lie that makes them
+            // doubt the rest of the sentence.
+            let rest = import.split_once('/').map(|(_, rest)| rest).unwrap_or(import);
+            quit(format!(
+                "`{}` is present and `{}` is not in it. Looked at {}.",
+                first,
+                rest,
+                std::fs::canonicalize(&root).unwrap_or(root).join(rest).display()
+            ));
+        }
+        // Absolute, because the caller is a tool in some other directory. One line, nothing else on
+        // stdout: anything a human would like to read here belongs on stderr, or it lands in the
+        // variable somebody assigned this to.
+        println!(
+            "{}",
+            std::fs::canonicalize(&found).unwrap_or(found).display()
+        );
+        return;
+    }
+
     if arguments.len() == 2 && arguments[1] == "lsp" {
         if let Err(e) = lsp::serve() {
             eprintln!("burxt lsp: {}", e);
@@ -120,6 +224,7 @@ fn compile_main() {
         eprintln!("                -                        ... reading the program from stdin");
         eprintln!("  burxt lsp                                language server over stdio");
         eprintln!("  burxt fetch                              get the dependencies, write burxt.lock");
+        eprintln!("  burxt where   <import>                   where a package import lands on disk");
         eprintln!("  burxt build   <file.bx> [link args...]   compile to a native executable");
         eprintln!("                <file.bx> --target <triple> ... an object for another machine");
         eprintln!("  burxt run     <file.bx> [link args...]   compile then run");

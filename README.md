@@ -254,6 +254,7 @@ cargo build
 Commands:
 ```
 burxt check   <file.bx>                  parse and typecheck only — no LLVM, no linker
+burxt where   <import>                   where a package import lands on disk
 burxt build   <file.bx> [link args...]   compile to a native executable
 burxt run     <file.bx> [link args...]   compile, then run
 burxt emit-ir <file.bx>                  print the generated LLVM IR

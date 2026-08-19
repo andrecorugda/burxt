@@ -2437,7 +2437,7 @@ fn burxt_compiles_burxt_and_reaches_the_fixpoint() {
 #[test]
 fn the_repository_root_holds_only_what_belongs_there() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    const ALLOWED: [&str; 16] = [
+    const ALLOWED: [&str; 17] = [
         // build system and metadata
         "Cargo.toml",
         "Cargo.lock",
@@ -2452,6 +2452,17 @@ fn the_repository_root_holds_only_what_belongs_there() {
         // git ignoring it stops it being COMMITTED, and this stops the suite calling it a stray. The
         // first version of this had only the gitignore, and this test went red immediately.
         ".claude",
+        // Guidance for Claude Code, which reads `./CLAUDE.md` and nowhere else — so unlike every
+        // other document here, its location is not a choice this repository gets to make. Committed
+        // rather than gitignored on purpose: it says which of the two compilers is the product and
+        // which repository invariants fail the suite, and that is worth reviewing in a diff.
+        //
+        // **This test is the reason it is listed here at all.** The layout is declared in TWO places
+        // — `the_repository_layout_is_declared` for directories and this list for root files — and
+        // adding the file, running the first, and calling the layout checked is precisely the
+        // "whitelist of places to check is not a check" failure `CONTRIBUTING.md` §5 records. It
+        // happened while adding this line.
+        "CLAUDE.md",
         // the documents a reader looks for first
         "README.md",
         "DESIGN.md",
@@ -5924,6 +5935,112 @@ fn the_documented_install_command_names_the_file_pack_py_writes() {
             );
         }
     }
+}
+
+/// **`burxt where` must name the file the build actually reads.**
+///
+/// star-burxt reads `.sbmx` files itself, so this compiler never sees them; to publish a reusable
+/// component library it has to turn a package name into a directory. That answer is derived from the
+/// manifest and a cache-key rule which is deliberately NOT a contract, so re-deriving it elsewhere
+/// encodes this compiler's layout as somebody else's promise. The re-derivation that already existed
+/// scanned `.burxt/packages` — and **a path dependency puts nothing there**, which this asserts.
+///
+/// The load-bearing half is the round trip: the file is rewritten THROUGH the path the command
+/// reported, and the program's output must change. A test that only compared the answer to another
+/// computation of the answer would agree with a wrong one.
+#[test]
+fn burxt_where_names_the_file_the_build_reads() {
+    let scratch = std::env::temp_dir().join(format!("burxt-where-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let app = scratch.join("app");
+    let vendored = scratch.join("vendor/mylib");
+    fs::create_dir_all(&app).unwrap();
+    fs::create_dir_all(&vendored).unwrap();
+    fs::write(vendored.join("burxt.package"), "name mylib\nversion 1.0.0\n").unwrap();
+    fs::write(
+        vendored.join("money.bx"),
+        "public pure function double(n: Int) -> Int {\n    return n * 2;\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        app.join("burxt.package"),
+        "name app\nversion 0.1.0\ndependency mylib ../vendor/mylib\n",
+    )
+    .unwrap();
+    fs::write(
+        app.join("main.bx"),
+        "use \"mylib/money.bx\";\n\nprint(to_string(double(21)));\n",
+    )
+    .unwrap();
+
+    let burxt = |args: &[&str]| -> (bool, String, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .args(args)
+            .current_dir(&app)
+            .output()
+            .expect("burxt");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        )
+    };
+
+    let (ok, reported, err) = burxt(&["where", "mylib/money.bx"]);
+    assert!(ok, "burxt where failed: {}", err);
+    assert!(Path::new(&reported).is_absolute(), "not absolute: {}", reported);
+    assert!(Path::new(&reported).exists(), "names nothing on disk: {}", reported);
+
+    // Nothing a caller has to parse: one line, and stdout carries only the answer.
+    assert_eq!(reported.lines().count(), 1, "more than one line: {:?}", reported);
+
+    // The bare name is the same question with no rest.
+    let (ok, root, _) = burxt(&["where", "mylib"]);
+    assert!(ok);
+    assert_eq!(Path::new(&reported).parent().unwrap(), Path::new(&root));
+
+    // A path dependency lands nowhere near the fetch cache — the reason a scan of it cannot answer.
+    assert!(!app.join(".burxt").exists(), "a path dependency created a fetch cache");
+    assert!(!reported.contains(".burxt"), "resolved through the cache: {}", reported);
+
+    // **The round trip.** Rewrite the dependency through the reported path; the program must change.
+    let (ok, said, err) = burxt(&["run", "main.bx"]);
+    assert!(ok, "the program did not run: {}", err);
+    assert_eq!(said, "42");
+    fs::write(&reported, "public pure function double(n: Int) -> Int {\n    return n * 3;\n}\n")
+        .unwrap();
+    let (ok, said, err) = burxt(&["run", "main.bx"]);
+    assert!(ok, "the program did not run after the rewrite: {}", err);
+    assert_eq!(said, "63", "the build did not read the file `burxt where` named");
+
+    // **Three absences, three answers.** Collapsing them is how a resolution failure gets reported
+    // as something else entirely — the defect this command was written beside.
+    let (ok, _, undeclared) = burxt(&["where", "nosuch"]);
+    assert!(!ok);
+    assert!(undeclared.contains("not a dependency"), "{}", undeclared);
+    assert!(undeclared.contains("mylib"), "does not say what IS declared: {}", undeclared);
+
+    let (ok, _, missing_file) = burxt(&["where", "mylib/absent.bx"]);
+    assert!(!ok);
+    assert!(missing_file.contains("is present"), "{}", missing_file);
+    assert!(
+        !missing_file.contains("burxt fetch"),
+        "sent the reader to fetch a dependency that is already here: {}",
+        missing_file
+    );
+
+    fs::rename(&vendored, scratch.join("vendor/moved")).unwrap();
+    let (ok, _, missing_dir) = burxt(&["where", "mylib/money.bx"]);
+    assert!(!ok);
+    assert!(
+        missing_dir.contains("does not exist") && !missing_dir.contains("burxt fetch"),
+        "a vendored directory that is absent cannot be fetched, and the advice must not say so: {}",
+        missing_dir
+    );
+    assert_ne!(undeclared, missing_file);
+    assert_ne!(missing_file, missing_dir);
+
+    let _ = fs::remove_dir_all(&scratch);
 }
 
 /// **The manifest grammars must know every word the manifest parser knows.**

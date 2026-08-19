@@ -98,8 +98,14 @@ These fail `cargo test` and surprise people:
 
 - **`.gitignore` is a whitelist.** A new `.bx`/`.md`/`.rs`/`.json`/`.sh`/`.py`/`.css`/`.js`/`.html`/
   `.yml` file must be `git add`ed or `every_source_and_document_is_in_version_control` fails.
-- **The directory layout is declared** in `the_repository_layout_is_declared`. Read that list before
-  inventing a sibling directory. A `git worktree` must live *outside* the repository.
+- **The layout is declared in two places.** `the_repository_layout_is_declared` holds directories;
+  `the_repository_root_holds_only_what_belongs_there` holds an allowlist of root *files*. Adding a
+  root file and checking only the first is the "whitelist of places to check is not a check" failure
+  below — it happened while this file was being added. A `git worktree` must live *outside* the
+  repository.
+- **`tests/runner.bx` re-implements the invariants, so several rules live in two runners.** Change one
+  and `the_suite_also_runs_on_burxt` fails with `not ok invariant/…`. That is the parity discipline
+  working on the suite rather than the compiler; grep `runner.bx` for the rule you just edited.
 - **No stray binary in the repository root** — `burxt run` writes the executable into the working
   directory, so run one-off programs from `/tmp`.
 - **The packaged `.vsix` must match the grammar in the tree**, and every documented install command

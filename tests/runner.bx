@@ -442,6 +442,12 @@ function allowed_at_root(name: String) -> Bool {
     // discipline working on the SUITE rather than on the compiler**, and it is the first time the
     // Burxt runner has disagreed with the Rust one about anything.
     if name == ".claude" { return true; }
+    // **The second time, and the same catch.** `CLAUDE.md` was added to `runner.rs`'s list, that test
+    // went green, and this runner printed `not ok invariant/... : CLAUDE.md`. The note above says the
+    // parity discipline works on the suite rather than only on the compiler; this is the evidence
+    // that it keeps working, and that knowing the rule does not exempt you from it — the same
+    // omission, in the same list, by someone who had just read the paragraph describing it.
+    if name == "CLAUDE.md" { return true; }
     if name == "target" { return true; }
     if name == "README.md" { return true; }
     if name == "DESIGN.md" { return true; }

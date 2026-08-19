@@ -267,6 +267,13 @@
  },
  {
   "kind": "command",
+  "name": "burxt where",
+  "text": "<import>",
+  "url": "/reference/cli.html",
+  "where": "where a package import lands on disk"
+ },
+ {
+  "kind": "command",
   "name": "burxt build",
   "text": "<file.bx> [link args...]",
   "url": "/reference/cli.html",

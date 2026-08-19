@@ -211,16 +211,28 @@ impl Manifest {
     /// relative to the MANIFEST's directory rather than to the importing file.
     pub fn resolve_package_import(&self, import: &str) -> Option<PathBuf> {
         let (first, rest) = import.split_once('/')?;
-        let dependency = self.dependencies.get(first)?;
-        match &dependency.source {
-            Source::Path(dir) => Some(self.root.join(dir).join(rest)),
+        Some(self.dependency_root(first)?.join(rest))
+    }
+
+    /// The directory a dependency's files live in, or `None` if no dependency has that name.
+    ///
+    /// **Split out of `resolve_package_import` rather than written beside it**, because `burxt
+    /// where` needs the same answer for a bare package name and a second derivation is the failure
+    /// this exists to prevent. star-burxt asked for the lookup precisely so that the layout stays an
+    /// implementation detail here instead of becoming a contract it re-derives — and its own
+    /// re-derivation, a scan of `.burxt/packages`, could not see a **path** dependency at all, which
+    /// puts nothing in that directory. One function, both callers, both source kinds.
+    pub fn dependency_root(&self, name: &str) -> Option<PathBuf> {
+        let dependency = self.dependencies.get(name)?;
+        Some(match &dependency.source {
+            Source::Path(dir) => self.root.join(dir),
             // A git dependency is built from the cache the fetch populated. The cache path is
             // derived from the URL and tag rather than stored, so two manifests naming the same
             // tag share one copy and neither has to know the other exists.
             Source::Git { url, tag } => {
-                Some(self.root.join(".burxt").join("packages").join(cache_key(url, tag)).join(rest))
+                self.root.join(".burxt").join("packages").join(cache_key(url, tag))
             }
-        }
+        })
     }
 }
 
@@ -417,4 +429,47 @@ pub fn fetch(package: &Manifest) -> Result<String, String> {
 
     write_lock(&package.root, locked)?;
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **`resolve_package_import` must BE `dependency_root` plus the rest, not a second derivation.**
+    ///
+    /// The layout of a fetched package is deliberately not a contract — `cache_key` is derived rather
+    /// than stored — so the moment two places compute it, one of them is wrong on the day it changes.
+    /// This pins them to the same function, and pins the property that made the lookup necessary: a
+    /// **path** dependency puts nothing under `.burxt/packages`, so a directory scan cannot find one.
+    #[test]
+    fn a_dependency_root_is_one_derivation_for_both_source_kinds() {
+        let text = "name app\n\
+                    version 1.0.0\n\
+                    dependency vendored ../vendor/mylib\n\
+                    dependency remote https://github.com/x/y burxt-1.2.3\n";
+        let m = Manifest::parse(text, Path::new("/proj"), "burxt.package").unwrap();
+
+        assert_eq!(m.dependency_root("vendored").unwrap(), Path::new("/proj/../vendor/mylib"));
+        assert_eq!(
+            m.dependency_root("remote").unwrap(),
+            Path::new("/proj/.burxt/packages")
+                .join(cache_key("https://github.com/x/y", "burxt-1.2.3"))
+        );
+        assert!(m.dependency_root("absent").is_none(), "an undeclared name resolves to nothing");
+
+        for name in ["vendored", "remote"] {
+            assert_eq!(
+                m.resolve_package_import(&format!("{}/a/b.bx", name)).unwrap(),
+                m.dependency_root(name).unwrap().join("a/b.bx"),
+                "`{}` resolved by a different route than dependency_root",
+                name
+            );
+        }
+
+        assert!(
+            !m.dependency_root("vendored").unwrap().starts_with("/proj/.burxt"),
+            "a path dependency must not be looked for in the fetch cache — nothing puts it there, \
+             which is exactly why a scan of that directory cannot answer this question"
+        );
+    }
 }

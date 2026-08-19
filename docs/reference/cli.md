@@ -16,6 +16,7 @@ Read out of the usage block in `src/rust-compiler/main.rs`, so this cannot list 
 | `burxt check` | `<file.bx>` | parse and typecheck only |
 | `burxt lsp` | — | language server over stdio |
 | `burxt fetch` | — | get the dependencies, write burxt.lock |
+| `burxt where` | `<import>` | where a package import lands on disk |
 | `burxt build` | `<file.bx> [link args...]` | compile to a native executable |
 | `burxt run` | `<file.bx> [link args...]` | compile then run |
 | `burxt emit-ir` | `<file.bx> [--target ...]` | print LLVM IR |
