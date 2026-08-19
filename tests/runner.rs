@@ -5844,6 +5844,195 @@ fn the_packaged_extension_matches_the_grammar_in_the_repository() {
     }
 }
 
+/// **Every documented install command must name the file `pack.py` actually writes.**
+///
+/// The filename used to carry the version, which put the number in five places outside
+/// `package.json`. The predicted drift had already happened silently: at version 0.1.4 both
+/// `README.md` and `editors/README.md` said `burxt-0.1.3.vsix`, so the command in the front door
+/// named a file the packer does not write, and nothing failed — a broken install command is invisible
+/// to a compiler test suite. BMX measured the same shape from the other end: thirty commits to the
+/// package with the version never moving off 0.1.0.
+///
+/// **The file list is written out rather than walked.** `docs/1.0/` is frozen by its own notice and
+/// `docs/log/` records what was true on the day, so both keep the old name correctly; a walk would
+/// have to special-case them, and a special case is where the next stale file hides. If a new
+/// document gains an install command, it is added here — which is the point, because that is also
+/// when someone last read it.
+#[test]
+fn the_documented_install_command_names_the_file_pack_py_writes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // What the packer writes, asked of the packer rather than assumed.
+    //
+    // **Packed into a copy, not into the checkout.** `pack.py` writes beside itself, so running it
+    // here would rewrite `editors/vscode/burxt.vsix` while
+    // `the_packaged_extension_matches_the_grammar_in_the_repository` is reading it — the suite runs
+    // tests in parallel, and a reader that opens a half-written ZIP fails somewhere else entirely.
+    // It also means this test does not leave a build artefact in the working tree.
+    let scratch = std::env::temp_dir().join(format!("burxt-vsix-name-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).unwrap();
+    assert!(Command::new("cp")
+        .arg("-r")
+        .arg(root.join("editors/vscode"))
+        .arg(scratch.join("vscode"))
+        .status()
+        .expect("cp")
+        .success());
+    let packed = Command::new("python3")
+        .arg(scratch.join("vscode/pack.py"))
+        .output()
+        .expect("python3");
+    assert!(
+        packed.status.success(),
+        "pack.py failed: {}",
+        String::from_utf8_lossy(&packed.stderr)
+    );
+    let written = scratch.join("vscode/burxt.vsix");
+    let exists = written.exists();
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        exists,
+        "pack.py wrote no burxt.vsix — if the name changed on purpose, change it here and in \
+         every file this test reads"
+    );
+
+    for doc in [
+        "README.md",
+        "editors/README.md",
+        "editors/vscode/pack.py",
+        "docs/guide/01-getting-started.md",
+        "docs/install/index.md",
+        ".devcontainer/setup.sh",
+    ] {
+        let text = fs::read_to_string(root.join(doc)).unwrap();
+        // Every `.vsix` this file NAMES. Prose about the format writes a bare `.vsix` and the
+        // `.gitignore` rule is `*.vsix`; neither is a filename, and a test that failed on them would
+        // be teaching people to stop writing the word. A token naming the package always contains
+        // `burxt` — which is also what catches a `burxt-*.vsix` glob, the shape that stopped matching
+        // the moment the version left the name.
+        for token in text.split(|c: char| c.is_whitespace() || c == '`' || c == '"') {
+            if !token.ends_with(".vsix") || !token.contains("burxt") {
+                continue;
+            }
+            assert!(
+                token.ends_with("burxt.vsix"),
+                "{} names `{}`, which pack.py does not write. A version in the filename is what \
+                 this test exists to keep out: it lives in package.json, where VS Code reads it.",
+                doc,
+                token
+            );
+        }
+    }
+}
+
+/// **The manifest grammars must know every word the manifest parser knows.**
+///
+/// `burxt.package` and `burxt.lock` had no highlighting at all — both opened as plain text — while
+/// every Burxt package on disk has them. The risk in adding a grammar is that it drifts from the
+/// parser and starts colouring a vocabulary the compiler does not have, which is worse than no
+/// colour: a reader trusts it.
+///
+/// **So the vocabulary is read out of the compiler's own refusals rather than restated here.** Both
+/// messages name the whole grammar on purpose — *"A manifest has `name`, `version` and `dependency`
+/// — and that is the whole grammar"* and *"a lockfile line is `package <name> <url> <tag>
+/// <commit>`"*. They are user-facing, so they cannot go quietly stale; anyone adding a key has to
+/// edit them, and this test then makes them edit the grammar too.
+///
+/// It also checks the second list nobody thinks about: a grammar registered in `package.json` and
+/// not listed in `pack.py` is a grammar that works in the checkout and is missing from the package.
+#[test]
+fn the_manifest_grammars_cover_the_whole_vocabulary() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = root.join("editors/vscode");
+
+    /// The words between backticks, minus Rust's own `{}` placeholders.
+    fn backticked(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = text;
+        while let Some(open) = rest.find('`') {
+            rest = &rest[open + 1..];
+            let Some(close) = rest.find('`') else { break };
+            let word = rest[..close].trim().to_string();
+            rest = &rest[close + 1..];
+            if word != "{}" && !word.is_empty() {
+                out.push(word);
+            }
+        }
+        out
+    }
+
+    fn between<'a>(text: &'a str, from: &str, to: &str) -> &'a str {
+        let start = text.find(from).unwrap_or_else(|| panic!("`{}` is no longer in manifest.rs — \
+            if the refusal was reworded, this test reads the new wording", from));
+        let tail = &text[start..];
+        let end = tail.find(to).unwrap_or_else(|| panic!("`{}` no longer follows `{}`", to, from));
+        &tail[..end]
+    }
+
+    let manifest_rs = fs::read_to_string(root.join("src/rust-compiler/manifest.rs")).unwrap();
+
+    // `name`, `version`, `dependency` — the manifest's whole vocabulary, from the message that says so.
+    let keys = backticked(between(&manifest_rs, "A manifest has", "whole grammar"));
+    assert_eq!(keys.len(), 3, "expected three manifest keys, read {:?}", keys);
+    let package_grammar =
+        fs::read_to_string(dir.join("syntaxes/burxt-package.tmLanguage.json")).unwrap();
+    for key in &keys {
+        assert!(
+            package_grammar.contains(&format!("({})", key)),
+            "the manifest grammar does not match `{}`, which the parser accepts — a file the \
+             compiler reads and the editor does not colour teaches the reader that it is not \
+             a real key",
+            key
+        );
+    }
+
+    // The lockfile's one shape, from the message that gives it.
+    let shape = backticked(between(&manifest_rs, "a lockfile line is", ". This file is"));
+    let key = shape
+        .first()
+        .and_then(|s| s.split_whitespace().next())
+        .expect("the lockfile refusal no longer shows the line's shape");
+    assert_eq!(key, "package", "read `{}` as the lockfile key", key);
+    let lock_grammar =
+        fs::read_to_string(dir.join("syntaxes/burxt-lock.tmLanguage.json")).unwrap();
+    assert!(
+        lock_grammar.contains(&format!("({})", key)),
+        "the lockfile grammar does not match `{}`",
+        key
+    );
+    // The commit is what a person actually squints at next to the tag, so it gets a scope of its
+    // own. `write_lock` puts it last and `fetch` writes a full hash there.
+    assert!(
+        lock_grammar.contains("[0-9a-fA-F]{40}"),
+        "the lockfile grammar no longer distinguishes the 40-character commit from the tag, which \
+         is the pair a reader compares by eye when a fetch surprises them"
+    );
+
+    // Every grammar and configuration the manifest contributes must also be in the packer's list.
+    let pkg = fs::read_to_string(dir.join("package.json")).unwrap();
+    let pack = fs::read_to_string(dir.join("pack.py")).unwrap();
+    for line in pkg.lines() {
+        let line = line.trim();
+        let is_asset = (line.starts_with("\"path\":") || line.starts_with("\"configuration\":"))
+            && line.contains("./");
+        if !is_asset {
+            continue;
+        }
+        let file = line
+            .rsplit("./")
+            .next()
+            .unwrap()
+            .trim_end_matches(&[',', '"'][..]);
+        assert!(
+            pack.contains(&format!("\"{}\"", file)),
+            "package.json contributes `{}` and pack.py does not ship it — it would work in the \
+             checkout and be missing from every installed copy",
+            file
+        );
+    }
+}
+
 /// The editor must check the PROGRAM, not the file.
 ///
 /// `src/burxt-compiler/check.bx` is one of five modules `src/burxt-compiler/main.bx` assembles. Checked on

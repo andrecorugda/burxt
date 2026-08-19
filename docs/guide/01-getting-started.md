@@ -268,7 +268,7 @@ to the linker unchanged: `burxt run pay.bx cside.o -lm`. Every command is docume
 
 ```sh
 python3 editors/vscode/pack.py
-code --install-extension editors/vscode/burxt-0.1.4.vsix
+code --install-extension editors/vscode/burxt.vsix
 ```
 
 Syntax highlighting, diagnostics as you type, hover, and a ▶ button (`Ctrl+F5`). It talks to

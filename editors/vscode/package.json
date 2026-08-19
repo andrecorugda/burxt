@@ -2,7 +2,7 @@
   "name": "burxt",
   "displayName": "Burxt",
   "description": "Burxt — a contract-first imperative language. Syntax highlighting, live diagnostics and hover, from the compiler itself.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "burxt",
   "license": "MIT OR Apache-2.0",
   "repository": {
@@ -38,6 +38,28 @@
           "light": "./file-icon.png",
           "dark": "./file-icon.png"
         }
+      },
+      {
+        "//": "Matched by FILENAME, not extension. `burxt.package` and `burxt.lock` have no suffix of their own, and an `extensions: [\".package\"]` entry would both miss these files and claim every other tool's.",
+        "id": "burxt-package",
+        "aliases": [
+          "Burxt package manifest"
+        ],
+        "filenames": [
+          "burxt.package"
+        ],
+        "configuration": "./manifest-language-configuration.json"
+      },
+      {
+        "//": "Its own language rather than a second filename on the one above: the two vocabularies do not overlap, and a lockfile is written by `burxt fetch` rather than by hand.",
+        "id": "burxt-lock",
+        "aliases": [
+          "Burxt lockfile"
+        ],
+        "filenames": [
+          "burxt.lock"
+        ],
+        "configuration": "./manifest-language-configuration.json"
       }
     ],
     "grammars": [
@@ -45,12 +67,27 @@
         "language": "burxt",
         "scopeName": "source.burxt",
         "path": "./syntaxes/burxt.tmLanguage.json"
+      },
+      {
+        "language": "burxt-package",
+        "scopeName": "source.burxt-package",
+        "path": "./syntaxes/burxt-package.tmLanguage.json"
+      },
+      {
+        "language": "burxt-lock",
+        "scopeName": "source.burxt-lock",
+        "path": "./syntaxes/burxt-lock.tmLanguage.json"
       }
     ],
     "configurationDefaults": {
       "[burxt]": {
         "editor.insertSpaces": true,
         "editor.tabSize": 4
+      },
+      "[burxt-lock]": {
+        "//": "A lockfile says `Do not edit it by hand` in its own header, and `burxt fetch` rewrites it whole. Read-only is not something an extension can set, so the next best thing is to stop the editor from making silent changes to a file nobody should be editing.",
+        "files.trimTrailingWhitespace": false,
+        "files.insertFinalNewline": false
       }
     },
     "problemMatchers": [

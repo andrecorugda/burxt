@@ -288,7 +288,7 @@ highlighting, live diagnostics and hover, with no `npm install`:
 
 ```sh
 python3 editors/vscode/pack.py                            # no npm, no vsce
-code --install-extension editors/vscode/burxt-0.1.3.vsix  # then reload the window
+code --install-extension editors/vscode/burxt.vsix        # then reload the window
 ```
 
 That gives VS Code syntax highlighting, **errors as you type, and hover** — with no

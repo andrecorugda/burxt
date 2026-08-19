@@ -8,7 +8,9 @@ directory holds that half of the project.
 > A reader's first contact with Burxt is an editor, not `cargo test`, and a language that
 > compiles correctly while looking broken *is* broken.
 >
-> Three tests enforce it, and each exists because the thing it checks actually went wrong:
+> Tests enforce it, and each exists because the thing it checks actually went wrong. **The list is
+> not counted here**, because a count restated beside the thing it counts is a number that goes stale
+> in one of the two places — as this sentence did, saying *three* above a table of four:
 >
 > | Test | What it caught |
 > |---|---|
@@ -16,14 +18,20 @@ directory holds that half of the project.
 > | `editor_grammar_highlights_every_declaration_the_examples_write` | `function (self)` — shipped v0.0.95, uncoloured until v0.0.99, because **a keyword list is not a grammar** |
 > | `the_packaged_extension_matches_the_grammar_in_the_repository` | a `.vsix` built before a rename, so the editor coloured yesterday's language |
 > | `the_language_server_checks_the_program_a_file_belongs_to` | five compiler modules squiggled as broken, and `main.bx` failing on its own `use` lines |
+> | `an_unresolvable_import_is_reported_as_one` | an import that would not resolve, reported as a **syntax error on a valid line** — the server fell back to checking the raw buffer, where a `use` parses as an assignment |
+> | `the_documented_install_command_names_the_file_pack_py_writes` | the install command in `README.md` naming version 0.1.3 while `package.json` said 0.1.4 — so the front door pointed at a file the packer does not write |
+> | `the_manifest_grammars_cover_the_whole_vocabulary` | `burxt.package` and `burxt.lock` opening as plain text, and a grammar registered but not packaged |
 >
 > After touching the grammar, run `python3 vscode/pack.py` and bump the version in
-> `vscode/package.json` — an installed extension does not upgrade to the same version number.
+> `vscode/package.json` — an installed extension does not upgrade to the same version number, and
+> **the filename no longer tells you anything**: it is `burxt.vsix` at every version, deliberately, so
+> the version lives only where a tool reads it.
 
 | Piece | State | Where |
 |---|---|---|
 | TextMate grammar (highlighting) | **DONE** (v0.0.31) | `vscode/syntaxes/burxt.tmLanguage.json` |
 | Language configuration (comments, brackets, indent) | **DONE** (v0.0.31) | `vscode/language-configuration.json` |
+| `burxt.package` and `burxt.lock` highlighting | **DONE** (v1.4.0) — two languages, matched by filename | `vscode/syntaxes/burxt-package.tmLanguage.json`, `vscode/syntaxes/burxt-lock.tmLanguage.json` |
 | VS Code extension | **DONE** (v0.0.31), live diagnostics (v0.0.34) — still no build step | `vscode/` |
 | `burxt check` — front end only, for editors and CI | **DONE** (v0.0.31) | `src/rust-compiler/main.rs` |
 | Diagnostics with line/column | **DONE** (v0.0.32) | `src/rust-compiler/diag.rs`, `burxt check --json` |
@@ -41,8 +49,8 @@ directory holds that half of the project.
 Package it and install it — no npm, no `vsce`, no bundler:
 
 ```bash
-python3 editors/vscode/pack.py                                  # writes burxt-0.1.3.vsix
-code --install-extension editors/vscode/burxt-0.1.3.vsix
+python3 editors/vscode/pack.py                                  # writes burxt.vsix
+code --install-extension editors/vscode/burxt.vsix
 ```
 
 `pack.py` is a .vsix writer in the standard library: a .vsix is a ZIP holding an OPC
@@ -58,7 +66,46 @@ UI, and it is the shape every other extension has.
 On a remote — WSL, SSH, a container — the manifest declares
 `"extensionKind": ["workspace"]`, because the extension spawns the compiler and the
 language server and therefore has to run where the code is rather than on the UI
-side.
+side. **`pack.py` refuses to build a package whose manifest does not say so** rather than
+supplying a default: the wrong value loads the extension on the UI side of a remote, where
+the compiler it spawns does not exist, and a default is invisible exactly when it is wrong.
+
+## `burxt.package` and `burxt.lock`
+
+Both opened as plain text until v1.4.0, though every Burxt package on disk has them. They are
+**two languages matched by filename**, not by extension — neither file has a suffix of its own,
+and claiming `.package` would both miss these and claim someone else's.
+
+**They do not reuse `source.burxt`, and that is the point.** `manifest.rs` comments its own
+choice of comment syntax: `#` and not `//`, *because this is not Burxt source and reading it as
+though it were is how someone ends up expecting interpolation in it*. Painting a manifest with
+the Burxt grammar would teach exactly the confusion that decision exists to prevent. They are
+also two languages rather than one with two filenames, because the vocabularies do not overlap —
+`dependency` in a lockfile is refused, and one grammar for both would colour each file's mistakes
+as though they were correct.
+
+**The readability that was actually asked for is in the lockfile.** `write_lock` emits
+
+```
+package  bmx  https://github.com/andrecorugda/bmx  burxt-0.12.1  d9940651a8207986f2a5a3b7a9673e3245bf78ca
+```
+
+and the tag and the 40-character commit sit adjacent, reading as one blur. Those are the two
+fields a person compares by eye when a fetch surprises them, so the commit gets a scope of its own
+— but only when it really is 40 hex characters. A looser rule still colours a five-field line the
+parser accepts, because the parser counts words and never checks the shape of the fifth: **a
+grammar stricter than its parser reports a refusal that does not exist.**
+
+**Both grammars do mark an unknown key invalid**, which colouring is normally the wrong tool for.
+The exception holds here because the vocabulary is closed and the compiler says so in the refusal
+itself — *"A manifest has `name`, `version` and `dependency` — and that is the whole grammar"*.
+There is no list a grammar could be wrong about. `the_manifest_grammars_cover_the_whole_vocabulary`
+reads that sentence out of `manifest.rs` and fails if a grammar does not know a word it names.
+
+**No language server and no highlighting outside VS Code.** `helix/` and `nvim/` attach `burxt lsp`
+and have no grammar at all — highlighting there needs tree-sitter, which does not exist yet — so
+there is nothing for them to gain here. A manifest has no server because it has nothing a server
+would add: every refusal already names the line.
 
 Then reload the window. A `.bx` file should light up: money literals as numbers,
 `Decimal<2, RoundHalfEven>` with the scale and the rounding contract distinct,

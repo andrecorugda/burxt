@@ -159,5 +159,5 @@ syntax highlighting and live diagnostics from the compiler itself, not a reimple
 rules:
 
 ```sh
-code --install-extension burxt-*.vsix
+code --install-extension burxt.vsix
 ```

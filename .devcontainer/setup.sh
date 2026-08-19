@@ -73,8 +73,10 @@ fi
 # the standard library, so building it in the container costs nothing and needs no network.
 say "Building and installing the editor extension"
 python3 editors/vscode/pack.py
-VSIX="$(ls editors/vscode/burxt-*.vsix 2>/dev/null | head -1 || true)"
-if [ -z "$VSIX" ]; then
+# Named, not globbed: `pack.py` writes exactly one path and a glob that matched a leftover from
+# an older naming would install yesterday's grammar and report success.
+VSIX="editors/vscode/burxt.vsix"
+if [ ! -f "$VSIX" ]; then
     echo "    FAILED: pack.py produced no .vsix" >&2
     exit 1
 fi

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Burxt lockfile",
+  "scopeName": "source.burxt-lock",
+  "//": "A scope of its own rather than sharing the manifest's, because the two vocabularies do not overlap: a lockfile line is `package …` and nothing else, and `dependency` in a lockfile is refused. One grammar for both would colour each file's mistakes as if they were correct.",
+  "//2": "**What this is actually for.** `write_lock` emits `package  <name>  <url>  <tag>  <commit>`, and the tag and the 40-character commit sit adjacent: `burxt-0.12.1  d9940651a8207986f2a5a3b7a9673e3245bf78ca`. Those are the two fields a person compares by eye when a fetch surprises them, and unhighlighted they read as one blur. Scoping the commit apart from the tag is most of the value here.",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#package-pinned" },
+    { "include": "#package" },
+    { "include": "#refused" }
+  ],
+  "repository": {
+    "comment": {
+      "//": "The header `write_lock` writes is three comment lines, the last of which is *Do not edit it by hand* — worth reading as a comment rather than as data.",
+      "match": "^\\s*#.*$",
+      "name": "comment.line.number-sign.burxt-lock"
+    },
+    "package-pinned": {
+      "//": "The ordinary line, whose last field is a full 40-character hex commit. Tried first so the commit gets a scope of its own; the looser rule below still colours a line the parser accepts but this one does not match, because the parser counts five words and never checks the shape of the fifth. A grammar stricter than its parser would report a refusal that does not exist.",
+      "match": "^\\s*(package)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+([0-9a-fA-F]{40})\\s*$",
+      "captures": {
+        "1": { "name": "keyword.other.package.burxt-lock" },
+        "2": { "name": "entity.name.namespace.dependency.burxt-lock" },
+        "3": { "name": "markup.underline.link.burxt-lock" },
+        "4": { "name": "constant.other.tag.burxt-lock" },
+        "5": { "name": "constant.numeric.hex.commit.burxt-lock" }
+      }
+    },
+    "package": {
+      "match": "^\\s*(package)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s*$",
+      "captures": {
+        "1": { "name": "keyword.other.package.burxt-lock" },
+        "2": { "name": "entity.name.namespace.dependency.burxt-lock" },
+        "3": { "name": "markup.underline.link.burxt-lock" },
+        "4": { "name": "constant.other.tag.burxt-lock" },
+        "5": { "name": "constant.other.commit.burxt-lock" }
+      }
+    },
+    "refused": {
+      "//": "`a lockfile line is \\`package <name> <url> <tag> <commit>\\`` is the only shape there is, so anything else — a different key, or `package` with the wrong number of fields — is refused by line number. The parser's advice for this file is to delete it and fetch again rather than repair it.",
+      "match": "^\\s*([^\\s#]\\S*)",
+      "captures": {
+        "1": { "name": "invalid.illegal.not-a-lock-line.burxt-lock" }
+      }
+    }
+  }
+}

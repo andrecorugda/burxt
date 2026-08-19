@@ -516,7 +516,30 @@ fn check_in_context(uri: &str, text: &str) -> Option<Vec<Value>> {
     // in which case the root is what has to be checked.
     let (_, imports) = crate::strip_imports(text);
     let root = if imports.is_empty() { program_using(&path)? } else { path.clone() };
-    let (buffer, files) = crate::load_program(root.to_str()?).ok()?;
+    // **A program that will not LOAD is not the same thing as a file that is not a program**, and
+    // this returned `None` for both. `publish` reads `None` as the second and falls back to checking
+    // the buffer alone — on the RAW text, so `strip_imports` never runs and every `use` line is
+    // parsed as a statement starting with an identifier. The result was a lie with a straight face:
+    // a star-burxt component whose generated `use "std/html.bx"` could not resolve was reported as
+    // ``expected `=`, `+=`, `-=` or `*=`, found a string literal`` — a SYNTAX error, on a line whose
+    // syntax is perfect, from a compiler that says the truth on the command line one directory away.
+    //
+    // The loader's own message is kept verbatim rather than summarised, because it already names the
+    // unresolvable path, the file that asked for it, and — for `std/` — the directories searched and
+    // the variable to set. Nothing here can say it better, and a second wording would be a second
+    // thing to keep in step.
+    let (buffer, files) = match crate::load_program(root.to_str()?) {
+        Ok(loaded) => loaded,
+        Err(problem) => {
+            // The import the loader choked on, so the squiggle lands on the line that caused it.
+            // A transitive failure names an import this file does not have, which is why the fall
+            // back is the first `use` rather than nothing: the message says `...used by`, and a
+            // diagnostic at the top of the file beats one at offset zero of a file with no `use`.
+            let failing = imports.iter().find(|i| problem.contains(i.as_str()));
+            let span = span_of_import(text, failing.map(String::as_str));
+            return Some(vec![as_lsp_diagnostic(text, &Diagnostic::new(problem, span))]);
+        }
+    };
     // Where this file sits in the concatenated buffer, and what the editor has for it.
     let canonical = std::fs::canonicalize(&path).ok()?;
     let mine = files.iter().find(|f| {
@@ -549,6 +572,39 @@ fn check_in_context(uri: &str, text: &str) -> Option<Vec<Value>> {
             })
             .collect(),
     )
+}
+
+/// The span of the `use` line naming `import`, or of the first `use` line, or nothing.
+///
+/// Only the header is scanned, because the header is the only place `strip_imports` recognises an
+/// import at all — a `use` further down is not one, and pointing at it would mean pointing at a line
+/// the loader never read. The rule is duplicated from `strip_imports` deliberately narrowly: this
+/// needs the OFFSET of the line, which that function throws away because it blanks in place.
+fn span_of_import(text: &str, import: Option<&str>) -> Span {
+    let mut offset = 0usize;
+    let mut first: Option<Span> = None;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            offset += line.len();
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("use ") else { break };
+        let quoted = rest.trim().trim_end_matches(';').trim();
+        if quoted.len() < 2 || !quoted.starts_with('"') || !quoted.ends_with('"') {
+            break;
+        }
+        // The line's text, without its indentation or its newline: an editor draws the range, and a
+        // range that swallows the line break underlines the start of the next line too.
+        let lead = line.len() - line.trim_start().len();
+        let span = Span::new(offset + lead, offset + line.trim_end().len());
+        if import == Some(&quoted[1..quoted.len() - 1]) {
+            return span;
+        }
+        first.get_or_insert(span);
+        offset += line.len();
+    }
+    first.unwrap_or(Span::new(0, 0))
 }
 
 fn path_of(uri: &str) -> Option<std::path::PathBuf> {
@@ -759,5 +815,51 @@ mod tests {
         assert_eq!(v.get("severity"), Some(&Value::num(SEVERITY_ERROR as f64)));
         assert_eq!(v.get("source").unwrap().as_str(), Some("burxt"));
         assert!(v.get("message").unwrap().as_str().unwrap().contains("declared Bool"));
+    }
+
+    /// **A program that will not LOAD must say so, not blame the syntax of a valid line.**
+    ///
+    /// `check_in_context` folded two different answers into one `None` — "this file is not a
+    /// program" and "this program failed to load" — and `publish` reads `None` as the first, so it
+    /// fell back to checking the RAW buffer. `strip_imports` never ran, and a `use` line parses as a
+    /// statement starting with an identifier: a star-burxt component whose generated
+    /// `use "std/html.bx"` could not resolve was reported as
+    /// ``expected `=`, `+=`, `-=` or `*=`, found a string literal`` — a syntax error, on a line whose
+    /// syntax is perfect, while `burxt check` on the same file named the missing file correctly.
+    ///
+    /// **The control is the second half.** The same buffer, with the import now present, must publish
+    /// NOTHING — otherwise this test would pass just as well against a server that reported an error
+    /// unconditionally, which is the shape of green that hides the next bug.
+    #[test]
+    fn an_unresolvable_import_is_reported_as_one() {
+        let dir = std::env::temp_dir().join("burxt-lsp-unresolvable-import");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("t.bx");
+        // A comment first, because that is what a generator writes and the header rule allows it.
+        let text = "// GENERATED, as star-burxt writes it\nuse \"sibling.bx\";\n\npure function f() -> Int {\n    return 1;\n}\n";
+        std::fs::write(&file, text).unwrap();
+        let uri = format!("file://{}", file.display());
+
+        let found = check_in_context(&uri, text).expect("a buffer with imports IS a program");
+        assert_eq!(found.len(), 1, "one unresolvable import, one diagnostic: {:?}", found);
+        let message = found[0].get("message").unwrap().as_str().unwrap().to_string();
+        assert!(message.contains("cannot read"), "the loader's own words: {}", message);
+        assert!(
+            !message.contains("expected `=`"),
+            "a resolution failure reported as a syntax error is the bug: {}",
+            message
+        );
+        // Line 2 to a person is line 1 to the protocol: the `use` line, not offset zero.
+        assert_eq!(found[0].path(&["range", "start", "line"]), Some(&Value::num(1)));
+
+        std::fs::write(
+            dir.join("sibling.bx"),
+            "pure function g() -> Int {\n    return 2;\n}\n",
+        )
+        .unwrap();
+        let clean = check_in_context(&uri, text).expect("still a program");
+        assert!(clean.is_empty(), "a resolvable import publishes nothing: {:?}", clean);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

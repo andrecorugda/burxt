@@ -1,0 +1,9 @@
+{
+  "//": "Shared by `burxt.package` and `burxt.lock`. Both are line-oriented with `#` comments and no nesting of any kind — `manifest.rs` reads one statement per line, no quoting, no expressions — so there are no brackets to match, nothing to auto-close, and nothing to fold. Saying that explicitly is the point: an empty `brackets` list stops the editor inventing pairs in a file where a bracket has no meaning.",
+  "comments": {
+    "lineComment": "#"
+  },
+  "brackets": [],
+  "autoClosingPairs": [],
+  "surroundingPairs": []
+}

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Package the extension as a .vsix, with no toolchain.
 
-    python3 editors/vscode/pack.py            # writes burxt-<version>.vsix here
-    code --install-extension editors/vscode/burxt-0.1.4.vsix
+    python3 editors/vscode/pack.py            # writes burxt.vsix here
+    code --install-extension editors/vscode/burxt.vsix
 
 A .vsix is a ZIP with three things in it: an OPC content-types map, a VSIX
 manifest, and the extension under `extension/`. `vsce` does more than this —
@@ -30,7 +30,13 @@ FILES = [
     "package.json",
     "extension.js",
     "language-configuration.json",
+    # `burxt.package` and `burxt.lock` are matched by filename and get their own grammars. Listed
+    # here as well as in `package.json`, and the test that reads the manifest's contributions back
+    # out of the archive is what keeps the two lists from disagreeing.
+    "manifest-language-configuration.json",
     "syntaxes/burxt.tmLanguage.json",
+    "syntaxes/burxt-package.tmLanguage.json",
+    "syntaxes/burxt-lock.tmLanguage.json",
     "icon.png",
     "file-icon.png",
     "README.md",
@@ -64,7 +70,17 @@ def manifest(pkg):
     # `workspace` matters on a remote (WSL, SSH, container): the extension spawns
     # the compiler and the language server, so it has to run where the code is,
     # not on the UI side.
-    kind = ",".join(pkg.get("extensionKind", ["workspace"]))
+    #
+    # **Raised rather than defaulted**, which star-burxt's copy of this packer got right first: a
+    # default is invisible when it is wrong, and the wrong value here loads the extension on the UI
+    # side of a remote, where the compiler it spawns does not exist. The manifest must not be able to
+    # say `workspace` because a packer assumed it.
+    if "extensionKind" not in pkg:
+        raise SystemExit(
+            "package.json declares no extensionKind. This extension spawns the compiler, so it "
+            'must say ["workspace"] — a packer guessing it is how a remote loads it UI-side.'
+        )
+    kind = ",".join(pkg["extensionKind"])
     return f"""<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
@@ -98,15 +114,34 @@ def manifest(pkg):
 
 def main():
     pkg = json.loads((HERE / "package.json").read_text())
-    out = HERE / f"{pkg['name']}-{pkg['version']}.vsix"
+    # **The filename carries no version, and that is a fix rather than laziness.** It used to carry
+    # the version, which put the number in five places outside `package.json` — this
+    # docstring, `README.md`, `editors/README.md`, the getting-started guide, and a glob in
+    # `.devcontainer/setup.sh`. The predicted failure had already happened and nobody had noticed:
+    # **at version 0.1.4, `README.md` and `editors/README.md` both said 0.1.3**, so the install
+    # command in the front door named a file `pack.py` does not write. BMX measured the same shape
+    # from the other end — thirty commits to the package with the version never moving off 0.1.0.
+    #
+    # A version belongs where a tool reads it: `package.json`, and the manifest built from it here.
+    # VS Code compares THAT to decide whether to offer an upgrade, and it never read the filename.
+    # A stable name means the documented command is correct forever and a bump costs one edit.
+    # `the_documented_install_command_names_the_file_pack_py_writes` fails if this drifts again.
+    out = HERE / f"{pkg['name']}.vsix"
 
     missing = [f for f in FILES if not (HERE / f).exists()]
     if missing:
         raise SystemExit(f"cannot package, these are missing: {missing}")
 
+    # **The manifest is built BEFORE the archive is opened**, because it is the step that can refuse.
+    # Built inside the `with`, a refusal left a 353-byte .vsix on disk holding nothing but the
+    # content-types map — and a truncated package is worse than no package: `code
+    # --install-extension` is what discovers it, one machine away from the person who could fix it.
+    # Nothing that can say no belongs downstream of a file being created.
+    manifest_xml = manifest(pkg)
+
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml", CONTENT_TYPES)
-        z.writestr("extension.vsixmanifest", manifest(pkg))
+        z.writestr("extension.vsixmanifest", manifest_xml)
         for name in FILES:
             z.write(HERE / name, f"extension/{name}")
 

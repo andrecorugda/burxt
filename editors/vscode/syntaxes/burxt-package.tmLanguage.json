@@ -1,0 +1,71 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Burxt package manifest",
+  "scopeName": "source.burxt-package",
+  "//": "A separate scope from `source.burxt`, not a reuse of it. `manifest.rs` comments its own comment syntax: `#` and not `//`, *because this is not Burxt source and reading it as though it were is how someone ends up expecting interpolation in it*. Painting a manifest with the Burxt grammar would teach exactly the confusion that decision exists to prevent.",
+  "//2": "Every rule anchors to the whole line, because `manifest.rs` reads one statement per line, splits on whitespace, and counts the words. A rule that matched a fragment would colour a line the parser refuses.",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#name" },
+    { "include": "#version" },
+    { "include": "#dependency-git" },
+    { "include": "#dependency-path" },
+    { "include": "#dependency-bad-name" },
+    { "include": "#refused" }
+  ],
+  "repository": {
+    "comment": {
+      "match": "^\\s*#.*$",
+      "name": "comment.line.number-sign.burxt-package"
+    },
+    "name": {
+      "//": "`name` and `version` each take exactly one word, at most once.",
+      "match": "^\\s*(name)\\s+(\\S+)\\s*$",
+      "captures": {
+        "1": { "name": "keyword.other.name.burxt-package" },
+        "2": { "name": "entity.name.type.package.burxt-package" }
+      }
+    },
+    "version": {
+      "match": "^\\s*(version)\\s+(\\S+)\\s*$",
+      "captures": {
+        "1": { "name": "keyword.other.version.burxt-package" },
+        "2": { "name": "constant.numeric.version.burxt-package" }
+      }
+    },
+    "dependency-git": {
+      "//": "Three words after the key: `dependency <name> <git-url> <tag>`. The URL must contain `://` — that is what the parser uses to tell a git source from a directory, so the grammar tells them apart the same way rather than guessing from shape.",
+      "match": "^\\s*(dependency)\\s+([A-Za-z0-9_]+)\\s+(\\S+://\\S*)\\s+(\\S+)\\s*$",
+      "captures": {
+        "1": { "name": "keyword.other.dependency.burxt-package" },
+        "2": { "name": "entity.name.namespace.dependency.burxt-package" },
+        "3": { "name": "markup.underline.link.burxt-package" },
+        "4": { "name": "constant.other.tag.burxt-package" }
+      }
+    },
+    "dependency-path": {
+      "//": "Two words after the key: `dependency <name> <directory>`.",
+      "match": "^\\s*(dependency)\\s+([A-Za-z0-9_]+)\\s+(\\S+)\\s*$",
+      "captures": {
+        "1": { "name": "keyword.other.dependency.burxt-package" },
+        "2": { "name": "entity.name.namespace.dependency.burxt-package" },
+        "3": { "name": "string.unquoted.path.burxt-package" }
+      }
+    },
+    "dependency-bad-name": {
+      "//": "A dependency name is letters, digits and `_`, *because it becomes the first segment of a `use` path* — so a name with a dash in it is refused by name, and marking it is not a guess.",
+      "match": "^\\s*(dependency)\\s+([^\\s]*[^A-Za-z0-9_\\s][^\\s]*)",
+      "captures": {
+        "1": { "name": "keyword.other.dependency.burxt-package" },
+        "2": { "name": "invalid.illegal.dependency-name.burxt-package" }
+      }
+    },
+    "refused": {
+      "//": "The vocabulary is closed — `name`, `version`, `dependency`, *and that is the whole grammar* — and anything else is an error the parser reports by line. Marking it needs no list this grammar could get wrong, which is the one case where colouring may speak about a refusal. It also catches a known key with the wrong number of words, since the rules above require the exact count the parser does.",
+      "match": "^\\s*([^\\s#]\\S*)",
+      "captures": {
+        "1": { "name": "invalid.illegal.unknown-key.burxt-package" }
+      }
+    }
+  }
+}
