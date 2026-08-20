@@ -87,6 +87,17 @@
           id: what-is-not-here
     - name: "Examples"
       url: /examples/
+    - name: "Packages"
+      url: /packages.html
+      steps:
+        - name: "bmx"
+          id: bmx
+        - name: "star-burxt"
+          id: star-burxt
+        - name: "What you get for free, without any of this"
+          id: what-you-get-for-free-without-any-of-this
+        - name: "Publishing one"
+          id: publishing-one
 - title: The guide
   url: /guide/
   items:

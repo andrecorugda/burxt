@@ -7060,6 +7060,10 @@ fn the_reference_is_not_stale() {
     for (script, what) in [
         ("scripts/site-reference.py", "docs/reference/ and docs/assets/search.json"),
         ("scripts/site-nav.py", "docs/_data/nav.yml"),
+        // The package index. Authored rather than scraped — a page a reader trusts should not
+        // contain whatever a search returned — so the thing that can rot is the page falling
+        // behind the list, which is exactly what a regenerate-and-diff catches.
+        ("scripts/site-packages.py", "docs/packages.md"),
     ] {
         let checked = Command::new("python3")
             .arg(script)
@@ -7070,7 +7074,12 @@ fn the_reference_is_not_stale() {
             .unwrap_or_else(|e| panic!("running {}: {}", script, e));
         assert!(
             checked.status.success(),
-            "{} no longer matches the compiler. Regenerate it:\n    python3 {}\n{}{}",
+            // **"matches the compiler" was true of two of the three and is now wrong for one.**
+            // `site-packages.py` reads an authored list, not the compiler, so a reader whose
+            // package entry drifted was told to go look at a compiler that had nothing to do with
+            // it. The generator's own `--check` already names the file and the command; this says
+            // only what it can know, which is that the two disagree.
+            "{} is out of date. Regenerate it:\n    python3 {}\n{}{}",
             what,
             script,
             String::from_utf8_lossy(&checked.stdout),

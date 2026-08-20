@@ -149,6 +149,7 @@ EXTRA_GROUPS = [
         ("How do I…?", "how-do-i.md", "/how-do-i.html"),
         ("What it refuses", "refused/index.md", "/refused/"),
         ("Examples", "examples/index.md", "/examples/"),
+        ("Packages", "packages.md", "/packages.html"),
     ]),
 ]
 
