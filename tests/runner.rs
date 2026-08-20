@@ -5911,9 +5911,17 @@ fn the_documented_install_command_names_the_file_the_packer_writes() {
     }
     // The packer is Burxt now, so it runs through the compiler. Still into a COPY, for the reason
     // below: packing in the checkout races the test that reads the artefact.
+    // **Delete any copied artefact first, then run the packer INSIDE the copy.** Both halves were
+    // wrong and the test passed anyway, which is worse than failing: `pack.bx` finds itself by
+    // walking up from the WORKING DIRECTORY, and this set none — so it wrote into the real tree,
+    // while the assertion below was satisfied by a `burxt.vsix` that `cp -r` had brought along. On a
+    // developer machine that artefact exists; in CI it is gitignored and absent, so the branch is
+    // where the truth arrived. **An assertion a leftover can satisfy is not an assertion.**
+    let _ = fs::remove_file(scratch.join("editors/vscode/burxt.vsix"));
     let packed = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("run")
-        .arg(scratch.join("editors/vscode/pack.bx"))
+        .arg("pack.bx")
+        .current_dir(scratch.join("editors/vscode"))
         .output()
         .expect("burxt run pack.bx");
     assert!(
@@ -7654,6 +7662,13 @@ fn the_reference_is_not_stale() {
         let checked = if script.ends_with(".bx") {
             Command::new(env!("CARGO_BIN_EXE_burxt"))
                 .args(["run", script, "--", "--check"])
+                // **`BURXT` is not optional here and dropping it turned CI red.** The reference
+                // generator runs the compiler to check every builtin signature it prints, and it
+                // falls back to `target/release/burxt` when the variable is absent — which exists on
+                // a developer machine and NOT in CI, which builds debug. So this passed locally and
+                // failed on the branch, which is the whole reason "a green suite is not a green
+                // branch" is written down.
+                .env("BURXT", env!("CARGO_BIN_EXE_burxt"))
                 .current_dir(root)
                 .output()
                 .unwrap_or_else(|e| panic!("running {}: {}", script, e))
