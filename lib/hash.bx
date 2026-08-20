@@ -348,6 +348,31 @@ pure function crc32_byte(crc: Int, byte: Int) -> Int {
     return c;
 }
 
+// **Adler-32, RFC 1950** — the checksum a *zlib* stream carries, which is not the one a ZIP entry
+// carries. It is weaker than CRC-32 and much cheaper: two running sums mod 65521, the largest prime
+// below 2^16. It exists here because a PNG's IDAT is a zlib stream and `lib/inflate.bx` verifies the
+// trailing check rather than ignoring it — a decoder that hands back bytes which failed their own
+// checksum is the same defect as an oracle reading one copy of duplicated metadata.
+//
+// **Not cryptographic either**, and weaker than CRC-32 at the job both do: Adler-32 is poor on short
+// inputs, where the first sum barely moves. Fine for what RFC 1950 uses it for — catching a damaged
+// stream — and wrong for anything that needs an adversary to fail.
+pure function adler32(data: [Int]) -> Int {
+    let mutable low: Int = 1;
+    let mutable high: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(data) {
+        low = remainder(low + data[i], 65521);
+        high = remainder(high + low, 65521);
+        i = i + 1;
+    }
+    return high * 65536 + low;
+}
+
+pure function adler32_text(text: String) -> Int {
+    return adler32(to_bytes(text));
+}
+
 pure function crc32(data: [Int]) -> Int {
     let mutable crc: Int = 0xFFFFFFFF;
     let n: Int = len(data);

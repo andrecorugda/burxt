@@ -2360,6 +2360,20 @@
  },
  {
   "kind": "function",
+  "name": "zip_entry_stored",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-entry-stored",
+  "where": "pure function zip_entry_stored(name: String, bytes: [Int]) -> ZipEntry"
+ },
+ {
+  "kind": "function",
+  "name": "zip_entry_text_stored",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-entry-text-stored",
+  "where": "pure function zip_entry_text_stored(name: String, text: String) -> ZipEntry"
+ },
+ {
+  "kind": "function",
   "name": "zip_le16",
   "text": "lib/zip.bx",
   "url": "/reference/zip.html#zip-le16",
@@ -2427,6 +2441,55 @@
   "text": "lib/zip.bx",
   "url": "/reference/zip.html#zip-write-deflated",
   "where": "function zip_write_deflated(path: String, entries: [ZipEntry]) -> Int touches files"
+ },
+ {
+  "kind": "class",
+  "name": "ZipRead",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zipread",
+  "where": "class ZipRead"
+ },
+ {
+  "kind": "function",
+  "name": "zip_at16",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-at16",
+  "where": "pure function zip_at16(archive: [Int], at: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_at32",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-at32",
+  "where": "pure function zip_at32(archive: [Int], at: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_directory_at",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-directory-at",
+  "where": "pure function zip_directory_at(archive: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_entries",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-entries",
+  "where": "function zip_entries(archive: [Int], mutable into: [ZipRead]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_local_at",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-local-at",
+  "where": "function zip_local_at(archive: [Int], at: Int, mutable into: [ZipRead]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_content",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-content",
+  "where": "function zip_content(archive: [Int], entry: ZipRead, mutable into: [Int]) -> Int"
  },
  {
   "kind": "class",
@@ -2513,6 +2576,83 @@
   "where": "function deflate_into(mutable out: [Int], data: [Int]) -> Int"
  },
  {
+  "kind": "class",
+  "name": "Inflater",
+  "text": "lib/inflate.bx",
+  "url": "/reference/inflate.html#inflater",
+  "where": "class Inflater"
+ },
+ {
+  "kind": "function",
+  "name": "inflate_bits",
+  "text": "lib/inflate.bx",
+  "url": "/reference/inflate.html#inflate-bits",
+  "where": "function inflate_bits(mutable state: Inflater, data: [Int], count: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "inflate_build",
+  "text": "lib/inflate.bx",
+  "url": "/reference/inflate.html#inflate-build",
+  "where": "function inflate_build(lengths: [Int], mutable counts: [Int], mutable symbols: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "inflate_decode",
+  "text": "lib/inflate.bx",
+  "url": "/reference/inflate.html#inflate-decode",
+  "where": "function inflate_decode(mutable state: Inflater, data: [Int], counts: [Int], symbols: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "inflate_tables",
+  "text": "lib/inflate.bx",
+  "url": "/reference/inflate.html#inflate-tables",
+  "where": "function inflate_tables(mutable length_base: [Int], mutable length_extra: [Int],"
+ },
+ {
+  "kind": "function",
+  "name": "inflate_codes",
+  "text": "lib/inflate.bx",
+  "url": "/reference/inflate.html#inflate-codes",
+  "where": "function inflate_codes(mutable state: Inflater, data: [Int], mutable out: [Int],"
+ },
+ {
+  "kind": "function",
+  "name": "inflate_fixed",
+  "text": "lib/inflate.bx",
+  "url": "/reference/inflate.html#inflate-fixed",
+  "where": "function inflate_fixed(mutable state: Inflater, data: [Int], mutable out: [Int],"
+ },
+ {
+  "kind": "function",
+  "name": "inflate_dynamic",
+  "text": "lib/inflate.bx",
+  "url": "/reference/inflate.html#inflate-dynamic",
+  "where": "function inflate_dynamic(mutable state: Inflater, data: [Int], mutable out: [Int],"
+ },
+ {
+  "kind": "function",
+  "name": "inflate_stored",
+  "text": "lib/inflate.bx",
+  "url": "/reference/inflate.html#inflate-stored",
+  "where": "function inflate_stored(mutable state: Inflater, data: [Int], mutable out: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "inflate_into",
+  "text": "lib/inflate.bx",
+  "url": "/reference/inflate.html#inflate-into",
+  "where": "function inflate_into(mutable out: [Int], data: [Int], from: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zlib_into",
+  "text": "lib/inflate.bx",
+  "url": "/reference/inflate.html#zlib-into",
+  "where": "function zlib_into(mutable out: [Int], data: [Int]) -> Int"
+ },
+ {
   "kind": "function",
   "name": "hash_mask_32",
   "text": "lib/hash.bx",
@@ -2581,6 +2721,20 @@
   "text": "lib/hash.bx",
   "url": "/reference/hash.html#crc32-byte",
   "where": "pure function crc32_byte(crc: Int, byte: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "adler32",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#adler32",
+  "where": "pure function adler32(data: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "adler32_text",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#adler32-text",
+  "where": "pure function adler32_text(text: String) -> Int"
  },
  {
   "kind": "function",

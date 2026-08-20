@@ -1,0 +1,497 @@
+// ============================================================================
+// lib/inflate.bx — read a DEFLATE stream, RFC 1951.
+//
+//     use "lib/inflate.bx";
+//
+// ============================================================================
+// WHY, AND WHY IT IS THE HARDER DIRECTION
+// ============================================================================
+//
+// `lib/deflate.bx` writes; this reads. They are separate modules because a decoder's failure modes
+// are not a compressor's: a stream can be truncated, over-subscribed, or name a distance that
+// reaches back further than the output is long, and **every one of those arrives as somebody else's
+// bytes rather than as a bug in this file.** A compressor only ever has to be correct; a decompressor
+// has to be correct and unfooled.
+//
+// **This reads DYNAMIC Huffman, which `lib/deflate.bx` does not write.** That asymmetry is the point:
+// zlib emits dynamic blocks at every level above zero, so every `.vsix` written by Python, and every
+// PNG's IDAT, is dynamic. A reader that handled only what our own writer produces would be a reader
+// that cannot open anything that came from anywhere else — which is the whole reason to have one.
+//
+// ============================================================================
+// CANONICAL HUFFMAN, DECODED WITHOUT A TABLE
+// ============================================================================
+//
+// The decoder is Mark Adler's `puff` algorithm, and it is worth saying why rather than the faster
+// one. A table-driven decoder builds a lookup keyed on the next N bits; it is how zlib reaches its
+// speed and it is also where a subtle build error produces a decoder that is right on almost
+// everything. This walks the code lengths one bit at a time:
+//
+//     count[len]   how many codes have this length
+//     symbol[]     the symbols, ordered by (length, symbol)
+//
+// and at each bit asks whether the code so far falls inside this length's range. **No table means no
+// table to build wrong**, and a stream that is 40 KB decodes in milliseconds either way. If speed
+// ever matters, the honest upgrade is a table plus this as the differential oracle — not a table
+// instead of this.
+//
+// ============================================================================
+// THE ORDERS, AGAIN, AND THE ONE THAT IS NOT A BIT ORDER
+// ============================================================================
+//
+// Data elements are least significant bit first; Huffman codes are most significant bit first. Same
+// trap as the writer, mirrored: `inflate_bits` is the LSB door, `inflate_decode` the MSB one.
+//
+// And a third order that is not about bits at all: **the 19 code-length codes of a dynamic block
+// arrive in a permuted order**, `16, 17, 18, 0, 8, 7, 9, 6, …`, so that a short header can omit the
+// rarely-used ones from the end. Reading them in numeric order produces a tree that is wrong in a way
+// that decodes for a while and then fails — which is the worst failure shape there is, because the
+// first symptom is thousands of bytes from the mistake.
+// ============================================================================
+
+use "hash.bx";
+use "string.bx";
+
+// `at` is the byte the next bits come from; `bits`/`nbits` hold what has been pulled off it and not
+// yet consumed. A decoder is nothing but this plus two tables.
+class Inflater {
+    bits: Int,
+    nbits: Int,
+    at: Int,
+    fault: Int,      // non-zero once the stream has been refused, so callers stop trusting output
+}
+
+// ---- the bit stream --------------------------------------------------------
+
+// `count` bits, least significant first. A read past the end sets `fault` and answers 0 rather than
+// trapping, because a truncated stream is a thing to report and not a thing to crash on: this module
+// reads bytes somebody else wrote.
+function inflate_bits(mutable state: Inflater, data: [Int], count: Int) -> Int {
+    let mutable value: Int = state.bits;
+    let mutable have: Int = state.nbits;
+    while have < count {
+        if state.at >= len(data) {
+            state.fault = 1;
+            return 0;
+        }
+        value = bit_or(value, shift_left(data[state.at], have));
+        state.at = state.at + 1;
+        have = have + 8;
+    }
+    state.bits = divide_floor(value, shift_left(1, count));
+    state.nbits = have - count;
+    return bit_and(value, shift_left(1, count) - 1);
+}
+
+// ---- canonical Huffman -----------------------------------------------------
+
+// Build `counts` and `symbols` from a list of code lengths. Answers 0 for a complete code, a positive
+// number for an incomplete one, and -1 for over-subscribed — which is a malformed stream rather than
+// a bug here, so it is a value and not a trap.
+function inflate_build(lengths: [Int], mutable counts: [Int], mutable symbols: [Int]) -> Int {
+    let mutable i: Int = 0;
+    while i <= 15 {
+        push(counts, 0);
+        i = i + 1;
+    }
+    let mutable s: Int = 0;
+    while s < len(lengths) {
+        counts[lengths[s]] = counts[lengths[s]] + 1;
+        s = s + 1;
+    }
+    if counts[0] == len(lengths) {
+        return 0;                      // no codes at all, which is legal for a distance tree
+    }
+
+    // Over-subscribed means the lengths describe more codes than the tree has room for.
+    let mutable left: Int = 1;
+    let mutable bit: Int = 1;
+    while bit <= 15 {
+        left = left * 2 - counts[bit];
+        if left < 0 {
+            return 0 - 1;
+        }
+        bit = bit + 1;
+    }
+
+    // Where each length's symbols begin, then the symbols in (length, symbol) order.
+    let mutable offsets: [Int] = [];
+    let mutable o: Int = 0;
+    while o <= 16 {
+        push(offsets, 0);
+        o = o + 1;
+    }
+    let mutable l: Int = 1;
+    while l < 15 {
+        offsets[l + 1] = offsets[l] + counts[l];
+        l = l + 1;
+    }
+    let mutable f: Int = 0;
+    while f < len(lengths) {
+        push(symbols, 0);
+        f = f + 1;
+    }
+    let mutable t: Int = 0;
+    while t < len(lengths) {
+        if lengths[t] != 0 {
+            symbols[offsets[lengths[t]]] = t;
+            offsets[lengths[t]] = offsets[lengths[t]] + 1;
+        }
+        t = t + 1;
+    }
+    return left;
+}
+
+// One symbol, most significant bit first. -1 on a code that is not in the tree.
+function inflate_decode(mutable state: Inflater, data: [Int], counts: [Int], symbols: [Int]) -> Int {
+    let mutable code: Int = 0;
+    let mutable first: Int = 0;
+    let mutable index: Int = 0;
+    let mutable length: Int = 1;
+    while length <= 15 {
+        code = bit_or(code, inflate_bits(state, data, 1));
+        if state.fault != 0 {
+            return 0 - 1;
+        }
+        let count: Int = counts[length];
+        if code - count < first {
+            return symbols[index + (code - first)];
+        }
+        index = index + count;
+        first = (first + count) * 2;
+        code = code * 2;
+        length = length + 1;
+    }
+    return 0 - 1;
+}
+
+// ---- the length and distance tables ---------------------------------------
+//
+// The same numbers `lib/deflate.bx` writes, read back. Duplicated rather than shared because the two
+// modules are independent by design — and because a decoder importing the encoder to borrow a table
+// would mean a program that only reads streams carries a compressor it never calls.
+function inflate_tables(mutable length_base: [Int], mutable length_extra: [Int],
+        mutable dist_base: [Int], mutable dist_extra: [Int]) -> Int {
+    let lb: [Int] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59,
+            67, 83, 99, 115, 131, 163, 195, 227, 258];
+    let le: [Int] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3,
+            4, 4, 4, 4, 5, 5, 5, 5, 0];
+    let db: [Int] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513,
+            769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+    let de: [Int] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8,
+            9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+    let mutable i: Int = 0;
+    while i < len(lb) {
+        push(length_base, lb[i]);
+        push(length_extra, le[i]);
+        i = i + 1;
+    }
+    let mutable j: Int = 0;
+    while j < len(db) {
+        push(dist_base, db[j]);
+        push(dist_extra, de[j]);
+        j = j + 1;
+    }
+    return len(length_base) + len(dist_base);
+}
+
+// ---- one block's symbols ---------------------------------------------------
+
+// Decode literals and matches until the end-of-block symbol. **A match may reach into bytes this
+// call just wrote** — a distance smaller than the length is legal and is how a run of one byte is
+// encoded — so the copy is byte at a time from the growing output rather than a block move.
+function inflate_codes(mutable state: Inflater, data: [Int], mutable out: [Int],
+            lit_counts: [Int], lit_symbols: [Int], dist_counts: [Int], dist_symbols: [Int],
+        length_base: [Int], length_extra: [Int], dist_base: [Int], dist_extra: [Int]) -> Int {
+    let mutable running: Bool = true;
+    while running {
+        let symbol: Int = inflate_decode(state, data, lit_counts, lit_symbols);
+        if symbol < 0 {
+            state.fault = 1;
+            return 0 - 1;
+        }
+        if symbol < 256 {
+            push(out, symbol);
+        } else {
+            if symbol == 256 {
+                running = false;
+            } else {
+                let which: Int = symbol - 257;
+                if which >= len(length_base) {
+                    state.fault = 1;
+                    return 0 - 1;
+                }
+                let length: Int = length_base[which]
+                        + inflate_bits(state, data, length_extra[which]);
+                let dsym: Int = inflate_decode(state, data, dist_counts, dist_symbols);
+                if dsym < 0 {
+                    state.fault = 1;
+                    return 0 - 1;
+                }
+                let distance: Int = dist_base[dsym] + inflate_bits(state, data, dist_extra[dsym]);
+                if distance > len(out) {
+                    // Reaching back further than the output is long. A real stream never does this;
+                    // a corrupt or hostile one does, and it is the check that stops it reading
+                    // whatever happens to sit before the buffer.
+                    state.fault = 1;
+                    return 0 - 1;
+                }
+                let mutable k: Int = 0;
+                while k < length {
+                    push(out, out[len(out) - distance]);
+                    k = k + 1;
+                }
+            }
+        }
+    }
+    return len(out);
+}
+
+// ---- the three block types -------------------------------------------------
+
+function inflate_fixed(mutable state: Inflater, data: [Int], mutable out: [Int],
+        length_base: [Int], length_extra: [Int], dist_base: [Int], dist_extra: [Int]) -> Int {
+    let mutable lengths: [Int] = [];
+    let mutable i: Int = 0;
+    while i < 288 {
+        if i < 144 { push(lengths, 8); } else {
+            if i < 256 { push(lengths, 9); } else {
+                if i < 280 { push(lengths, 7); } else { push(lengths, 8); }
+            }
+        }
+        i = i + 1;
+    }
+    let mutable lit_counts: [Int] = [];
+    let mutable lit_symbols: [Int] = [];
+    let _b1: Int = inflate_build(lengths, lit_counts, lit_symbols);
+
+    let mutable dlengths: [Int] = [];
+    let mutable d: Int = 0;
+    while d < 30 {
+        push(dlengths, 5);
+        d = d + 1;
+    }
+    let mutable dist_counts: [Int] = [];
+    let mutable dist_symbols: [Int] = [];
+    let _b2: Int = inflate_build(dlengths, dist_counts, dist_symbols);
+
+    return inflate_codes(state, data, out, lit_counts, lit_symbols, dist_counts, dist_symbols,
+            length_base, length_extra, dist_base, dist_extra);
+}
+
+// The one zlib actually writes. Three counts, then 19 code lengths **in a permuted order**, then the
+// literal and distance lengths decoded with that tree — including three run-length symbols, one of
+// which repeats the PREVIOUS length and therefore cannot be the first thing in the list.
+function inflate_dynamic(mutable state: Inflater, data: [Int], mutable out: [Int],
+        length_base: [Int], length_extra: [Int], dist_base: [Int], dist_extra: [Int]) -> Int {
+    let nlen: Int = inflate_bits(state, data, 5) + 257;
+    let ndist: Int = inflate_bits(state, data, 5) + 1;
+    let ncode: Int = inflate_bits(state, data, 4) + 4;
+    if nlen > 286 {
+        state.fault = 1;
+        return 0 - 1;
+    }
+    if ndist > 30 {
+        state.fault = 1;
+        return 0 - 1;
+    }
+
+    let order: [Int] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+    let mutable code_lengths: [Int] = [];
+    let mutable z: Int = 0;
+    while z < 19 {
+        push(code_lengths, 0);
+        z = z + 1;
+    }
+    let mutable c: Int = 0;
+    while c < ncode {
+        code_lengths[order[c]] = inflate_bits(state, data, 3);
+        c = c + 1;
+    }
+    let mutable code_counts: [Int] = [];
+    let mutable code_symbols: [Int] = [];
+    if inflate_build(code_lengths, code_counts, code_symbols) != 0 {
+        // The code-length tree must be COMPLETE. An incomplete one here is a malformed header, and
+        // accepting it would mean decoding the rest against a tree with holes in it.
+        state.fault = 1;
+        return 0 - 1;
+    }
+
+    let mutable lengths: [Int] = [];
+    while len(lengths) < nlen + ndist {
+        let symbol: Int = inflate_decode(state, data, code_counts, code_symbols);
+        if symbol < 0 {
+            state.fault = 1;
+            return 0 - 1;
+        }
+        if symbol < 16 {
+            push(lengths, symbol);
+        } else {
+            let mutable repeat: Int = 0;
+            let mutable value: Int = 0;
+            if symbol == 16 {
+                if len(lengths) == 0 {
+                    state.fault = 1;          // nothing to repeat
+                    return 0 - 1;
+                }
+                value = lengths[len(lengths) - 1];
+                repeat = 3 + inflate_bits(state, data, 2);
+            } else {
+                if symbol == 17 {
+                    repeat = 3 + inflate_bits(state, data, 3);
+                } else {
+                    repeat = 11 + inflate_bits(state, data, 7);
+                }
+            }
+            let mutable r: Int = 0;
+            while r < repeat {
+                if len(lengths) < nlen + ndist {
+                    push(lengths, value);
+                }
+                r = r + 1;
+            }
+        }
+    }
+
+    let mutable lit_lengths: [Int] = [];
+    let mutable a: Int = 0;
+    while a < nlen {
+        push(lit_lengths, lengths[a]);
+        a = a + 1;
+    }
+    let mutable dist_lengths: [Int] = [];
+    let mutable b: Int = 0;
+    while b < ndist {
+        push(dist_lengths, lengths[nlen + b]);
+        b = b + 1;
+    }
+
+    let mutable lit_counts: [Int] = [];
+    let mutable lit_symbols: [Int] = [];
+    if inflate_build(lit_lengths, lit_counts, lit_symbols) < 0 {
+        state.fault = 1;
+        return 0 - 1;
+    }
+    let mutable dist_counts: [Int] = [];
+    let mutable dist_symbols: [Int] = [];
+    if inflate_build(dist_lengths, dist_counts, dist_symbols) < 0 {
+        state.fault = 1;
+        return 0 - 1;
+    }
+    return inflate_codes(state, data, out, lit_counts, lit_symbols, dist_counts, dist_symbols,
+            length_base, length_extra, dist_base, dist_extra);
+}
+
+// BTYPE 00: the bit stream abandons its partial byte, then a length and its one's complement.
+function inflate_stored(mutable state: Inflater, data: [Int], mutable out: [Int]) -> Int {
+    state.bits = 0;
+    state.nbits = 0;
+    if state.at + 4 > len(data) {
+        state.fault = 1;
+        return 0 - 1;
+    }
+    let count: Int = data[state.at] + data[state.at + 1] * 256;
+    let check: Int = data[state.at + 2] + data[state.at + 3] * 256;
+    state.at = state.at + 4;
+    if count + check != 65535 {
+        state.fault = 1;                  // LEN and NLEN disagree: the stream is not what it says
+        return 0 - 1;
+    }
+    if state.at + count > len(data) {
+        state.fault = 1;
+        return 0 - 1;
+    }
+    let mutable i: Int = 0;
+    while i < count {
+        push(out, data[state.at + i]);
+        i = i + 1;
+    }
+    state.at = state.at + count;
+    return len(out);
+}
+
+// ---- the doors -------------------------------------------------------------
+
+// A raw deflate stream starting at `from`. Answers how many bytes were written, or **-1 for a stream
+// this module refuses** — truncated, over-subscribed, a distance past the start of the output, a
+// reserved block type. A refusal is a value rather than a trap because these are somebody else's
+// bytes and a caller must be able to say "not this one" without dying.
+function inflate_into(mutable out: [Int], data: [Int], from: Int) -> Int {
+    let mutable state: Inflater = Inflater { bits: 0, nbits: 0, at: from, fault: 0 };
+    let mutable length_base: [Int] = [];
+    let mutable length_extra: [Int] = [];
+    let mutable dist_base: [Int] = [];
+    let mutable dist_extra: [Int] = [];
+    let _t: Int = inflate_tables(length_base, length_extra, dist_base, dist_extra);
+
+    let mutable last: Int = 0;
+    while last == 0 {
+        last = inflate_bits(state, data, 1);
+        let kind: Int = inflate_bits(state, data, 2);
+        if state.fault != 0 {
+            return 0 - 1;
+        }
+        let mutable answer: Int = 0;
+        if kind == 0 {
+            answer = inflate_stored(state, data, out);
+        } else {
+            if kind == 1 {
+                answer = inflate_fixed(state, data, out, length_base, length_extra,
+                        dist_base, dist_extra);
+            } else {
+                if kind == 2 {
+                    answer = inflate_dynamic(state, data, out, length_base, length_extra,
+                            dist_base, dist_extra);
+                } else {
+                    state.fault = 1;      // BTYPE 11 is reserved and means a corrupt stream
+                    answer = 0 - 1;
+                }
+            }
+        }
+        if answer < 0 {
+            return 0 - 1;
+        }
+        if state.fault != 0 {
+            return 0 - 1;
+        }
+    }
+    return len(out);
+}
+
+// A **zlib** stream — two header bytes and a trailing adler32 — which is what a PNG's IDAT holds and
+// what a ZIP entry does NOT. The checksum is verified: a decoder that ignores it hands back bytes
+// that failed their own check, which is the same defect as an oracle reading one copy of duplicated
+// metadata.
+function zlib_into(mutable out: [Int], data: [Int]) -> Int {
+    if len(data) < 6 {
+        return 0 - 1;
+    }
+    let method: Int = bit_and(data[0], 15);
+    if method != 8 {
+        return 0 - 1;                     // only deflate is defined
+    }
+    if remainder(data[0] * 256 + data[1], 31) != 0 {
+        return 0 - 1;                     // the header's own check value
+    }
+    if bit_and(data[1], 32) != 0 {
+        return 0 - 1;                     // a preset dictionary, which nothing here supplies
+    }
+    let before: Int = len(out);
+    let written: Int = inflate_into(out, data, 2);
+    if written < 0 {
+        return 0 - 1;
+    }
+    // The trailing adler32 is the last four bytes, big-endian, over the DECOMPRESSED bytes.
+    let mutable plain: [Int] = [];
+    let mutable i: Int = before;
+    while i < len(out) {
+        push(plain, out[i]);
+        i = i + 1;
+    }
+    let want: Int = data[len(data) - 4] * 16777216 + data[len(data) - 3] * 65536
+            + data[len(data) - 2] * 256 + data[len(data) - 1];
+    if adler32(plain) != want {
+        return 0 - 1;
+    }
+    return len(out);
+}

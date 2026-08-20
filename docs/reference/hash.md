@@ -30,6 +30,8 @@ use "lib/hash.bx";
 | [`hash_hex_int`](#hash-hex-int) | function | The low `width` bytes of `value` as lowercase hex, big-endian — for printing a `crc32` or an `fnv1a_64`, which answer an |
 | [`hash_equals_constant_time`](#hash-equals-constant-time) | function | Whether two digests are equal, without an early exit. |
 | [`crc32_byte`](#crc32-byte) | function | CRC-32/ISO-HDLC — the one in zip, gzip, PNG and Ethernet. Reflected, polynomial 0xEDB88320, initial and final xor 0xFFFF |
+| [`adler32`](#adler32) | function | **Adler-32, RFC 1950** — the checksum a *zlib* stream carries, which is not the one a ZIP entry carries. It is weaker th |
+| [`adler32_text`](#adler32-text) | function | — |
 | [`crc32`](#crc32) | function | — |
 | [`crc32_text`](#crc32-text) | function | — |
 | [`fnv1a_32`](#fnv1a-32) | function | The multiply needs no wrapping helper: the hash is under 2^32 and the prime is under 2^25, so the product is under 2^57  |
@@ -188,6 +190,28 @@ Bit-at-a-time, no table. A 256-entry table is four times faster and would have t
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L339)
 
+### `adler32`
+{: #adler32}
+
+```burxt
+pure function adler32(data: [Int]) -> Int
+```
+
+**Adler-32, RFC 1950** — the checksum a *zlib* stream carries, which is not the one a ZIP entry carries. It is weaker than CRC-32 and much cheaper: two running sums mod 65521, the largest prime below 2^16. It exists here because a PNG's IDAT is a zlib stream and `lib/inflate.bx` verifies the trailing check rather than ignoring it — a decoder that hands back bytes which failed their own checksum is the same defect as an oracle reading one copy of duplicated metadata.
+
+**Not cryptographic either**, and weaker than CRC-32 at the job both do: Adler-32 is poor on short inputs, where the first sum barely moves. Fine for what RFC 1950 uses it for — catching a damaged stream — and wrong for anything that needs an adversary to fail.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L360)
+
+### `adler32_text`
+{: #adler32-text}
+
+```burxt
+pure function adler32_text(text: String) -> Int
+```
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L372)
+
 ### `crc32`
 {: #crc32}
 
@@ -195,7 +219,7 @@ Bit-at-a-time, no table. A 256-entry table is four times faster and would have t
 pure function crc32(data: [Int]) -> Int
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L351)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L376)
 
 ### `crc32_text`
 {: #crc32-text}
@@ -204,7 +228,7 @@ pure function crc32(data: [Int]) -> Int
 pure function crc32_text(text: String) -> Int
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L360)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L385)
 
 ### `fnv1a_32`
 {: #fnv1a-32}
@@ -215,7 +239,7 @@ pure function fnv1a_32(data: [Int]) -> Int
 
 The multiply needs no wrapping helper: the hash is under 2^32 and the prime is under 2^25, so the product is under 2^57 and `*` cannot trap. Mask after, exactly as SHA-256 does.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L389)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L414)
 
 ### `fnv1a_32_text`
 {: #fnv1a-32-text}
@@ -224,7 +248,7 @@ The multiply needs no wrapping helper: the hash is under 2^32 and the prime is u
 pure function fnv1a_32_text(text: String) -> Int
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L398)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L423)
 
 ### `fnv1a_64`
 {: #fnv1a-64}
@@ -235,7 +259,7 @@ pure function fnv1a_64(data: [Int]) -> Int
 
 The 64-bit multiply overflows for almost every input, so it goes through the limb multiply. `hash_hex_int(fnv1a_64(...), 8)` is how to print one.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L409)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L434)
 
 ### `fnv1a_64_text`
 {: #fnv1a-64-text}
@@ -244,7 +268,7 @@ The 64-bit multiply overflows for almost every input, so it goes through the lim
 pure function fnv1a_64_text(text: String) -> Int
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L418)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L443)
 
 ### `sha256_k`
 {: #sha256-k}
@@ -255,7 +279,7 @@ function sha256_k(mutable into: [Int]) -> Int
 
 The sixty-four round constants: the first 32 bits of the fractional part of the cube root of each of the first 64 primes. Filled into an array the caller owns, because a function with no region-carrying parameter cannot return one and a `const` cannot be an array.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L437)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L462)
 
 ### `sha256_block`
 {: #sha256-block}
@@ -270,7 +294,7 @@ One 64-byte block, folded into the eight-word state `h`.
 
 Every `+` in this function is between values under 2^32, in groups of at most five, so the largest intermediate is under 2^35 and none of them can trap. The `hash_mask_32` goes at the end of the sum, never between the terms.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L470)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L495)
 
 ### `sha256`
 {: #sha256}
@@ -287,7 +311,7 @@ Only the final block is built: whole blocks are read out of `data` where they li
 
 (`tail` would have been the name; it is a keyword in this language.)
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L537)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L562)
 
 ### `sha256_text`
 {: #sha256-text}
@@ -296,7 +320,7 @@ Only the final block is built: whole blocks are read out of `data` where they li
 function sha256_text(text: String) -> [Int]
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L584)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L609)
 
 ### `sha512_k`
 {: #sha512-k}
@@ -309,7 +333,7 @@ The eighty round constants: the first 64 bits of the fractional part of the cube
 
 Each value above 2^63 is a negative Int holding the right bits. Nothing here compares them.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L602)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L627)
 
 ### `sha512_block`
 {: #sha512-block}
@@ -320,7 +344,7 @@ function sha512_block(mutable h: [Int], mutable w: [Int], message: [Int], at: In
 
 One 128-byte block. Every addition goes through `hash_add_wrapping_64`, because at this width `+` traps — that single difference from `sha256_block` is what 64-bit words cost.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L633)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L658)
 
 ### `sha512`
 {: #sha512}
@@ -333,7 +357,7 @@ SHA-512 of `data`, as 64 bytes.
 
 The length field is **128 bits**, not 64 — eight zero bytes then the eight that carry the bit count. Writing only eight bytes here is the other classic SHA-512 bug: it produces a hash that is right for every input under 112 bytes and wrong for everything above, which the 896-bit fixture catches.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L697)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L722)
 
 ### `sha512_text`
 {: #sha512-text}
@@ -342,7 +366,7 @@ The length field is **128 bits**, not 64 — eight zero bytes then the eight tha
 function sha512_text(text: String) -> [Int]
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L746)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L771)
 
 ### `hmac_sha256`
 {: #hmac-sha256}
@@ -351,7 +375,7 @@ function sha512_text(text: String) -> [Int]
 function hmac_sha256(key: [Int], message: [Int]) -> [Int]
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L768)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L793)
 
 ### `hmac_sha256_text`
 {: #hmac-sha256-text}
@@ -360,7 +384,7 @@ function hmac_sha256(key: [Int], message: [Int]) -> [Int]
 function hmac_sha256_text(key: String, message: String) -> [Int]
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L803)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L828)
 
 ### `hmac_sha512`
 {: #hmac-sha512}
@@ -369,7 +393,7 @@ function hmac_sha256_text(key: String, message: String) -> [Int]
 function hmac_sha512(key: [Int], message: [Int]) -> [Int]
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L807)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L832)
 
 ### `hmac_sha512_text`
 {: #hmac-sha512-text}
@@ -378,7 +402,7 @@ function hmac_sha512(key: [Int], message: [Int]) -> [Int]
 function hmac_sha512_text(key: String, message: String) -> [Int]
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L842)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L867)
 
 ### `pbkdf2_sha256`
 {: #pbkdf2-sha256}
@@ -387,7 +411,7 @@ function hmac_sha512_text(key: String, message: String) -> [Int]
 function pbkdf2_sha256(password: [Int], salt: [Int], iterations: Int, length: Int) -> [Int]
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L877)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L902)
 
 ### `pbkdf2_sha256_text`
 {: #pbkdf2-sha256-text}
@@ -396,7 +420,7 @@ function pbkdf2_sha256(password: [Int], salt: [Int], iterations: Int, length: In
 function pbkdf2_sha256_text(password: String, salt: String, iterations: Int, length: Int) -> [Int]
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L924)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L949)
 
 
 {% endraw %}

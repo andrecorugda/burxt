@@ -41,6 +41,7 @@
 // ============================================================================
 
 use "deflate.bx";
+use "inflate.bx";
 use "hash.bx";
 use "string.bx";
 
@@ -50,15 +51,30 @@ use "string.bx";
 class ZipEntry {
     name: String,
     bytes: [Int],
+    // **Never compress this one, even when deflate would shrink it.** The caller knows something the
+    // compressor cannot: that a *verifier* has to read this entry. A stored manifest is readable by
+    // anything that can unzip, including a checker with no decompressor at all — so for the two or
+    // three entries somebody else's tooling must parse, storing is better packaging rather than a
+    // concession. star-burxt asked for it to keep its `.vsix` checker honest.
+    stored: Bool,
 }
 
 pure function zip_entry(name: String, bytes: [Int]) -> ZipEntry {
-    return ZipEntry { name: name, bytes: bytes };
+    return ZipEntry { name: name, bytes: bytes, stored: false };
 }
 
 // The common case: a file whose contents are text.
 pure function zip_entry_text(name: String, text: String) -> ZipEntry {
-    return ZipEntry { name: name, bytes: to_bytes(text) };
+    return ZipEntry { name: name, bytes: to_bytes(text), stored: false };
+}
+
+// The same two, for an entry that must stay readable without a decompressor.
+pure function zip_entry_stored(name: String, bytes: [Int]) -> ZipEntry {
+    return ZipEntry { name: name, bytes: bytes, stored: true };
+}
+
+pure function zip_entry_text_stored(name: String, text: String) -> ZipEntry {
+    return ZipEntry { name: name, bytes: to_bytes(text), stored: true };
 }
 
 // ---- little-endian fields ---------------------------------------------------
@@ -154,7 +170,14 @@ function zip_into_method(mutable out: [Int], entries: [ZipEntry], compress: Bool
         // does not cost the text files their compression.
         let mutable payload: [Int] = [];
         let mutable method: Int = 0;
-        if compress {
+        // **`stored` beats `compress`.** An entry that asked to be stored is not attempted at all:
+        // the point is a guarantee a verifier can rely on, not an optimisation that usually happens
+        // to hold. Deflating it and then finding it grew would give the same bytes by accident.
+        let mutable try_deflate: Bool = compress;
+        if entries[i].stored {
+            try_deflate = false;
+        }
+        if try_deflate {
             let mutable squeezed: [Int] = [];
             let _z: Int = deflate_into(squeezed, entries[i].bytes);
             if len(squeezed) < size {
@@ -257,4 +280,199 @@ function zip_write_deflated(path: String, entries: [ZipEntry]) -> Int touches fi
     let mutable bytes: [Int] = [];
     let _built: Int = zip_into_deflated(bytes, entries);
     return write_bytes(path, bytes);
+}
+
+// ============================================================================
+// READING
+// ============================================================================
+//
+// Enough to VERIFY an archive, which is a different job from extracting one. The caller that drove
+// this is a checker asserting things about a `.vsix`: that the manifest's version matches the
+// packaged `package.json`'s, that `extensionKind` is what it claims **in the archive** rather than in
+// the file the archive was built from, that every path the manifest names is present and no test file
+// is, and that every entry carries one identical stamp.
+//
+// **The local header is readable separately, on purpose.** A ZIP stores each entry's metadata twice
+// and a reader may believe either copy; `zipfile` resolves through the central directory and never
+// looks at the local one, which is how zeroing a local CRC left an independent test PASSING here. An
+// oracle reading one copy of duplicated metadata is not an oracle, so `zip_local_at` exists and a
+// verifier can compare.
+
+class ZipRead {
+    name: String,
+    method: Int,
+    crc: Int,
+    size: Int,          // uncompressed
+    packed: Int,        // compressed
+    dos_date: Int,
+    dos_time: Int,
+    at: Int,            // where this entry's LOCAL header begins
+}
+
+pure function zip_at16(archive: [Int], at: Int) -> Int {
+    return archive[at] + archive[at + 1] * 256;
+}
+
+pure function zip_at32(archive: [Int], at: Int) -> Int {
+    return archive[at] + archive[at + 1] * 256 + archive[at + 2] * 65536
+            + archive[at + 3] * 16777216;
+}
+
+// The end-of-central-directory record, found by scanning backwards for its signature. Answers where
+// the directory starts, or -1. Scanned rather than computed because the record may be followed by an
+// archive comment of any length — the one place a ZIP cannot be read forwards.
+pure function zip_directory_at(archive: [Int]) -> Int {
+    if len(archive) < 22 {
+        return 0 - 1;
+    }
+    let mutable at: Int = len(archive) - 22;
+    while at >= 0 {
+        if zip_at32(archive, at) == 101010256 {
+            return at;
+        }
+        at = at - 1;
+    }
+    return 0 - 1;
+}
+
+// Every entry, from the central directory. Answers how many, or **-1 for an archive this module
+// refuses**: no end record, or a directory that walks off the end of the bytes.
+function zip_entries(archive: [Int], mutable into: [ZipRead]) -> Int {
+    let end: Int = zip_directory_at(archive);
+    if end < 0 {
+        return 0 - 1;
+    }
+    let count: Int = zip_at16(archive, end + 10);
+    let mutable at: Int = zip_at32(archive, end + 16);
+    let mutable seen: Int = 0;
+    while seen < count {
+        if at + 46 > len(archive) {
+            return 0 - 1;
+        }
+        if zip_at32(archive, at) != 33639248 {
+            return 0 - 1;
+        }
+        let name_length: Int = zip_at16(archive, at + 28);
+        let extra: Int = zip_at16(archive, at + 30);
+        let comment: Int = zip_at16(archive, at + 32);
+        if at + 46 + name_length > len(archive) {
+            return 0 - 1;
+        }
+        let mutable name_bytes: [Int] = [];
+        let mutable n: Int = 0;
+        while n < name_length {
+            push(name_bytes, archive[at + 46 + n]);
+            n = n + 1;
+        }
+        push(into, ZipRead {
+                name: from_bytes(name_bytes),
+                method: zip_at16(archive, at + 10),
+                crc: zip_at32(archive, at + 16),
+                size: zip_at32(archive, at + 24),
+                packed: zip_at32(archive, at + 20),
+                dos_time: zip_at16(archive, at + 12),
+                dos_date: zip_at16(archive, at + 14),
+                at: zip_at32(archive, at + 42),
+        });
+        at = at + 46 + name_length + extra + comment;
+        seen = seen + 1;
+    }
+    return seen;
+}
+
+// The same entry as its LOCAL header states it, so a verifier can compare the two copies. `at` is the
+// offset the central directory recorded. Answers 1, or -1 if the header is not there.
+function zip_local_at(archive: [Int], at: Int, mutable into: [ZipRead]) -> Int {
+    if at + 30 > len(archive) {
+        return 0 - 1;
+    }
+    if zip_at32(archive, at) != 67324752 {
+        return 0 - 1;
+    }
+    let name_length: Int = zip_at16(archive, at + 26);
+    if at + 30 + name_length > len(archive) {
+        return 0 - 1;
+    }
+    let mutable name_bytes: [Int] = [];
+    let mutable n: Int = 0;
+    while n < name_length {
+        push(name_bytes, archive[at + 30 + n]);
+        n = n + 1;
+    }
+    push(into, ZipRead {
+            name: from_bytes(name_bytes),
+            method: zip_at16(archive, at + 8),
+            crc: zip_at32(archive, at + 14),
+            size: zip_at32(archive, at + 22),
+            packed: zip_at32(archive, at + 18),
+            dos_time: zip_at16(archive, at + 10),
+            dos_date: zip_at16(archive, at + 12),
+            at: at,
+    });
+    return 1;
+}
+
+// One entry's bytes, decompressed if need be and **checked against its own CRC**.
+//
+// **Four refusals, four numbers, deliberately not one.** A checker has to report which, because
+// *"could not read the manifest"* when the truth is *"the manifest's bytes contradict their own
+// checksum"* sends somebody to look for a missing file. Same discipline as `burxt where`'s three
+// absences:
+//
+//     -1   the local header is not where the directory said, or runs off the end
+//     -2   a compression method this module does not implement (not stored, not deflate)
+//     -3   the payload is malformed — a deflate stream that will not inflate, or a short read
+//     -4   the bytes came out, and their CRC-32 does not match what the entry declares
+function zip_content(archive: [Int], entry: ZipRead, mutable into: [Int]) -> Int {
+    let at: Int = entry.at;
+    if at + 30 > len(archive) {
+        return 0 - 1;
+    }
+    if zip_at32(archive, at) != 67324752 {
+        return 0 - 1;
+    }
+    if entry.method != 0 {
+        if entry.method != 8 {
+            return 0 - 2;
+        }
+    }
+    let name_length: Int = zip_at16(archive, at + 26);
+    let extra: Int = zip_at16(archive, at + 28);
+    let from: Int = at + 30 + name_length + extra;
+    // The local header's own packed size, not the directory's — this is the copy that describes the
+    // bytes about to be read, and a disagreement between the two is the caller's finding to make.
+    let packed: Int = zip_at32(archive, at + 18);
+    if from + packed > len(archive) {
+        return 0 - 3;
+    }
+
+    let before: Int = len(into);
+    if entry.method == 0 {
+        let mutable i: Int = 0;
+        while i < packed {
+            push(into, archive[from + i]);
+            i = i + 1;
+        }
+    } else {
+        let mutable payload: [Int] = [];
+        let mutable j: Int = 0;
+        while j < packed {
+            push(payload, archive[from + j]);
+            j = j + 1;
+        }
+        if inflate_into(into, payload, 0) < 0 {
+            return 0 - 3;
+        }
+    }
+
+    let mutable plain: [Int] = [];
+    let mutable k: Int = before;
+    while k < len(into) {
+        push(plain, into[k]);
+        k = k + 1;
+    }
+    if crc32(plain) != entry.crc {
+        return 0 - 4;
+    }
+    return len(plain);
 }

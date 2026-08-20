@@ -139,11 +139,30 @@ def main():
     # Nothing that can say no belongs downstream of a file being created.
     manifest_xml = manifest(pkg)
 
+    # **One fixed stamp on every entry, so packing twice gives identical bytes.** This was NOT here,
+    # and `lib/zip.bx`'s reader found it: the shipped `.vsix` carried **eight distinct timestamps**,
+    # one per file mtime, so the committed artefact was never reproducible and nothing said so.
+    #
+    # `z.write(path, arcname)` takes the stamp from the file, and `z.writestr(str, ...)` takes it from
+    # the clock — so two of the three shapes here moved on every run and the third moved whenever a
+    # source file was touched. A committed archive that cannot be reproduced cannot be checked
+    # against its source.
+    #
+    # **And the check that would have hidden it is packing twice and comparing.** A ZIP stores
+    # timestamps at two-second granularity, so back-to-back packs land in one bucket and agree. The
+    # property has to be asserted of the archive — every entry carrying the SAME stamp — which is
+    # what star-burxt's checker does and what this now satisfies.
+    def entry(name):
+        info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        info.external_attr = 0o644 << 16
+        return info
+
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("[Content_Types].xml", CONTENT_TYPES)
-        z.writestr("extension.vsixmanifest", manifest_xml)
+        z.writestr(entry("[Content_Types].xml"), CONTENT_TYPES)
+        z.writestr(entry("extension.vsixmanifest"), manifest_xml)
         for name in FILES:
-            z.write(HERE / name, f"extension/{name}")
+            z.writestr(entry(f"extension/{name}"), (HERE / name).read_bytes())
 
     print(f"wrote {out.relative_to(HERE.parent.parent)} ({out.stat().st_size} bytes)")
     print("install with:  code --install-extension", out)
