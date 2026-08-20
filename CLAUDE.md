@@ -9,7 +9,7 @@ LLVM 18 development libraries are required, and the bindings need to be pointed 
 ```sh
 export LLVM_SYS_181_PREFIX=/usr/lib/llvm-18     # or $(brew --prefix llvm@18) on macOS
 cargo build                                     # produces ./target/debug/burxt
-cargo test                                      # the gate: ~140 tests, several minutes
+cargo test                                      # the gate. Several minutes; it prints its own count
 ```
 
 ```sh
