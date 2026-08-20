@@ -5830,8 +5830,26 @@ fn the_packaged_extension_matches_the_grammar_in_the_repository() {
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "vsix"))
         .collect();
+    // **This check is developer-local by nature, and it CANNOT run in CI. Do not read a green
+    // branch as evidence it passed.** A `.vsix` is gitignored, CI checks out fresh and never packs,
+    // so every CI run takes this early return.
+    //
+    // I found that by cloning this repository into a temporary directory and running it there —
+    // BMX's technique, and the only thing that distinguishes a complete tree from one leaning on
+    // artefacts a fresh clone lacks. Then I "fixed" it by packing a fresh `.vsix` into a scratch copy
+    // and comparing that. **A control showed the fix was vacuous**: a package built from the tree and
+    // compared against the tree is equal by construction, so the new assertion could not fail —
+    // renaming a scope in the grammar passed with the fix exactly as it passed without it. That is
+    // the shape this suite keeps finding, authored by me this time: *a check that reports the best
+    // possible answer when it measures nothing.*
+    //
+    // So the skip is CORRECT and the scope is the thing that was undocumented. The property here is
+    // *"is the artefact on disk older than the grammar"*, and an artefact that does not exist cannot
+    // be old. Nothing CI can do reaches it: pack before the test and the package is fresh, which is
+    // the tautology again. **What this catches is a stale `.vsix` on the machine of whoever last
+    // packed one** — which is exactly the incident above, a keyword rename with an old package still
+    // installed — and that machine is where it has to run.
     if packages.is_empty() {
-        // Nothing packaged yet is fine — an unbuilt package cannot be stale.
         return;
     }
 
