@@ -86,7 +86,7 @@ GH = "https://github.com/andrecorugda/burxt/blob/main"
 # `lib/` itself, so adding a module to the library and forgetting the site is a failing test.
 MODULES = [
     "option", "result", "decimal", "string", "array", "set", "map", "math", "fn",
-    "json", "csv", "html", "cgi", "encoding", "hash", "secure", "vector",
+    "json", "csv", "html", "cgi", "encoding", "zip", "deflate", "hash", "secure", "vector",
     "files", "path", "os", "net", "http", "tls", "time", "random", "log", "test",
 ]
 

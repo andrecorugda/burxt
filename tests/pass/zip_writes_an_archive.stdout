@@ -1,0 +1,17 @@
+a ZIP written in Burxt, checked against the format
+local signature = 67324752
+method (0 = stored) = 0
+crc of a.txt = 907060870
+compressed size = 5
+uncompressed size = 5
+name length = 5
+extra length = 0
+stored sizes agree = 0
+end signature = 101010256
+entries on this disk = 2
+entries in total = 2
+central signature = 33639248
+central crc matches local = 0
+first entry offset = 0
+dos time = 0
+dos date (1980-01-01) = 33

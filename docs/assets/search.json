@@ -2338,6 +2338,181 @@
   "where": "pure function encoding_base64url_decode_text(text: String) -> Option<String>"
  },
  {
+  "kind": "class",
+  "name": "ZipEntry",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zipentry",
+  "where": "class ZipEntry"
+ },
+ {
+  "kind": "function",
+  "name": "zip_entry",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-entry",
+  "where": "pure function zip_entry(name: String, bytes: [Int]) -> ZipEntry"
+ },
+ {
+  "kind": "function",
+  "name": "zip_entry_text",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-entry-text",
+  "where": "pure function zip_entry_text(name: String, text: String) -> ZipEntry"
+ },
+ {
+  "kind": "function",
+  "name": "zip_le16",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-le16",
+  "where": "function zip_le16(mutable into: [Int], value: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_le32",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-le32",
+  "where": "function zip_le32(mutable into: [Int], value: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_dos_date",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-dos-date",
+  "where": "pure function zip_dos_date() -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_dos_time",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-dos-time",
+  "where": "pure function zip_dos_time() -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_extend",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-extend",
+  "where": "function zip_extend(mutable into: [Int], more: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_into_method",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-into-method",
+  "where": "function zip_into_method(mutable out: [Int], entries: [ZipEntry], compress: Bool) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_into",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-into",
+  "where": "function zip_into(mutable out: [Int], entries: [ZipEntry]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_into_deflated",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-into-deflated",
+  "where": "function zip_into_deflated(mutable out: [Int], entries: [ZipEntry]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "zip_write",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-write",
+  "where": "function zip_write(path: String, entries: [ZipEntry]) -> Int touches files"
+ },
+ {
+  "kind": "function",
+  "name": "zip_write_deflated",
+  "text": "lib/zip.bx",
+  "url": "/reference/zip.html#zip-write-deflated",
+  "where": "function zip_write_deflated(path: String, entries: [ZipEntry]) -> Int touches files"
+ },
+ {
+  "kind": "class",
+  "name": "Deflater",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflater",
+  "where": "class Deflater"
+ },
+ {
+  "kind": "function",
+  "name": "deflate_put_bits",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflate-put-bits",
+  "where": "function deflate_put_bits(mutable state: Deflater, mutable out: [Int], value: Int, count: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "deflate_put_code",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflate-put-code",
+  "where": "function deflate_put_code(mutable state: Deflater, mutable out: [Int], code: Int, count: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "deflate_flush",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflate-flush",
+  "where": "function deflate_flush(mutable state: Deflater, mutable out: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "deflate_put_symbol",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflate-put-symbol",
+  "where": "function deflate_put_symbol(mutable state: Deflater, mutable out: [Int], symbol: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "deflate_fill_tables",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflate-fill-tables",
+  "where": "function deflate_fill_tables(mutable state: Deflater) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "deflate_put_length",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflate-put-length",
+  "where": "function deflate_put_length(mutable state: Deflater, mutable out: [Int], length: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "deflate_put_distance",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflate-put-distance",
+  "where": "function deflate_put_distance(mutable state: Deflater, mutable out: [Int], distance: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "deflate_hash",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflate-hash",
+  "where": "pure function deflate_hash(data: [Int], at: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "deflate_start_hash",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflate-start-hash",
+  "where": "function deflate_start_hash(mutable state: Deflater, count: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "deflate_remember",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflate-remember",
+  "where": "function deflate_remember(mutable state: Deflater, data: [Int], at: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "deflate_into",
+  "text": "lib/deflate.bx",
+  "url": "/reference/deflate.html#deflate-into",
+  "where": "function deflate_into(mutable out: [Int], data: [Int]) -> Int"
+ },
+ {
   "kind": "function",
   "name": "hash_mask_32",
   "text": "lib/hash.bx",

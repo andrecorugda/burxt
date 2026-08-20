@@ -1,0 +1,260 @@
+// ============================================================================
+// lib/zip.bx — write a ZIP archive.
+//
+//     use "lib/zip.bx";
+//
+// ============================================================================
+// WHY THIS EXISTS, AND WHY IT IS STORED-ONLY
+// ============================================================================
+//
+// A `.vsix` is a ZIP. So is a `.jar`, an `.epub`, an `.odt` and every other OPC package. Until this
+// module, the only way to write one in this project was `editors/vscode/pack.py` — and the same was
+// true in star-burxt and in BMX, three Python packers writing the same three record types. The rule
+// this is answering: **if it can be written in Burxt, it must be, and reaching for another language
+// is a gap report rather than a solution.** This was the gap report; this is the close.
+//
+// **Stored, not deflated, and that is a decision rather than a stage.** A packaged extension is a
+// few hundred kilobytes of text that is transferred once and unpacked once, so compression buys a
+// download nobody is waiting on and costs an implementation of DEFLATE — Huffman tables, a sliding
+// window, and a second thing to be wrong about. Every ZIP reader must accept method 0, so a
+// stored-only archive is not a subset anyone has to opt into. If a real case ever needs deflate it
+// is a `zip_write_deflated` beside this, not a flag inside it.
+//
+// **Nothing here computes a checksum.** `crc32` lives in `lib/hash.bx` and agrees with zlib — the
+// pair `crc32(to_bytes("hello")) == 907060870` was checked against `python3 -c "import zlib"`
+// before this file was written. A second CRC-32 in the tree would be a second thing to keep right.
+//
+// ============================================================================
+// WHAT AN ARCHIVE IS
+// ============================================================================
+//
+// Three record types, in this order:
+//
+//     local header + bytes    once per entry, in the order they were given
+//     central directory       once per entry, repeating the metadata and naming the offset
+//     end of central directory
+//
+// The duplication is the format's, not this module's: a reader may scan forward through the local
+// headers or jump to the central directory and read backwards, and the two must agree. A writer
+// that fills one and not the other produces an archive that opens in some tools and not others,
+// which is the failure this module's test exists to catch.
+// ============================================================================
+
+use "deflate.bx";
+use "hash.bx";
+use "string.bx";
+
+// One file in the archive. `bytes` rather than `String` because an archive holds whatever it holds —
+// an icon, a font, a compiled thing — and a text-only door would send every caller through
+// `to_bytes` anyway while implying the contents must be text.
+class ZipEntry {
+    name: String,
+    bytes: [Int],
+}
+
+pure function zip_entry(name: String, bytes: [Int]) -> ZipEntry {
+    return ZipEntry { name: name, bytes: bytes };
+}
+
+// The common case: a file whose contents are text.
+pure function zip_entry_text(name: String, text: String) -> ZipEntry {
+    return ZipEntry { name: name, bytes: to_bytes(text) };
+}
+
+// ---- little-endian fields ---------------------------------------------------
+//
+// Every multi-byte field in a ZIP is little-endian, and the language has no right shift — so the
+// low byte is `bit_and(value, 255)` and the next is taken after `divide_floor(value, 256)`.
+// `divide_floor` rather than `divide_toward_zero` because the two disagree on negatives and only
+// one of them is a shift; the compiler refuses a bare `/` here precisely to make that choice
+// visible, and it caught this being written the lazy way the first time.
+
+// **These fill the caller's array rather than returning one, and the compiler is why.** The first
+// version returned `[Int]` and was refused: *"function `zip_le16` cannot return [Int], because its
+// storage lives in a region and would not outlive it. Fill an array the caller owns, or return a
+// scalar summary."* That is the memory model doing its job, and the shape it forced is better than
+// the one it refused — an archive is built by appending, so every intermediate two-element array
+// was a copy nobody wanted.
+function zip_le16(mutable into: [Int], value: Int) -> Int {
+    push(into, bit_and(value, 255));
+    push(into, bit_and(divide_floor(value, 256), 255));
+    return len(into);
+}
+
+function zip_le32(mutable into: [Int], value: Int) -> Int {
+    push(into, bit_and(value, 255));
+    push(into, bit_and(divide_floor(value, 256), 255));
+    push(into, bit_and(divide_floor(value, 65536), 255));
+    push(into, bit_and(divide_floor(value, 16777216), 255));
+    return len(into);
+}
+
+// ---- the fixed timestamp ----------------------------------------------------
+//
+// **Every entry carries the same stamp, so packing twice gives identical bytes.** This is not
+// tidiness: a committed archive that cannot be reproduced cannot be checked against its source, so
+// a stale one is undetectable and a repack-then-inspect step overwrites the evidence before looking
+// at it. That failure was measured in BMX's packer, where three entries moved on every run.
+//
+// 1980-01-01 is the earliest a DOS date can express: the field is
+// `((year - 1980) << 9) | (month << 5) | day`, so `(0 << 9) | (1 << 5) | 1` is 33, and the time
+// field is zero. A reader shows midnight on that date, which is visibly a placeholder rather than
+// a plausible wrong answer.
+pure function zip_dos_date() -> Int {
+    return 33;
+}
+
+pure function zip_dos_time() -> Int {
+    return 0;
+}
+
+// ---- assembling ------------------------------------------------------------
+
+// Append every element of `more` onto `into`. `push` one at a time, which is what the language
+// gives; the arrays here are a few hundred kilobytes at most and this is linear.
+function zip_extend(mutable into: [Int], more: [Int]) -> Int {
+    let mutable i: Int = 0;
+    while i < len(more) {
+        push(into, more[i]);
+        i += 1;
+    }
+    return len(into);
+}
+
+// The archive, appended to an array the CALLER owns — same reason as the encoders above, and the
+// same refusal if it tried to return one. Separate from writing so a caller can hand the bytes to
+// something that is not a file, and so a test can check them without a path.
+// **Two doors, one implementation.** `compress` decides method 8 or method 0, and the per-entry
+// fallback below means the deflated door can never produce a larger archive than the stored one —
+// so `zip_write_deflated` is safe to reach for without knowing what is in the entries.
+function zip_into_method(mutable out: [Int], entries: [ZipEntry], compress: Bool) -> Int {
+    let mutable offsets: [Int] = [];
+    let mutable sums: [Int] = [];
+    let mutable methods: [Int] = [];
+    let mutable stored_sizes: [Int] = [];
+
+    // Pass one: a local header and the bytes, per entry, recording where each header began and
+    // what its checksum was. Both are needed again by the central directory, and recomputing a
+    // CRC there would be a second answer to the same question.
+    let mutable i: Int = 0;
+    while i < len(entries) {
+        push(offsets, len(out));
+        let name: [Int] = to_bytes(entries[i].name);
+        let size: Int = len(entries[i].bytes);
+        let sum: Int = crc32(entries[i].bytes);
+        push(sums, sum);
+
+        // **The checksum is always of the ORIGINAL bytes**, never of the compressed payload — a
+        // reader verifies what it decompressed, so a CRC over the stream would fail on every entry
+        // while looking like a corrupt file rather than a writer bug.
+        //
+        // Deflate, then keep it only if it actually helped. An already-compressed entry — a PNG, a
+        // font — grows under deflate, and an archive that is bigger for having tried is a worse
+        // archive. Falling back per entry rather than per archive means one incompressible icon
+        // does not cost the text files their compression.
+        let mutable payload: [Int] = [];
+        let mutable method: Int = 0;
+        if compress {
+            let mutable squeezed: [Int] = [];
+            let _z: Int = deflate_into(squeezed, entries[i].bytes);
+            if len(squeezed) < size {
+                method = 8;
+                let mutable c: Int = 0;
+                while c < len(squeezed) {
+                    push(payload, squeezed[c]);
+                    c = c + 1;
+                }
+            }
+        }
+        if method == 0 {
+            let mutable c: Int = 0;
+            while c < size {
+                push(payload, entries[i].bytes[c]);
+                c = c + 1;
+            }
+        }
+        push(methods, method);
+        push(stored_sizes, len(payload));
+
+        let _h0: Int = zip_le32(out, 67324752);        // 0x04034b50, local header
+        let _h1: Int = zip_le16(out, 20);              // version needed: 2.0
+        let _h2: Int = zip_le16(out, 0);               // no flags
+        let _h3: Int = zip_le16(out, method);          // 0 stored, 8 deflated
+        let _h4: Int = zip_le16(out, zip_dos_time());
+        let _h5: Int = zip_le16(out, zip_dos_date());
+        let _h6: Int = zip_le32(out, sum);
+        let _h7: Int = zip_le32(out, len(payload));    // compressed
+        let _h8: Int = zip_le32(out, size);            // uncompressed
+        let _h9: Int = zip_le16(out, len(name));
+        let _ha: Int = zip_le16(out, 0);               // no extra field
+        let _hb: Int = zip_extend(out, name);
+        let _hc: Int = zip_extend(out, payload);
+        i += 1;
+    }
+
+    // Pass two: the central directory, which repeats the metadata and names the offset.
+    let directory_at: Int = len(out);
+    let mutable j: Int = 0;
+    while j < len(entries) {
+        let name: [Int] = to_bytes(entries[j].name);
+        let size: Int = len(entries[j].bytes);
+
+        let _c0: Int = zip_le32(out, 33639248);        // 0x02014b50, central header
+        let _c1: Int = zip_le16(out, 20);              // version made by
+        let _c2: Int = zip_le16(out, 20);              // version needed
+        let _c3: Int = zip_le16(out, 0);               // no flags
+        let _c4: Int = zip_le16(out, methods[j]);      // matches the local header
+        let _c5: Int = zip_le16(out, zip_dos_time());
+        let _c6: Int = zip_le16(out, zip_dos_date());
+        let _c7: Int = zip_le32(out, sums[j]);
+        let _c8: Int = zip_le32(out, stored_sizes[j]);   // compressed
+        let _c9: Int = zip_le32(out, size);              // uncompressed
+        let _ca: Int = zip_le16(out, len(name));
+        let _cb: Int = zip_le16(out, 0);               // no extra field
+        let _cc: Int = zip_le16(out, 0);               // no comment
+        let _cd: Int = zip_le16(out, 0);               // disk 0
+        let _ce: Int = zip_le16(out, 0);               // internal attributes
+        let _cf: Int = zip_le32(out, 0);               // external attributes
+        let _cg: Int = zip_le32(out, offsets[j]);
+        let _ch: Int = zip_extend(out, name);
+        j += 1;
+    }
+    let directory_size: Int = len(out) - directory_at;
+
+    // The end record, which is how a reader finds the directory at all.
+    let _e0: Int = zip_le32(out, 101010256);           // 0x06054b50
+    let _e1: Int = zip_le16(out, 0);                   // this disk
+    let _e2: Int = zip_le16(out, 0);                   // disk with the directory
+    let _e3: Int = zip_le16(out, len(entries));        // entries on this disk
+    let _e4: Int = zip_le16(out, len(entries));        // entries in total
+    let _e5: Int = zip_le32(out, directory_size);
+    let _e6: Int = zip_le32(out, directory_at);
+    let _e7: Int = zip_le16(out, 0);                   // no archive comment
+    return len(out);
+}
+
+// Write the archive, answering how many bytes went out — the same shape as `write_bytes`, which is
+// what it ends in.
+function zip_into(mutable out: [Int], entries: [ZipEntry]) -> Int {
+    return zip_into_method(out, entries, false);
+}
+
+// Method 8 per entry, falling back to stored for anything deflate does not shrink.
+function zip_into_deflated(mutable out: [Int], entries: [ZipEntry]) -> Int {
+    return zip_into_method(out, entries, true);
+}
+
+function zip_write(path: String, entries: [ZipEntry]) -> Int touches files {
+    let mutable bytes: [Int] = [];
+    let _built: Int = zip_into(bytes, entries);
+    return write_bytes(path, bytes);
+}
+
+// **The one to reach for when the archive is downloaded.** Storing this project's extension payload
+// instead of deflating it took one `.vsix` from 39,770 to about 73,088 bytes, which is why
+// `lib/deflate.bx` exists at all.
+function zip_write_deflated(path: String, entries: [ZipEntry]) -> Int touches files {
+    let mutable bytes: [Int] = [];
+    let _built: Int = zip_into_deflated(bytes, entries);
+    return write_bytes(path, bytes);
+}

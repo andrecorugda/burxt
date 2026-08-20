@@ -28,6 +28,8 @@ Everything the language has. **Read out of the compiler**, not from memory: the 
 <li><a href="html.html"><span><code>lib/html.bx</code></span> <span class="what">HTML as a typed tree, escaped at the one point it leaves</span></a></li>
 <li><a href="cgi.html"><span><code>lib/cgi.bx</code></span> <span class="what">the request in, the response out, over the interface every web server has</span></a></li>
 <li><a href="encoding.html"><span><code>lib/encoding.bx</code></span> <span class="what">hex, base64 and base64url, and every decoder REFUSES rather than guesses</span></a></li>
+<li><a href="zip.html"><span><code>lib/zip.bx</code></span> <span class="what">write a ZIP archive</span></a></li>
+<li><a href="deflate.html"><span><code>lib/deflate.bx</code></span> <span class="what">DEFLATE compression, RFC 1951</span></a></li>
 <li><a href="hash.html"><span><code>lib/hash.bx</code></span> <span class="what">hashes and checksums</span></a></li>
 <li><a href="secure.html"><span><code>lib/secure.bx</code></span> <span class="what">bytes nobody can predict, and a comparison that does not leak</span></a></li>
 <li><a href="vector.html"><span><code>lib/vector.bx</code></span> <span class="what">vector similarity, EXACTLY</span></a></li>

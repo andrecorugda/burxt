@@ -5950,6 +5950,258 @@ fn the_documented_install_command_names_the_file_pack_py_writes() {
     }
 }
 
+/// **A deflate stream written in Burxt must inflate, in a decompressor that never heard of Burxt.**
+///
+/// `lib/deflate.bx` cannot check itself: this project has no inflater yet, so the only honest
+/// verification is an independent one. `zlib.decompress(stream, -15)` reads a raw deflate stream —
+/// negative window bits meaning "no zlib header, no trailing checksum", which is exactly what a ZIP
+/// entry of method 8 holds.
+///
+/// **The corpus is `lib/` itself plus the cases a corpus cannot contain.** Source files exercise the
+/// ordinary path; empty input, one byte, two bytes (no match is possible in three), a 5,000-byte run
+/// (lengths hit the 258 ceiling), every byte value (both literal code widths), and an input larger
+/// than the 32 KB window whose only repeat sits at the far edge of it are all cases a compressor can
+/// fail on while handling real text perfectly.
+///
+/// **A wrong bit order here corrupts rather than errors.** RFC 1951 packs data elements least
+/// significant bit first and Huffman codes most significant bit first, in the same stream — so a
+/// compressor that uses one order for both produces something that inflates to garbage, or inflates
+/// fine and differs in the middle. Comparing lengths would pass. This compares bytes.
+#[test]
+fn a_burxt_deflate_stream_inflates_in_zlib() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = std::env::temp_dir().join(format!("burxt-deflate-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).unwrap();
+
+    let program = scratch.join("squeeze.bx");
+    fs::write(
+        &program,
+        format!(
+            "use \"{}\";\n\
+             use \"{}\";\n\
+             use \"{}\";\n\
+             \n\
+             function squeeze(name: String, data: [Int]) -> Int touches files {{\n\
+             \x20   let mutable stream: [Int] = [];\n\
+             \x20   let n: Int = deflate_into(stream, data);\n\
+             \x20   let _a: Int = write_bytes(name + \".raw\", data);\n\
+             \x20   let _b: Int = write_bytes(name + \".z\", stream);\n\
+             \x20   return n;\n\
+             }}\n\
+             \n\
+             region r {{\n\
+             \x20   let into: String = \"{}\";\n\
+             \x20   let _e0: Int = squeeze(into + \"/empty\", []);\n\
+             \x20   let _e1: Int = squeeze(into + \"/one\", [65]);\n\
+             \x20   let _e2: Int = squeeze(into + \"/two\", [65, 66]);\n\
+             \x20   let mutable run: [Int] = [];\n\
+             \x20   let mutable i: Int = 0;\n\
+             \x20   while i < 5000 {{ push(run, 97); i = i + 1; }}\n\
+             \x20   let _e3: Int = squeeze(into + \"/run\", run);\n\
+             \x20   let mutable all: [Int] = [];\n\
+             \x20   let mutable b: Int = 0;\n\
+             \x20   while b < 256 {{ push(all, b); b = b + 1; }}\n\
+             \x20   let _e4: Int = squeeze(into + \"/allbytes\", all);\n\
+             \x20   let mutable far: [Int] = [];\n\
+             \x20   let mutable j: Int = 0;\n\
+             \x20   while j < 8 {{ push(far, 88); j = j + 1; }}\n\
+             \x20   let mutable k: Int = 0;\n\
+             \x20   while k < 32768 {{ push(far, remainder(k, 251)); k = k + 1; }}\n\
+             \x20   let mutable m: Int = 0;\n\
+             \x20   while m < 8 {{ push(far, 88); m = m + 1; }}\n\
+             \x20   let _e5: Int = squeeze(into + \"/faredge\", far);\n\
+             \x20   match file_walk(\"{}\") {{\n\
+             \x20       Some(paths) => {{\n\
+             \x20           let mutable p: Int = 0;\n\
+             \x20           while p < len(paths) {{\n\
+             \x20               match file_read_bytes(paths[p]) {{\n\
+             \x20                   Some(data) => {{\n\
+             \x20                       let _c: Int = squeeze(into + \"/lib\" + to_string(p), data);\n\
+             \x20                   }}\n\
+             \x20                   None => {{ print(\"unreadable\"); }}\n\
+             \x20               }}\n\
+             \x20               p = p + 1;\n\
+             \x20           }}\n\
+             \x20       }}\n\
+             \x20       None => {{ print(\"cannot walk\"); }}\n\
+             \x20   }}\n\
+             \x20   print(\"done\");\n\
+             }}\n",
+            root.join("lib/deflate.bx").display(),
+            root.join("lib/files.bx").display(),
+            root.join("lib/string.bx").display(),
+            scratch.display(),
+            root.join("lib").display(),
+        ),
+    )
+    .unwrap();
+
+    let run = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(&program)
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt run");
+    assert!(
+        run.status.success(),
+        "the compressor did not run: {}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let checked = Command::new("python3")
+        .arg("-c")
+        .arg(
+            "import sys, glob, os, zlib\n\
+             into = sys.argv[1]\n\
+             streams = sorted(glob.glob(os.path.join(into, '*.z')))\n\
+             assert len(streams) >= 30, f'only {len(streams)} streams — the corpus did not run'\n\
+             for s in streams:\n\
+             \x20   raw = open(s[:-2] + '.raw', 'rb').read()\n\
+             \x20   got = zlib.decompress(open(s, 'rb').read(), -15)\n\
+             \x20   assert got == raw, f'{os.path.basename(s)}: {len(got)} bytes out, {len(raw)} in'\n\
+             print(len(streams))\n",
+        )
+        .arg(&scratch)
+        .output()
+        .expect("python3");
+    let said = String::from_utf8_lossy(&checked.stdout).trim().to_string();
+    let complaint = String::from_utf8_lossy(&checked.stderr).to_string();
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        checked.status.success(),
+        "zlib could not inflate what lib/deflate.bx wrote:\n{}{}",
+        said,
+        complaint
+    );
+    let count: usize = said.parse().unwrap_or(0);
+    assert!(count >= 30, "expected the whole corpus, checked {}", count);
+}
+
+/// **A ZIP written in Burxt must open in a reader that has never heard of Burxt.**
+///
+/// `tests/pass/zip_writes_an_archive.bx` checks every field against the offsets the specification
+/// names, which proves the bytes are where they belong. It cannot prove a stranger can open the
+/// archive — a writer can be self-consistently wrong, and the format deliberately duplicates its
+/// metadata precisely because readers disagree about which copy to trust.
+///
+/// So this hands the same archive to Python's `zipfile`, whose `testzip()` verifies every CRC
+/// against the bytes it actually decompressed. Python is used here for the same reason
+/// `the_packaged_extension_matches_the_grammar_in_the_repository` uses it: reading a zip without
+/// depending on a crate, from a runtime every machine running this suite already has. **It is the
+/// oracle, not the implementation** — the writer under test is `lib/zip.bx` and nothing else.
+#[test]
+fn a_burxt_written_zip_opens_in_another_reader() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = std::env::temp_dir().join(format!("burxt-zip-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).unwrap();
+
+    // Binary content on purpose: a NUL, a high byte, and a CR — the three bytes a writer that
+    // treats an archive as text corrupts, and none of which a text-only fixture would notice.
+    let program = scratch.join("write.bx");
+    fs::write(
+        &program,
+        format!(
+            "use \"{}\";\n\
+             \n\
+             region r {{\n\
+             \x20   let entries: [ZipEntry] = [\n\
+             \x20       zip_entry_text(\"greeting.txt\", \"hello, world!\\n\"),\n\
+             \x20       zip_entry(\"raw.bin\", [0, 255, 13, 10, 65]),\n\
+             \x20       zip_entry_text(\"nested/deep/file.txt\", \"deep\"),\n\
+             \x20       zip_entry_text(\"repeats.txt\", \"the same line over and over. the same line over and over. the same line over and over. the same line over and over.\"),\n\
+             \x20   ];\n\
+             \x20   let wrote: Int = zip_write(\"{}\", entries);\n\
+             \x20   let squeezed: Int = zip_write_deflated(\"{}\", entries);\n\
+             \x20   print(to_string(wrote) + \" \" + to_string(squeezed));\n\
+             }}\n",
+            root.join("lib/zip.bx").display(),
+            scratch.join("made.zip").display(),
+            scratch.join("squeezed.zip").display()
+        ),
+    )
+    .unwrap();
+
+    let run = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(&program)
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt run");
+    assert!(
+        run.status.success(),
+        "the writer did not run: {}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let checked = Command::new("python3")
+        .arg("-c")
+        .arg(
+            "import sys, zipfile\n\
+             z = zipfile.ZipFile(sys.argv[1])\n\
+             assert z.testzip() is None, 'a CRC did not match its bytes'\n\
+             assert z.read('greeting.txt') == b'hello, world!\\n', z.read('greeting.txt')\n\
+             assert z.read('raw.bin') == bytes([0, 255, 13, 10, 65]), list(z.read('raw.bin'))\n\
+             assert z.read('nested/deep/file.txt') == b'deep'\n\
+             names = sorted(i.filename for i in z.infolist())\n\
+             assert names == ['greeting.txt', 'nested/deep/file.txt', 'raw.bin', 'repeats.txt'], names\n\
+             # Stored, and stamped identically, so two packs of the same input are one answer.\n\
+             for i in z.infolist():\n\
+             \x20   assert i.compress_type == 0, i.compress_type\n\
+             \x20   assert i.date_time == (1980, 1, 1, 0, 0, 0), i.date_time\n\
+             # **The LOCAL header copy, which zipfile never reads.** It resolves entries through\n\
+             # the central directory, so a wrong CRC in a local header is invisible to testzip() —\n\
+             # measured, by zeroing one and watching this test pass. A reader that streams forward\n\
+             # instead of seeking to the directory would reject the archive, so the check that says\n\
+             # 'a stranger can open this' has to read the copy a streaming stranger would.\n\
+             raw = open(sys.argv[1], 'rb').read()\n\
+             import struct\n\
+             for i in z.infolist():\n\
+             \x20   at = i.header_offset\n\
+             \x20   assert raw[at:at + 4] == b'PK\\x03\\x04', raw[at:at + 4]\n\
+             \x20   local_crc, = struct.unpack('<I', raw[at + 14:at + 18])\n\
+             \x20   assert local_crc == i.CRC, (i.filename, local_crc, i.CRC)\n\
+             \x20   lo, hi = struct.unpack('<II', raw[at + 18:at + 26])\n\
+             \x20   assert lo == hi == i.file_size, (i.filename, lo, hi, i.file_size)\n\
+             # **The deflated door, same entries.** It must hold the same contents, declare method 8\n\
+             # where deflate helped, and never be larger than the stored archive — the per-entry\n\
+             # fallback exists so an incompressible icon cannot make an archive worse.\n\
+             d = zipfile.ZipFile(sys.argv[2])\n\
+             assert d.testzip() is None, 'a CRC did not match in the deflated archive'\n\
+             for name in ('greeting.txt', 'raw.bin', 'nested/deep/file.txt', 'repeats.txt'):\n\
+             \x20   assert d.read(name) == z.read(name), name\n\
+             assert any(i.compress_type == 8 for i in d.infolist()), 'nothing was deflated at all'\n\
+             assert all(i.compress_type in (0, 8) for i in d.infolist())\n\
+             assert all(i.compress_size <= i.file_size for i in d.infolist()), 'an entry grew'\n\
+             import os\n\
+             assert os.path.getsize(sys.argv[2]) <= os.path.getsize(sys.argv[1])\n\
+             raw2 = open(sys.argv[2], 'rb').read()\n\
+             for i in d.infolist():\n\
+             \x20   at = i.header_offset\n\
+             \x20   lm, = struct.unpack('<H', raw2[at + 8:at + 10])\n\
+             \x20   lcs, = struct.unpack('<I', raw2[at + 18:at + 22])\n\
+             \x20   assert lm == i.compress_type, (i.filename, lm, i.compress_type)\n\
+             \x20   assert lcs == i.compress_size, (i.filename, lcs, i.compress_size)\n\
+             print('ok')\n",
+        )
+        .arg(scratch.join("made.zip"))
+        .arg(scratch.join("squeezed.zip"))
+        .output()
+        .expect("python3");
+    let said = String::from_utf8_lossy(&checked.stdout).trim().to_string();
+    let complaint = String::from_utf8_lossy(&checked.stderr).to_string();
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        checked.status.success() && said == "ok",
+        "an independent reader refused the archive lib/zip.bx wrote:\n{}{}",
+        said,
+        complaint
+    );
+}
+
 /// **`burxt where` must name the file the build actually reads.**
 ///
 /// star-burxt reads `.sbmx` files itself, so this compiler never sees them; to publish a reusable

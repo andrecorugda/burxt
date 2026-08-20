@@ -1,0 +1,84 @@
+// lib/zip.bx — a ZIP archive, written in Burxt, checked field by field against the format.
+//
+// **This exists because three repositories were each writing a `.vsix` in Python.** A `.vsix` is a
+// ZIP; so is a `.jar`, an `.epub` and every OPC package. The rule being answered is *if it can be
+// written in Burxt, it must be, and reaching for another language is a gap report rather than a
+// solution* — so the gap was a ZIP writer, and this is the fixture that says it works.
+//
+// **Why the assertions are offsets and not a byte count.** A length is one number and almost every
+// wrong archive has a plausible one; the failures that actually happen are a field in the wrong
+// place, a checksum in the local header disagreeing with the one in the central directory, or an
+// offset that points a reader at nothing. So this reads the bytes back at the offsets the
+// specification names, and compares the two copies of the metadata the format deliberately
+// duplicates — which is the one thing a writer can get wrong in a way no reader notices until a
+// different reader tries.
+//
+// The independent half is `a_burxt_written_zip_opens_in_another_reader` in `tests/runner.rs`: it
+// hands the same archive to Python's `zipfile`, which verifies every CRC. Both directions matter —
+// this one proves the bytes are where the format says, that one proves a stranger can open it.
+use "../../lib/zip.bx";
+
+// A field read back out of the archive, little-endian, so the check reads like the spec.
+pure function at16(bytes: [Int], at: Int) -> Int {
+    return bytes[at] + bytes[at + 1] * 256;
+}
+
+pure function at32(bytes: [Int], at: Int) -> Int {
+    return bytes[at] + bytes[at + 1] * 256 + bytes[at + 2] * 65536 + bytes[at + 3] * 16777216;
+}
+
+function claim(label: String, actual: Int, expected: Int) -> Bool {
+    if actual == expected {
+        print(label + " = " + to_string(actual));
+        return true;
+    }
+    print(label + " MISMATCH: expected " + to_string(expected) + ", got " + to_string(actual));
+    return false;
+}
+
+region r {
+    let mutable archive: [Int] = [];
+    let entries: [ZipEntry] = [
+        zip_entry_text("a.txt", "hello"),
+        zip_entry("raw.bin", [0, 255, 10]),
+    ];
+    let total: Int = zip_into(archive, entries);
+
+    print("a ZIP written in Burxt, checked against the format");
+
+    // The local header of the first entry sits at offset 0.
+    let _1: Bool = claim("local signature", at32(archive, 0), 67324752);
+    let _2: Bool = claim("method (0 = stored)", at16(archive, 8), 0);
+    // "hello" — the value CRC-32/ISO-HDLC publishes for this input is 0x3610A686.
+    let _3: Bool = claim("crc of a.txt", at32(archive, 14), 907060870);
+    let _4: Bool = claim("compressed size", at32(archive, 18), 5);
+    let _5: Bool = claim("uncompressed size", at32(archive, 22), 5);
+    let _6: Bool = claim("name length", at16(archive, 26), 5);
+    let _7: Bool = claim("extra length", at16(archive, 28), 0);
+    // Stored means the two sizes agree, which is the one invariant a reader trusts without checking.
+    let _8: Bool = claim("stored sizes agree", at32(archive, 18) - at32(archive, 22), 0);
+
+    // The end-of-central-directory record is the last 22 bytes, and it is how a reader finds
+    // anything at all. Its entry count must match what was asked for, or a reader stops early.
+    let end: Int = total - 22;
+    let _9: Bool = claim("end signature", at32(archive, end), 101010256);
+    let _10: Bool = claim("entries on this disk", at16(archive, end + 8), 2);
+    let _11: Bool = claim("entries in total", at16(archive, end + 10), 2);
+
+    // **The duplication check.** The central directory repeats each entry's checksum, and a writer
+    // that fills one copy and not the other produces an archive that opens in some tools and not
+    // others. The first central header begins where the directory does.
+    let directory_at: Int = at32(archive, end + 16);
+    let _12: Bool = claim("central signature", at32(archive, directory_at), 33639248);
+    let _13: Bool = claim(
+        "central crc matches local",
+        at32(archive, directory_at + 16) - at32(archive, 14),
+        0
+    );
+    // And the offset it records for the first entry must be 0, where the first local header is.
+    let _14: Bool = claim("first entry offset", at32(archive, directory_at + 42), 0);
+
+    // The archive must be reproducible: every stamp fixed, so packing twice gives one answer.
+    let _15: Bool = claim("dos time", at16(archive, 10), 0);
+    let _16: Bool = claim("dos date (1980-01-01)", at16(archive, 12), 33);
+}
