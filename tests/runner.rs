@@ -5923,6 +5923,19 @@ fn the_documented_install_command_names_the_file_pack_py_writes() {
         // `burxt` — which is also what catches a `burxt-*.vsix` glob, the shape that stopped matching
         // the moment the version left the name.
         for token in text.split(|c: char| c.is_whitespace() || c == '`' || c == '"') {
+            // **Trimmed, because a split accepts whatever is there — punctuation included.**
+            // Splitting on delimiters beats a character class on placeholders: `[\w.-]` cannot
+            // match `burxt-<version>.vsix` at all, and BMX had a stale promise on a real install
+            // line that two of their checks could not see for exactly that reason. But the mirror
+            // hole is this one, and it was live here until it was measured: `burxt-0.1.3.vsix.`
+            // ending a sentence, and `(burxt-0.1.3.vsix)` in parentheses, both walked straight
+            // past `ends_with(".vsix")` and this test stayed green on a stale name.
+            //
+            // A class misses what it did not enumerate; a split accepts what it should not. Both
+            // want a trim, and the trim is the cheap half.
+            let token = token.trim_matches(|c: char| {
+                matches!(c, '(' | ')' | '[' | ']' | ',' | ';' | ':' | '!' | '?' | '.' | '\'')
+            });
             if !token.ends_with(".vsix") || !token.contains("burxt") {
                 continue;
             }
