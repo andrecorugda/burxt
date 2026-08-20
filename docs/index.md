@@ -262,7 +262,16 @@ The work you stop doing is checking for the mistakes on this page.
 </div>
 
 <p style="font-size:14px; margin-top:2.5rem;">
-<strong>Burxt 1.5.0 is released.</strong> Burxt writes its own packages now.
+<strong>Burxt 1.6.0 is released.</strong> Every tool in this repository is written in Burxt now —
+the site generators, the reference, the packer, the icon deriver and the release script.
+<strong>2,131 lines of Python became 130</strong>, and those 130 are a point-of-sale program written
+in Python <em>on purpose</em>, beside the Burxt one, so a reader can compare them.
+<code>lib/inflate.bx</code> reads DEFLATE and zlib, so a Burxt program opens a <code>.vsix</code> or
+a PNG's IDAT; the icon deriver decodes PNG, resamples and re-encodes in the language.
+</p>
+
+<p style="font-size:14px;">
+<strong>1.5.0.</strong> Burxt writes its own packages now.
 <code>lib/zip.bx</code> writes a ZIP — which is what a <code>.vsix</code>, a <code>.jar</code> and
 every OPC package is — and <code>lib/deflate.bx</code> compresses it, RFC 1951 fixed Huffman over a
 32&nbsp;KB window. Both are checked by decompressors that never heard of Burxt: zlib inflates every

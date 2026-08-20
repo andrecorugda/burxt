@@ -76,9 +76,17 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 - **Composition-first OOP** — small interfaces, explicit `implement Trait for Type` conformance, static dispatch by default and runtime dispatch only where you write `dynamic`.
 - **Native, cross-platform by design** — one LLVM backend, many targets: desktop, mobile, and web (WebAssembly). The front end knows nothing about any platform, so reach is a configuration problem rather than a rewrite.
 
-## Status — 1.5.0
+## Status — 1.6.0
 
-**Released.** 1.5 is the release that stops Python writing Burxt's own packages. A `.vsix` is a ZIP,
+**Released.** 1.6 is the release where every tool in this repository is written in Burxt. The
+generators, the refusals page, the reference, the packer, the icon deriver and the release script
+are all `.bx` — 2,131 lines of Python became 130, and the 130 that remain are
+[`examples/pos-python/`](examples/pos-python/), which exists to be compared against the Burxt
+program beside it. `lib/inflate.bx` reads DEFLATE and zlib streams, so a Burxt program can open a
+`.vsix` or a PNG; `adler32` joins `crc32` in `lib/hash.bx`; and `burxt run x.bx -- args` passes
+arguments to the program rather than the linker.
+
+1.5 is the release that stops Python writing Burxt's own packages. A `.vsix` is a ZIP,
 and three repositories each had a Python packer for one; `lib/zip.bx` writes the archive and
 `lib/deflate.bx` compresses it, both verified by decompressors that have never heard of Burxt —
 zlib inflates every stream byte-exact, and `unzip -t` accepts the archives. The rule being answered
