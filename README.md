@@ -76,9 +76,16 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 - **Composition-first OOP** — small interfaces, explicit `implement Trait for Type` conformance, static dispatch by default and runtime dispatch only where you write `dynamic`.
 - **Native, cross-platform by design** — one LLVM backend, many targets: desktop, mobile, and web (WebAssembly). The front end knows nothing about any platform, so reach is a configuration problem rather than a rewrite.
 
-## Status — 1.4.0
+## Status — 1.5.0
 
-**Released.** 1.4 is the release that lets a Burxt program answer a request and make one.
+**Released.** 1.5 is the release that stops Python writing Burxt's own packages. A `.vsix` is a ZIP,
+and three repositories each had a Python packer for one; `lib/zip.bx` writes the archive and
+`lib/deflate.bx` compresses it, both verified by decompressors that have never heard of Burxt —
+zlib inflates every stream byte-exact, and `unzip -t` accepts the archives. The rule being answered
+is that if something can be written in Burxt it must be, and reaching for another language is a gap
+report rather than a solution.
+
+1.4 is the release that lets a Burxt program answer a request and make one.
 `lib/http.bx` parses a request into an `HttpRequest` and renders an `HttpResponse` over the sockets
 that already existed — a method, a path, a decoded query, headers, a body — and `lib/tls.bx` binds
 OpenSSL so a client can fetch over verified HTTPS. Neither needed a compiler change; what was

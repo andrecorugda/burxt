@@ -585,7 +585,7 @@ function is_subcommand(word: String) -> Bool {
 // this string against `Cargo.toml`, which is the only thing that can catch a duplicated fact
 // diverging: not more care at the bump, but a test that fails when the two disagree.
 function usage() -> Int {
-    print_error("burxt 1.4.0 — the Burxt compiler, written in Burxt");
+    print_error("burxt 1.5.0 — the Burxt compiler, written in Burxt");
     print_error("usage:");
     print_error("  burxt check   <file.bx>                  parse and typecheck only");
     print_error("                <file.bx> --json         ... as JSON, for editors and CI");
@@ -617,7 +617,7 @@ if argument_count() > 1 {
 }
 
 if command == "--version" || command == "-V" {
-    print_error("burxt 1.4.0 — the Burxt compiler, written in Burxt");
+    print_error("burxt 1.5.0 — the Burxt compiler, written in Burxt");
     exit(0);
 }
 

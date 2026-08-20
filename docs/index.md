@@ -262,7 +262,16 @@ The work you stop doing is checking for the mistakes on this page.
 </div>
 
 <p style="font-size:14px; margin-top:2.5rem;">
-<strong>Burxt 1.4.0 is released.</strong> A Burxt program can now answer an HTTP request and make
+<strong>Burxt 1.5.0 is released.</strong> Burxt writes its own packages now.
+<code>lib/zip.bx</code> writes a ZIP — which is what a <code>.vsix</code>, a <code>.jar</code> and
+every OPC package is — and <code>lib/deflate.bx</code> compresses it, RFC 1951 fixed Huffman over a
+32&nbsp;KB window. Both are checked by decompressors that never heard of Burxt: zlib inflates every
+stream byte-exact, <code>unzip -t</code> accepts the archives. Three Python packers across three
+repositories were the gap report; this is the close.
+</p>
+
+<p style="font-size:14px;">
+<strong>1.4.0.</strong> A Burxt program can answer an HTTP request and make
 one. <code>lib/http.bx</code> parses a request into a typed <code>HttpRequest</code> — a method, a
 path, a decoded query, headers, a body — over the sockets that already existed, and
 <code>lib/tls.bx</code> binds OpenSSL so a client fetches over <em>verified</em> HTTPS: the chain,
