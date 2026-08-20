@@ -109,7 +109,7 @@ These fail `cargo test` and surprise people:
 - **No stray binary in the repository root** — `burxt run` writes the executable into the working
   directory, so run one-off programs from `/tmp`.
 - **The packaged `.vsix` must match the grammar in the tree**, and every documented install command
-  must name the file `pack.py` actually writes.
+  must name the file the packer actually writes.
 
 ## Standard library and `std/` resolution
 
@@ -124,12 +124,12 @@ closed — `name`, `version`, `dependency`, and nothing else.
 
 ## Editor extension
 
-`editors/vscode/`, packaged by `python3 editors/vscode/pack.py` — a `.vsix` writer in the Python
-standard library, no npm and no `vsce`. It writes `burxt.vsix`, with **no version in the filename**
-deliberately; the version lives in `package.json` where VS Code reads it. After touching the grammar,
+`editors/vscode/`, packaged by `burxt run editors/vscode/pack.bx` — **a `.vsix` writer in Burxt**, on
+`lib/zip.bx` and `lib/deflate.bx`, with no npm, no `vsce` and no Python. It writes `burxt.vsix`,
+with **no version in the filename** deliberately; the version lives in `package.json` where VS Code reads it. After touching the grammar,
 repack and bump that version — an installed extension will not upgrade to the same number.
 
-The extension spawns the compiler, so `extensionKind` must be `["workspace"]`; `pack.py` refuses to
+The extension spawns the compiler, so `extensionKind` must be `["workspace"]`; the packer refuses to
 build a package whose manifest omits it rather than defaulting. Its `FILES` list is authored rather
 than globbed, so a new asset must be added there *and* to `package.json`.
 

@@ -227,7 +227,7 @@ fn compile_main() {
         eprintln!("  burxt where   <import>                   where a package import lands on disk");
         eprintln!("  burxt build   <file.bx> [link args...]   compile to a native executable");
         eprintln!("                <file.bx> --target <triple> ... an object for another machine");
-        eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
+        eprintln!("  burxt run     <file.bx> [link args] [-- program args]   compile then run");
         eprintln!("  burxt emit-ir <file.bx> [--target ...]   print LLVM IR");
         eprintln!("  burxt fmt     <file.bx>...               set indentation, in place");
         eprintln!("                <file.bx>... --check     ... change nothing; exit 1 if it would");
@@ -502,9 +502,26 @@ fn compile_main() {
     let mut debug_info = false;
     let mut optimise = true;
     let mut link_args: Vec<String> = Vec::new();
+    // **Everything after `--` belongs to the PROGRAM, not to the linker.**
+    //
+    // Without this there was no way to hand `burxt run` an argument at all: every unrecognised word
+    // became a link argument, so `burxt run prog.bx x` sent `x` to `cc` and `burxt run prog.bx -- x`
+    // sent `--` to `cc`, where it dies with `unrecognized command-line option '--'`. The only working
+    // shape was `build -o` and then run the binary — which is fine for a person and impossible for a
+    // documented one-liner.
+    //
+    // **It was found in another repository's docs rather than here**: BMX's `burxt/examples/parse.bx`
+    // carried `burxt run … -- document.bmx` in its usage block since it was written, in a program
+    // whose entire interface is its argument, and it had never worked. It survived because CI only
+    // ever built that file. A usage line nobody executes is prose.
+    let mut program_args: Vec<String> = Vec::new();
     let mut i = 0;
     while i < rest.len() {
         match rest[i].as_str() {
+            "--" => {
+                program_args = rest[i + 1..].to_vec();
+                break;
+            }
             "--json" => {}
             "-g" => debug_info = true,
             "-O0" => optimise = false,
@@ -544,6 +561,7 @@ fn compile_main() {
         cmd,
         path,
         &link_args,
+        &program_args,
         json,
         out.as_deref(),
         target.as_deref(),
@@ -943,6 +961,7 @@ fn run(
     cmd: &str,
     path: &str,
     link_args: &[String],
+    program_args: &[String],
     json: bool,
     out: Option<&str>,
     target: Option<&str>,
@@ -1297,6 +1316,7 @@ fn package_ranges(
 
             if cmd == "run" {
                 let status = Command::new(&exe)
+                    .args(program_args)
                     .status()
                     .map_err(|e| format!("failed to run {}: {}", exe, e))?;
                 // Removed BEFORE exiting, because `process::exit` runs no destructors — and only

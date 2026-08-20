@@ -257,8 +257,22 @@ jobs:
           merge-multiple: true
 
       # The extension too, so the editor experience is one download away rather than a build step.
+      #
+      # **Packed by the compiler being released, which is better than what this used to do.** The
+      # packer is Burxt now, and this job never builds one — it checks out and downloads artefacts.
+      # Adding a `cargo build` here would cost an LLVM build to write a zip. But the tarballs it just
+      # downloaded each CONTAIN a `burxt` and a `lib/`, so the release packs its own extension with
+      # its own compiler, and a tarball too broken to run cannot silently ship an extension either.
+      #
+      # BMX's sorting question is the one that found this: *which job runs this, and is that job
+      # allowed to need Burxt?* This job was not, until the artefact it publishes became the answer.
       - name: Package the VS Code extension
-        run: python3 editors/vscode/pack.py
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/packer
+          tar xzf /tmp/tarballs/burxt-*-linux-x86_64.tar.gz -C /tmp/packer
+          BIN="$(echo /tmp/packer/burxt-*-linux-x86_64)"
+          BURXT_LIB="$BIN/lib" "$BIN/burxt" run editors/vscode/pack.bx
 
       - name: Collect the assets
         run: |

@@ -1,0 +1,416 @@
+// ============================================================================
+// scripts/refused.bx — generate examples/refused/README.md by RUNNING every program through the
+// compiler.
+//
+// Every message on that page is the compiler's, captured. Nothing is typed by hand, and
+// `the_refusals_page_is_not_stale` in tests/runner.rs regenerates and diffs — so the page cannot
+// claim a refusal the compiler does not make, and cannot drift when a message is improved.
+//
+// That matters more here than anywhere else in the repository. This page IS the argument: it exists
+// to show a reviewer a mistake they would not have caught, and a made-up error message would make it
+// a lie about the one thing it is selling. The guide already told that lie once, with two invented
+// messages, and running the examples is what caught it.
+//
+//     burxt run scripts/refused.bx                  # writes examples/refused/README.md
+//     burxt run scripts/refused.bx -- --check       # exits 1 if the file on disk is out of date
+//
+// ---- one deliberate difference from the Python this replaces -------------------------------
+//
+// The Python found the repository from `__file__`, so it worked from any directory. A Burxt program
+// cannot see its own source path — `argument(0)` under `burxt run` is the compiled executable in a
+// scratch directory, which says nothing about where the source came from. So the root is DISCOVERED
+// instead: walk up from the working directory until `examples/refused` is under it. That is the same
+// guarantee by a different route, and it fails loudly rather than writing to the wrong tree.
+// ============================================================================
+
+use "../lib/os.bx";
+use "../lib/files.bx";
+use "../lib/string.bx";
+use "../lib/array.bx";
+
+// How far up the tree to look for the repository before giving up. A checkout is never this deep
+// below itself; the bound exists so a program run outside one stops instead of walking to `/`.
+const ROOT_SEARCH_LIMIT: Int = 12;
+
+// What one program left behind, once the noise is stripped: what a reviewer sees, and which KIND of
+// refusal it was.
+class Outcome { shown: String, kind: String }
+
+// One panel of the page, in the order it is built.
+class Panel { name: String, source: String, message: String, kind: String }
+
+// What a refusal is, in a reviewer's terms rather than a compiler's.
+class Point { title: String, why: String }
+
+// ---- the repository ---------------------------------------------------------------------
+
+// The checkout this program is generating a page inside, or `None`.
+//
+// The anchor is `examples/refused` rather than this file: it is the directory being read and the
+// directory being written, so a tree that has it is a tree this program has work to do in, and a
+// tree that does not is one where every path it computed would be wrong.
+function discover_root() -> Option<String> touches commands, files {
+    match os_cwd() {
+        None => {
+            return Option.None;
+        }
+        Some(start) => {
+            let mutable here: String = start;
+            let mutable up: Int = 0;
+            while up < ROOT_SEARCH_LIMIT {
+                if file_is_directory(here + "/examples/refused") {
+                    return Option.Some(here);
+                }
+                let cut: Int = string_rfind(here, "/");
+                if cut <= 0 {
+                    return Option.None;
+                }
+                here = substring(here, 0, cut);
+                up += 1;
+            }
+            return Option.None;
+        }
+    }
+}
+
+// ---- reading one program's verdict ------------------------------------------------------
+
+// The checkout's absolute path is stripped, so a quoted error reads
+// `examples/refused/01-mixed-scales.bx:5:25` rather than someone's home directory.
+//
+// Two things were wrong with leaving it in. The page is PUBLISHED, so it showed the author's
+// directory layout to every reader. And the generated file could then only match on the machine
+// that wrote it — CI checks out to /home/runner/work, so `--check` was guaranteed to fail there,
+// which is exactly what it did for thirteen versions while nobody read the badge.
+pure function strip_root(root: String, text: String) -> String {
+    return string_replace(string_replace(text, root + "/", ""), root, ".");
+}
+
+// The captured text as the page shows it: the compiler's own progress line dropped, the checkout's
+// path stripped from what remains, and no blank line at either end.
+pure function keep(root: String, text: String) -> String {
+    let lines: [String] = string_lines(text);
+    let mutable held: [String] = [];
+    let mutable i: Int = 0;
+    while i < len(lines) {
+        if !string_starts_with(lines[i], "compiled ") {
+            let added: Int = push(held, strip_root(root, lines[i]));
+        }
+        i += 1;
+    }
+    return string_trim(string_join(held, "\n"));
+}
+
+// Every name in a directory that is a Burxt program, without the extension, in order.
+function program_names(directory: String, mutable names: [String]) -> Int
+        touches commands, files, input {
+    match file_list_directory(directory) {
+        None => {
+            return 0;
+        }
+        Some(entries) => {
+            let mutable i: Int = 0;
+            while i < len(entries) {
+                if string_ends_with(entries[i], ".bx") {
+                    let added: Int = push(names, string_strip_suffix(entries[i], ".bx"));
+                }
+                i += 1;
+            }
+            let ordered: Int = array_sort(names);
+            return len(names);
+        }
+    }
+}
+
+// Everything in a scratch directory, then the directory. `file_remove_directory` takes an empty one
+// only, and `burxt run` has left an executable in this one.
+function discard_directory(directory: String) -> Bool touches commands, files, input {
+    match file_list_directory(directory) {
+        None => {
+            return false;
+        }
+        Some(entries) => {
+            let mutable i: Int = 0;
+            while i < len(entries) {
+                let dropped: Bool = file_delete(directory + "/" + entries[i]);
+                i += 1;
+            }
+            return file_remove_directory(directory);
+        }
+    }
+}
+
+// Compile and run, and answer (what the reviewer sees, which KIND of refusal).
+//
+// Three outcomes, not two, and the distinction is the honest part: a scale mismatch is caught
+// at COMPILE time, while an overflow is a well-typed program that STOPS when the value cannot be
+// represented. Calling the second a compile error would be a lie about how the language works.
+//
+// From a scratch directory, because `burxt run` writes its executable into the working one and a
+// stray binary in the repository is something the suite refuses.
+function capture_verdict(burxt: String, root: String, path: String) -> Outcome
+        touches commands, files, input {
+    match file_temp_directory("refused") {
+        None => {
+            print_error("no scratch directory to run the examples in");
+            exit(1);
+            return Outcome { shown: "", kind: "compile" };
+        }
+        Some(work) => {
+            let seen: Capture = os_capture_status(
+                    "cd " + file_quote(work) + " && " + file_quote(burxt) + " run "
+                    + file_quote(path) + " -o " + file_quote(work + "/out"));
+            let discarded: Bool = discard_directory(work);
+            if seen.code == 0 {
+                return Outcome { shown: keep(root, seen.output), kind: "accepted" };
+            }
+            let shown: String = keep(root, seen.output + seen.errors);
+            if string_contains(shown, "burxt runtime error") {
+                return Outcome { shown: shown, kind: "runtime" };
+            }
+            return Outcome { shown: shown, kind: "compile" };
+        }
+    }
+}
+
+// ---- what each panel means --------------------------------------------------------------
+
+// A name with no entry here answers itself and no explanation, so a program added to the directory
+// appears on the page rather than being silently dropped.
+function point_for(name: String) -> Point {
+    if name == "01-mixed-scales" {
+        return Point { title: "A rate added to a price",
+                why: "Both are decimals. One is money and one is a multiplier." };
+    }
+    if name == "02-unrounded-product" {
+        return Point { title: "Money times a rate, unrounded",
+                why: "The exact answer has six decimal places. Something has to decide which way two of them go." };
+    }
+    if name == "03-silent-overflow" {
+        return Point { title: "A total past what an Int holds",
+                why: "Every other language wraps this to a negative and keeps going." };
+    }
+    if name == "04-bypassed-private" {
+        return Point { title: "The constructor skipped",
+                why: "The class checks its invariant on the way in, so build one directly instead." };
+    }
+    if name == "05-forgotten-variant" {
+        return Point { title: "A case added after the code was written",
+                why: "A payment method joined the enum. This `match` predates it." };
+    }
+    if name == "06-violated-contract" {
+        return Point { title: "A precondition passed a value it forbids",
+                why: "The contract is in the signature, and the call still breaks it." };
+    }
+    if name == "07-escaping-region" {
+        return Point { title: "Memory returned after it was freed",
+                why: "Built inside a `region` for tidiness, then handed to the caller." };
+    }
+    if name == "08-text-as-money" {
+        return Point { title: "Text treated as money",
+                why: "A number that arrived from a model, a form or a CSV." };
+    }
+    if name == "09-incomplete-interface" {
+        return Point { title: "An interface gained a method",
+                why: "The class satisfied it last week and still looks complete." };
+    }
+    if name == "10-comparing-kinds" {
+        return Point { title: "A count compared with a price",
+                why: "Both are numbers to a human and to every dynamic language." };
+    }
+    return Point { title: name, why: "" };
+}
+
+// The heading over a captured message. An `accepted` panel says so loudly: a program in this
+// directory that COMPILES is the one thing the page cannot quietly absorb.
+pure function label_for(kind: String) -> String {
+    if kind == "compile" {
+        return "Refused at compile time";
+    }
+    if kind == "runtime" {
+        return "Stopped at run time";
+    }
+    return "**ACCEPTED — this panel is stale**";
+}
+
+// ---- the page ---------------------------------------------------------------------------
+
+function build(burxt: String, root: String, directory: String, mutable panels: [Panel]) -> Int
+        touches commands, files, input {
+    let mutable names: [String] = [];
+    let found: Int = program_names(directory, names);
+    let mutable i: Int = 0;
+    while i < len(names) {
+        let path: String = directory + "/" + names[i] + ".bx";
+        let source: String = string_trim_end_newlines(file_read(path));
+        let verdict: Outcome = capture_verdict(burxt, root, path);
+        let added: Int = push(panels, Panel { name: names[i], source: source,
+                message: verdict.shown, kind: verdict.kind });
+        i += 1;
+    }
+    return len(panels);
+}
+
+// Trailing newlines only — the source is shown inside a fence, and the indentation of its first
+// line is part of the program.
+pure function string_trim_end_newlines(text: String) -> String {
+    let mutable to: Int = len(text);
+    while to > 0 && byte_at(text, to - 1) == 10 {
+        to -= 1;
+    }
+    return substring(text, 0, to);
+}
+
+pure function page_header(caught: Int) -> String {
+    return "# What Burxt refuses\n"
+            + "\n"
+            + to_string(caught) + " mistakes that **compile in every other language**, and what this compiler says instead.\n"
+            + "\n"
+            + "Each one is code an agent writes confidently: it type-checks in Python, runs in PHP, and passes\n"
+            + "review because nothing about it looks wrong. Read them and ask, honestly, which you would have\n"
+            + "caught in a pull request at 5pm.\n"
+            + "\n"
+            + "That is the whole argument. `examples/pos/` shows that the money is exact — this shows the part\n"
+            + "that matters more: **every one of these is a review you no longer have to do.**\n"
+            + "\n"
+            + "Two kinds of refusal appear below and the difference is not cosmetic. Eight are caught at\n"
+            + "**compile time**, before the program exists. **Two** are well-typed programs that **stop at run\n"
+            + "time** — an overflow past what an Int holds, and a precondition handed a value it forbids —\n"
+            + "because each depends on a VALUE, so no compiler in any language can catch them earlier. Calling\n"
+            + "either a compile error would misdescribe how the language works.\n"
+            + "\n"
+            + "Every message here was produced by running the program. `scripts/refused.bx` regenerates this\n"
+            + "file and a test diffs it, so the page cannot claim a refusal the compiler does not make.\n"
+            + "\n"
+            + "---\n";
+}
+
+pure function page_footer() -> String {
+    return "---\n"
+            + "\n"
+            + "## What is not here\n"
+            + "\n"
+            + "Nothing about performance, and nothing about syntax. Every refusal above is a **wrong answer\n"
+            + "prevented** — a total that would have been short by a cent, a balance that would have gone\n"
+            + "negative, a case that would have fallen through, freed memory handed back to a caller.\n"
+            + "\n"
+            + "The list is also incomplete on purpose. `tests/fail/` holds over two hundred more, each with the\n"
+            + "exact message it must produce, because a refusal that is not tested is a refusal that will\n"
+            + "eventually stop happening.\n";
+}
+
+function page(panels: [Panel]) -> String {
+    let mutable caught: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(panels) {
+        if panels[i].kind != "accepted" {
+            caught += 1;
+        }
+        i += 1;
+    }
+    let mutable parts: [String] = [];
+    let opened: Int = push(parts, page_header(caught));
+    let mutable p: Int = 0;
+    while p < len(panels) {
+        let panel: Panel = panels[p];
+        let what: Point = point_for(panel.name);
+        let added: Int = push(parts, "## " + what.title + "\n"
+                + "\n"
+                + what.why + "\n"
+                + "\n"
+                + "```burxt\n"
+                + panel.source + "\n"
+                + "```\n"
+                + "\n"
+                + "**" + label_for(panel.kind) + ":**\n"
+                + "\n"
+                + "```\n"
+                + panel.message + "\n"
+                + "```\n");
+        p += 1;
+    }
+    let closed: Int = push(parts, page_footer());
+    return string_join(parts, "\n");
+}
+
+// The same page with Jekyll front matter, so it renders on burxt-lang.org.
+pure function site_page(body: String) -> String {
+    let front: String = "---\n"
+            + "layout: default\n"
+            + "title: What it refuses\n"
+            + "section: refused\n"
+            + "description: Ten mistakes that compile in every other language, and what this compiler says instead.\n"
+            + "---\n"
+            + "\n";
+    // The repository page links to sibling directories; the site version links to the site.
+    return front + string_replace(body, "(../../tests/fail/",
+            "(https://github.com/andrecorugda/burxt/tree/main/tests/fail/");
+}
+
+// ---- the two files ---------------------------------------------------------------------
+
+function is_current(path: String, wanted: String) -> Bool touches commands, files {
+    match file_read_maybe(path) {
+        None => {
+            return wanted == "";
+        }
+        Some(on_disk) => {
+            return on_disk == wanted;
+        }
+    }
+}
+
+region main {
+    match discover_root() {
+        None => {
+            print_error("run this from inside the checkout: no examples/refused above the working directory");
+            exit(1);
+        }
+        Some(root) => {
+            // The compiler to run. `BURXT` in the environment wins, so a caller that already has a
+            // binary — the test suite, which is handed one by cargo whatever profile it built — can
+            // say which. Falling back to the release build is right for a human typing this by hand.
+            //
+            // It used to be the release path and nothing else, and CI paid for thirteen versions: CI
+            // builds debug, so the release binary was never there. One test hard-failed on it and
+            // another SKIPPED silently, which is the worse half — a check that has never run in CI
+            // looks exactly like one that passes.
+            let named: String = os_env_or("BURXT", "");
+            let mutable burxt: String = root + "/target/release/burxt";
+            if named != "" {
+                burxt = named;
+            }
+            let directory: String = root + "/examples/refused";
+            let out: String = directory + "/README.md";
+            // The same panels as a website page. Generated from the same run, so the site cannot say
+            // something the repository does not — which was the whole reason for generating either.
+            let site_path: String = root + "/docs/refused/index.md";
+
+            if !file_exists(burxt) {
+                print_error("build the release binary first: cargo build --release");
+                exit(1);
+            }
+            let mutable panels: [Panel] = [];
+            let counted: Int = build(burxt, root, directory, panels);
+            let body: String = page(panels);
+            let site: String = site_page(body);
+
+            if array_contains(os_args(), "--check") {
+                if !is_current(out, body) {
+                    print_error(out + " is out of date — run: burxt run scripts/refused.bx");
+                    exit(1);
+                }
+                if !is_current(site_path, site) {
+                    print_error(site_path + " is out of date — run: burxt run scripts/refused.bx");
+                    exit(1);
+                }
+                print("the refusals page is current, in both places");
+            } else {
+                let made: Bool = file_make_directory(root + "/docs/refused");
+                let wrote_out: Int = file_write(out, body);
+                let wrote_site: Int = file_write(site_path, site);
+                print("wrote examples/refused/README.md and docs/refused/index.md");
+            }
+        }
+    }
+}

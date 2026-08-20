@@ -1,0 +1,930 @@
+// ============================================================================
+// scripts/site-examples.bx — generate docs/examples/index.md by RUNNING each
+// program through the compiler.
+//
+//     burxt run scripts/site-examples.bx                 # writes docs/examples/index.md
+//     burxt run scripts/site-examples.bx -- --check      # exits 1 if the file on disk is stale
+//
+// It reads the standard library, so `BURXT_LIB` must name this repository's `lib/`. A compiler built
+// here resolves `std/` against `$PREFIX/lib/burxt` beside the binary — `target/lib/burxt`, which does
+// not exist — and that is deliberate: `lib/` was removed from the fallback list because a compiler
+// built in this repository was silently compiling against the INSTALLED library.
+//
+// Nothing on that page is typed by hand. Every result comes from actually compiling and running the
+// program, and `the_site_is_honest_and_complete` in tests/runner.rs regenerates this and diffs, so it
+// cannot drift later either.
+//
+// ---- What changed, and why -------------------------------------------------------------------
+//
+// This page used to be nine snippets of two to eight lines in an editable `<textarea>` that could not
+// run anything — and it said so, in a paragraph apologising for itself. Asked whether those were
+// really examples, the honest answer was no: they were illustrations of single rules, which is what
+// the guide is for.
+//
+// So it now shows **complete programs**, and the first of them is the one argument the repository had
+// lying around unused: `examples/pos/` is a point-of-sale till, and `examples/pos-php/`,
+// `examples/pos-python/` and `examples/pos-rust/` are the same program written three other ways.
+// Reading them beside each other is more persuasive than any paragraph about exact decimals, because
+// the difference is visible — in the other three the rounding rule is an argument somebody has to
+// remember to pass, and in Burxt it is in the return type where a reviewer cannot miss it.
+//
+// The short snippets moved into the guide's `## Examples` sections, where a reader meets them in
+// context.
+//
+// ---- What is NOT on the page -----------------------------------------------------------------
+//
+// Whether the ports agree with the Burxt program. They do, but saying so here would mean running
+// `php`, `python3` and `rustc` while generating — and then this page's content would depend on which
+// runtimes happened to be installed, so CI and a laptop would produce different files and `--check`
+// would fail for a reason that has nothing to do with the site. `the_ports_agree_with_the_original`
+// in tests/runner.rs makes that claim instead, and skips a runtime it cannot find.
+//
+// ---- Where the repository is, which this program cannot ask ----------------------------------
+//
+// The Python this replaces found the repository from `__file__`, so it ran correctly from any
+// directory. A Burxt program has no equivalent: `burxt run` compiles to a binary in a scratch
+// directory, so `argument(0)` names that binary and not this source. So the WORKING DIRECTORY is the
+// repository root — and it is CHECKED rather than assumed. A wrong directory would otherwise read no
+// sources, run no programs, and write a page of empty panels, which is the failure that looks like
+// success.
+// ============================================================================
+
+use "../lib/string.bx";
+use "../lib/files.bx";
+use "../lib/path.bx";
+use "../lib/os.bx";
+use "../lib/json.bx";
+
+// ---- the tables ------------------------------------------------------------------------------
+
+// One language's files inside a panel — the four PHP files, the four Rust files. A class rather than
+// an array of arrays, because a growable array cannot hold another array: the compiler says so, and
+// says to use a class element.
+class Port { label: String, files: [String] }
+
+// One panel of the page. `run` and `schema` are alternatives and exactly one of them is set: a
+// program the page RUNS, or a declaration the page derives a schema from and then answers requests
+// against.
+class Program {
+    id: String,
+    label: String,
+    title: String,
+    point: String,
+    read: String,
+    files: [String],
+    run: String,
+    schema: String,
+    ports: [Port],
+    requests: [String],
+}
+
+// What one program's compilation ended up being: the text to show, and which of the three kinds it
+// was. Two Strings and no array, so this can be returned.
+class Ending { text: String, kind: String }
+
+// The requests the MCP panel shows. Two succeed, two are refused, and the refusals are the point: a
+// violated precondition answers a JSON-RPC error rather than taking the process down, and a third
+// decimal place asked to fit in a `Decimal<2>` is refused rather than rounded.
+function mcp_requests() -> [String] {
+    let mutable out: [String] = [];
+    push(out, "\{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":\{\"name\":\"line_total\",\"arguments\":\{\"unit\":\"19.99\",\"quantity\":3\}\}\}");
+    push(out, "\{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":\{\"name\":\"tax_on\",\"arguments\":\{\"subtotal\":\"59.97\",\"rate\":\"0.0825\"\}\}\}");
+    push(out, "\{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":\{\"name\":\"line_total\",\"arguments\":\{\"unit\":\"0.00\",\"quantity\":3\}\}\}");
+    push(out, "\{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":\{\"name\":\"line_total\",\"arguments\":\{\"unit\":\"19.999\",\"quantity\":1\}\}\}");
+    return out;
+}
+
+function no_ports() -> [Port] {
+    let mutable out: [Port] = [];
+    return out;
+}
+
+function no_requests() -> [String] {
+    let mutable out: [String] = [];
+    return out;
+}
+
+// A space-separated list of paths as an array. The table below reads better on one line per program
+// than as four `push` calls per file, and a path never contains a space here.
+function paths(spec: String) -> [String] {
+    return string_split(spec, " ");
+}
+
+function port_of(label: String, spec: String) -> Port {
+    return Port { label: label, files: paths(spec) };
+}
+
+// The panels, in the order the picker shows them.
+function programs() -> [Program] {
+    let mutable out: [Program] = [];
+
+    let mutable till_ports: [Port] = [];
+    push(till_ports, port_of("PHP", "examples/pos-php/items.php examples/pos-php/tax.php examples/pos-php/receipt.php examples/pos-php/till.php"));
+    push(till_ports, port_of("Python", "examples/pos-python/items.py examples/pos-python/tax.py examples/pos-python/receipt.py examples/pos-python/till.py"));
+    push(till_ports, port_of("Rust", "examples/pos-rust/items.rs examples/pos-rust/tax.rs examples/pos-rust/receipt.rs examples/pos-rust/till.rs"));
+
+    push(out, Program {
+        id: "till",
+        label: "A till",
+        title: "A point-of-sale till, four ways",
+        point: "The same program in Burxt, PHP, Python and Rust. Only one of them puts the rounding rule where a reviewer cannot miss it.",
+        read: "Look at `tax` in each. In Burxt the rounding is `Decimal<2, RoundHalfEven>` in the **return type**, so every caller sees it. In the other three it is a rounding mode passed as an argument, or a default nobody wrote down — and a reviewer reading the call site cannot tell which.",
+        files: paths("examples/pos/items.bx examples/pos/tax.bx examples/pos/receipt.bx examples/pos/till.bx"),
+        run: "examples/pos/till.bx",
+        schema: "",
+        ports: till_ports,
+        requests: no_requests(),
+    });
+
+    push(out, Program {
+        id: "mcp",
+        label: "An MCP server",
+        title: "An MCP server whose schema cannot drift",
+        point: "The tool schema is derived from the preconditions, so there is no second artifact to keep in step.",
+        read: "`line_total` carries `[> $0.00]` and `[> 0, <= 100000]`. Those brackets ARE the JSON Schema — `burxt mcp-schema` reads the declaration and emits it. Nothing else in this repository, and nothing in any other language, can do that: it needs the contract to be in the signature.",
+        files: paths("examples/mcp/tools.bx examples/mcp/server.bx"),
+        run: "",
+        schema: "examples/mcp/tools.bx",
+        ports: no_ports(),
+        requests: mcp_requests(),
+    });
+
+    push(out, Program {
+        id: "invoice",
+        label: "An invoice",
+        title: "An invoice, priced and taxed",
+        point: "Money in, money out, and every rounding named at the line where it happens.",
+        read: "",
+        files: paths("examples/invoice.bx"),
+        run: "examples/invoice.bx",
+        schema: "",
+        ports: no_ports(),
+        requests: no_requests(),
+    });
+
+    push(out, Program {
+        id: "contracts",
+        label: "Contracts",
+        title: "A program that states what it requires",
+        point: "A precondition is checked, and it names itself when it fails.",
+        read: "",
+        files: paths("examples/contracts.bx"),
+        run: "examples/contracts.bx",
+        schema: "",
+        ports: no_ports(),
+        requests: no_requests(),
+    });
+
+    push(out, Program {
+        id: "generics",
+        label: "Generics",
+        title: "One definition, one machine function per type",
+        point: "Nothing is erased. A `Stack<Int>` and a `Stack<String>` are two real types.",
+        read: "",
+        files: paths("examples/generics.bx"),
+        run: "examples/generics.bx",
+        schema: "",
+        ports: no_ports(),
+        requests: no_requests(),
+    });
+
+    push(out, Program {
+        id: "absence",
+        label: "No null",
+        title: "Absence, as a type",
+        point: "`Option<T>` is a library, not a keyword, and `match` forces both cases.",
+        read: "",
+        files: paths("examples/absence.bx"),
+        run: "examples/absence.bx",
+        schema: "",
+        ports: no_ports(),
+        requests: no_requests(),
+    });
+
+    return out;
+}
+
+// Which highlighter the page asks for, by extension. A file whose extension is not in this table is
+// a mistake in the table above rather than a file to render plainly — the Python raised a `KeyError`
+// on it, and silently emitting `class="language-"` would put an unhighlighted file on the page and
+// say nothing.
+function language_of(name: String) -> String {
+    if string_ends_with(name, ".bx") {
+        return "burxt";
+    }
+    if string_ends_with(name, ".php") {
+        return "php";
+    }
+    if string_ends_with(name, ".py") {
+        return "python";
+    }
+    if string_ends_with(name, ".rs") {
+        return "rust";
+    }
+    print_error("no highlighter for " + name + " — add its extension to language_of");
+    exit(1);
+    return "";
+}
+
+// ---- text, exactly as the generator that came before did it ----------------------------------
+
+// Whitespace stripped from both ends, the six bytes Python's `str.strip()` removes.
+//
+// `string_trim` in the standard library removes four of them and not the vertical tab or the form
+// feed. The difference has never shown up in a compiler's output and is written out anyway, because
+// this program's whole job is to produce the same bytes as the generator it replaces, and "has never
+// shown up" is not a property anybody checked.
+pure function strip_python(text: String) -> String {
+    let mutable from: Int = 0;
+    while from < len(text) && is_python_space(byte_at(text, from)) {
+        from += 1;
+    }
+    let mutable to: Int = len(text);
+    while to > from && is_python_space(byte_at(text, to - 1)) {
+        to -= 1;
+    }
+    return substring(text, from, to - from);
+}
+
+pure function is_python_space(byte: Int) -> Bool {
+    return byte == 32 || byte == 9 || byte == 10 || byte == 11 || byte == 12 || byte == 13;
+}
+
+// One source file, with its trailing newlines removed and nothing else touched.
+function read_source(path: String) -> String touches files, commands {
+    match file_read_maybe(path) {
+        None => {
+            print_error("cannot read " + path);
+            exit(1);
+            return "";
+        }
+        Some(text) => {
+            let mutable to: Int = len(text);
+            while to > 0 && byte_at(text, to - 1) == 10 {
+                to -= 1;
+            }
+            return substring(text, 0, to);
+        }
+    }
+}
+
+// Everything the compiler said, minus its own "compiled X -> Y" line, which is noise here.
+//
+// The last piece of a split is dropped when it is empty, because that is what a line count means: a
+// file ending in a newline has as many lines as it has newlines, and keeping the empty tail would add
+// a blank line to every recorded output.
+pure function keep(text: String) -> String {
+    let lines: [String] = string_split(text, "\n");
+    let mutable count: Int = len(lines);
+    if count > 0 && len(lines[count - 1]) == 0 {
+        count -= 1;
+    }
+    let mutable kept: [String] = [];
+    let mutable i: Int = 0;
+    while i < count {
+        if !string_starts_with(lines[i], "compiled ") {
+            push(kept, lines[i]);
+        }
+        i += 1;
+    }
+    return strip_python(string_join(kept, "\n"));
+}
+
+// ---- JSON, spelled the way the page's reader expects -----------------------------------------
+
+// The codepoint whose UTF-8 sequence STARTS at byte `at`.
+//
+// `codepoint_at` in the standard library takes a codepoint index and walks to it, so calling it once
+// per character is O(n²) — and the largest source on this page is 20 KB. This is the same decode
+// against a byte offset the caller already has.
+pure function codepoint_from(text: String, at: Int) -> Int {
+    let ending: Int = next_char(text, at);
+    let width: Int = ending - at;
+    let leading: Int = byte_at(text, at);
+    if width == 1 {
+        return leading;
+    }
+    if width == 2 {
+        return shift_left(bit_and(leading, 31), 6)
+                + bit_and(byte_at(text, at + 1), 63);
+    }
+    if width == 3 {
+        return shift_left(bit_and(leading, 15), 12)
+                + shift_left(bit_and(byte_at(text, at + 1), 63), 6)
+                + bit_and(byte_at(text, at + 2), 63);
+    }
+    return shift_left(bit_and(leading, 7), 18)
+            + shift_left(bit_and(byte_at(text, at + 1), 63), 12)
+            + shift_left(bit_and(byte_at(text, at + 2), 63), 6)
+            + bit_and(byte_at(text, at + 3), 63);
+}
+
+pure function unicode_escape(code: Int) -> String {
+    return "\\u" + string_pad_start(string_int_to_hex(code), 4, "0");
+}
+
+// A String as a JSON string body with **no byte above 126 left in it**.
+//
+// That is not decoration: the page embeds this JSON inside an HTML `<script>` block that Jekyll then
+// serves, and every generator that has ever produced this file escaped non-ASCII, so a version that
+// passed the em dashes through would rewrite ninety kilobytes of a file whose whole purpose is to be
+// diffed against itself.
+//
+// A codepoint above the basic plane becomes a SURROGATE PAIR — two `\uXXXX` escapes — because that is
+// what a JSON escape can express and nothing in the format can name U+1F600 in one.
+//
+// Built in RUNS, like `json_escape` in `lib/json.bx` and for the same measured reason: appending one
+// byte at a time to a String copies the whole String each time, and the sources here are tens of
+// kilobytes.
+pure function json_ascii(text: String) -> String {
+    let mutable pieces: [String] = [];
+    let mutable copied: Int = 0;
+    let mutable i: Int = 0;
+    let n: Int = len(text);
+    while i < n {
+        let b: Int = byte_at(text, i);
+        let ending: Int = next_char(text, i);
+        let mutable escape: String = "";
+        if b == 34 {
+            escape = "\\\"";
+        } else if b == 92 {
+            escape = "\\\\";
+        } else if b == 10 {
+            escape = "\\n";
+        } else if b == 13 {
+            escape = "\\r";
+        } else if b == 9 {
+            escape = "\\t";
+        } else if b == 8 {
+            escape = "\\b";
+        } else if b == 12 {
+            escape = "\\f";
+        } else if b < 32 || b > 126 {
+            let code: Int = codepoint_from(text, i);
+            if code > 65535 {
+                let rest: Int = code - 65536;
+                escape = unicode_escape(55296 + shift_right_zeros(rest, 10))
+                        + unicode_escape(56320 + bit_and(rest, 1023));
+            } else {
+                escape = unicode_escape(code);
+            }
+        }
+        if len(escape) > 0 {
+            push(pieces, substring(text, copied, i - copied));
+            push(pieces, escape);
+            copied = ending;
+        }
+        i = ending;
+    }
+    push(pieces, substring(text, copied, n - copied));
+    return string_join_chunks(pieces);
+}
+
+pure function json_quoted(text: String) -> String {
+    return "\"" + json_ascii(text) + "\"";
+}
+
+// A parsed JSON value, printed the way `json.dumps(value, indent=1)` prints it: one space of indent
+// per level, `": "` between a name and its value, and an empty container on one line.
+//
+// Only `burxt mcp-schema`'s answer goes through here, and it is a kilobyte and a half, so the
+// pairwise-append rule the rest of this file follows is not worth the shape it would cost.
+//
+// **A number is re-emitted with the digits it arrived with.** Python would parse it into an `int` or
+// a `float` and print that back, so `1.50` would come out `1.5` and `1e400` would come out
+// `Infinity`, which is not JSON at all. The digits are what the compiler wrote and what the page
+// should show; today the schema contains no numbers, so the two agree on every byte, and the day one
+// appears this is the version that does not change its value.
+pure function json_indented(value: Json, depth: Int) -> String {
+    match value {
+        Null => {
+            return "null";
+        }
+        Truth(t) => {
+            if t {
+                return "true";
+            }
+            return "false";
+        }
+        Number(digits) => {
+            return digits;
+        }
+        Text(s) => {
+            return json_quoted(s);
+        }
+        List(items) => {
+            if len(items) == 0 {
+                return "[]";
+            }
+            let inner: String = string_repeat(" ", depth + 1);
+            let mutable out: String = "[";
+            let mutable i: Int = 0;
+            while i < len(items) {
+                if i > 0 {
+                    out = out + ",";
+                }
+                out = out + "\n" + inner + json_indented(items[i], depth + 1);
+                i += 1;
+            }
+            return out + "\n" + string_repeat(" ", depth) + "]";
+        }
+        Object(fields) => {
+            if len(fields) == 0 {
+                return "\{\}";
+            }
+            let inner: String = string_repeat(" ", depth + 1);
+            let mutable out: String = "\{";
+            let mutable i: Int = 0;
+            while i < len(fields) {
+                if i > 0 {
+                    out = out + ",";
+                }
+                out = out + "\n" + inner + json_quoted(fields[i].name) + ": "
+                        + json_indented(fields[i].value, depth + 1);
+                i += 1;
+            }
+            return out + "\n" + string_repeat(" ", depth) + "\}";
+        }
+    }
+}
+
+// ---- running the compiler --------------------------------------------------------------------
+
+// A scratch directory, or a refusal. Every caller needs one and none of them can carry on without it,
+// so the failure is reported here rather than threaded through three signatures.
+function scratch(prefix: String) -> String touches files, input {
+    match file_temp_directory(prefix) {
+        None => {
+            print_error("cannot make a scratch directory for " + prefix);
+            exit(1);
+            return "";
+        }
+        Some(directory) => {
+            return directory;
+        }
+    }
+}
+
+// Compile and run a program, and classify how it ended.
+//
+// The three kinds are load-bearing rather than tidy: a scale mismatch is caught at COMPILE time,
+// while an overflow is a well-typed program that STOPS. Calling the second a compile error would
+// misdescribe how the language works.
+//
+// `-o` is not optional here. Without it `burxt run` writes the executable beside the source, so
+// generating this page left five stray binaries in `examples/` — which is exactly what
+// `the_repository_root_holds_only_what_belongs_there` exists to complain about one directory up.
+//
+// The program is run from its OWN directory, because `use "items.bx"` resolves against the file that
+// says it.
+function run_program(burxt: String, root: String, path: String) -> Ending
+        touches commands, files, input {
+    let work: String = scratch("burxt-example");
+    let home: String = path_join(root, path_dirname(path));
+    let command: String = "cd " + file_quote(home) + " && " + file_quote(burxt) + " run "
+            + file_quote(path_basename(path)) + " -o " + file_quote(work + "/program");
+    let spoke: Capture = os_capture_status(command);
+    if spoke.code == 0 {
+        return Ending { text: keep(spoke.output), kind: "ok" };
+    }
+    // The two streams are joined with nothing between them, which is what reading one pipe would
+    // have given: a compiler that stops mid-line leaves its diagnostic on the end of that line.
+    let shown: String = keep(spoke.output + spoke.errors);
+    if string_contains(shown, "burxt runtime error") {
+        return Ending { text: shown, kind: "runtime" };
+    }
+    return Ending { text: shown, kind: "compile" };
+}
+
+// `burxt mcp-schema`, pretty-printed so it can be read on a page.
+function schema_of(burxt: String, root: String, path: String) -> String
+        touches commands, files, input {
+    let command: String = "cd " + file_quote(root) + " && " + file_quote(burxt) + " mcp-schema "
+            + file_quote(path_join(root, path));
+    let spoke: Capture = os_capture_status(command);
+    if spoke.code != 0 {
+        print_error("burxt mcp-schema failed on " + path + ":\n" + spoke.output + spoke.errors);
+        exit(1);
+        return "";
+    }
+    match json_parse(spoke.output) {
+        Error(why) => {
+            print_error("burxt mcp-schema did not answer JSON on " + path + ": " + why);
+            exit(1);
+            return "";
+        }
+        Ok(value) => {
+            return json_indented(value, 0);
+        }
+    }
+}
+
+// Build the server, pipe the requests through it, and keep what came back.
+//
+// The requests reach it through a FILE rather than a pipe, because a pipe would mean `popen` and a
+// pointer whose lifetime this language will not reason about yet. `< file` is the same standard
+// input from the program's side, and it is the shape `lib/os.bx` uses for the other direction.
+function transcript(burxt: String, root: String, program: String, requests: [String]) -> String
+        touches commands, files, input {
+    let work: String = scratch("burxt-mcp");
+    let server: String = work + "/server";
+    let build: String = "cd " + file_quote(root) + " && " + file_quote(burxt) + " build "
+            + file_quote(path_join(root, program)) + " -o " + file_quote(server);
+    let built: Capture = os_capture_status(build);
+    if built.code != 0 {
+        print_error("the MCP server did not build:\n" + built.output + built.errors);
+        exit(1);
+        return "";
+    }
+    let asked: String = work + "/requests.jsonl";
+    let written: Int = file_write(asked, string_join(requests, "\n") + "\n");
+    let spoke: Capture = os_capture_status(file_quote(server) + " < " + file_quote(asked));
+    return strip_python(spoke.output);
+}
+
+// ---- the page --------------------------------------------------------------------------------
+
+// One file's object, at five spaces of indent — `name`, `path`, `lang`, `source`, in that order.
+function emit_file(mutable out: [String], root: String, path: String) -> Int
+        touches files, commands {
+    let name: String = path_basename(path);
+    push(out, "\n    \{\n     \"name\": ");
+    push(out, json_quoted(name));
+    push(out, ",\n     \"path\": ");
+    push(out, json_quoted(path));
+    push(out, ",\n     \"lang\": ");
+    push(out, json_quoted(language_of(name)));
+    push(out, ",\n     \"source\": ");
+    push(out, json_quoted(read_source(path_join(root, path))));
+    push(out, "\n    \}");
+    return 0;
+}
+
+function emit_language(mutable out: [String], root: String, label: String, files: [String]) -> Int
+        touches files, commands {
+    push(out, "\n   ");
+    push(out, json_quoted(label));
+    push(out, ": [");
+    let mutable i: Int = 0;
+    while i < len(files) {
+        if i > 0 {
+            push(out, ",");
+        }
+        emit_file(out, root, files[i]);
+        i += 1;
+    }
+    push(out, "\n   ]");
+    return 0;
+}
+
+// One panel, at one space of indent. The field ORDER is the order the generator before this one
+// inserted them, and it is load-bearing for nothing except the diff — which is the only thing this
+// program is judged on.
+function emit_panel(mutable out: [String], burxt: String, root: String, p: Program) -> Int
+        touches commands, files, input {
+    push(out, "\n \{\n  \"id\": ");
+    push(out, json_quoted(p.id));
+    push(out, ",\n  \"label\": ");
+    push(out, json_quoted(p.label));
+    push(out, ",\n  \"title\": ");
+    push(out, json_quoted(p.title));
+    push(out, ",\n  \"point\": ");
+    push(out, json_quoted(p.point));
+    push(out, ",\n  \"langs\": \{");
+    emit_language(out, root, "Burxt", p.files);
+    let mutable i: Int = 0;
+    while i < len(p.ports) {
+        push(out, ",");
+        emit_language(out, root, p.ports[i].label, p.ports[i].files);
+        i += 1;
+    }
+    push(out, "\n  \},\n  \"order\": [\n   ");
+    push(out, json_quoted("Burxt"));
+    i = 0;
+    while i < len(p.ports) {
+        push(out, ",\n   ");
+        push(out, json_quoted(p.ports[i].label));
+        i += 1;
+    }
+    push(out, "\n  ],\n  \"read\": ");
+    push(out, json_quoted(p.read));
+
+    if len(p.run) > 0 {
+        let ending: Ending = run_program(burxt, root, p.run);
+        push(out, ",\n  \"output\": ");
+        push(out, json_quoted(ending.text));
+        push(out, ",\n  \"kind\": ");
+        push(out, json_quoted(ending.kind));
+        push(out, ",\n  \"outputLabel\": ");
+        push(out, json_quoted("Output, recorded by running it"));
+    } else if len(p.schema) > 0 {
+        // `kind` before `output` here and after it above, because that is the order the two branches
+        // of the generator before this one filled the record in. A JSON object is unordered and this
+        // one is compared as text, so the accident is part of the answer.
+        let last: String = p.files[len(p.files) - 1];
+        let shown: String = "$ burxt mcp-schema " + p.schema + "\n"
+                + schema_of(burxt, root, p.schema)
+                + "\n\n$ " + string_strip_suffix(path_basename(last), ".bx")
+                + "  < requests.jsonl\n"
+                + transcript(burxt, root, last, p.requests);
+        push(out, ",\n  \"kind\": ");
+        push(out, json_quoted("ok"));
+        push(out, ",\n  \"output\": ");
+        push(out, json_quoted(shown));
+        push(out, ",\n  \"outputLabel\": ");
+        push(out, json_quoted("Derived, and answered, by the real thing"));
+    }
+
+    push(out, "\n \}");
+    return 0;
+}
+
+function panels_json(burxt: String, root: String, all: [Program]) -> String
+        touches commands, files, input {
+    let mutable out: [String] = [];
+    push(out, "[");
+    let mutable i: Int = 0;
+    while i < len(all) {
+        if i > 0 {
+            push(out, ",");
+        }
+        emit_panel(out, burxt, root, all[i]);
+        i += 1;
+    }
+    push(out, "\n]");
+    return string_join_chunks(out);
+}
+
+// The picker across the top. The first tab is the selected one, and `aria-selected` is spelled out on
+// every button rather than left off the others — a screen reader reads the attribute, not the order.
+function tabs_html(all: [Program]) -> String {
+    let mutable lines: [String] = [];
+    let mutable i: Int = 0;
+    while i < len(all) {
+        let mutable selected: String = "false";
+        if i == 0 {
+            selected = "true";
+        }
+        push(lines, "  <button role=\"tab\" data-panel=\"" + all[i].id + "\" aria-selected=\""
+                + selected + "\">" + all[i].label + "</button>");
+        i += 1;
+    }
+    return string_join(lines, "\n");
+}
+
+// ---- the page around the data, verbatim -----------------------------------------------------
+//
+// The page is a template with two holes in it. It is spelled as a list of lines rather than one long
+// String because Burxt has no multi-line literal, and every literal brace is escaped because an
+// unescaped `\{` starts an interpolation — which is most of the reason the `<script>` block below
+// looks the way it does.
+
+function page_head() -> String {
+    let mutable lines: [String] = [];
+    push(lines, "---");
+    push(lines, "layout: default");
+    push(lines, "title: Examples");
+    push(lines, "section: examples");
+    push(lines, "description: Complete Burxt programs, and exactly what the compiler does with them — including the same till written in PHP, Python and Rust.");
+    push(lines, "width: wide");
+    push(lines, "---");
+    push(lines, "");
+    push(lines, "# Examples");
+    push(lines, "");
+    push(lines, "**Whole programs, not fragments.** Every result below came from compiling and running the program on");
+    push(lines, "this page, and a test regenerates this file and fails if any of it has drifted — so nothing here can");
+    push(lines, "claim something the compiler does not do.");
+    push(lines, "");
+    push(lines, "Single rules are explained in [the guide](\{\{ site.baseurl \}\}/guide/), which now carries its own");
+    push(lines, "`Examples` section on every page. This is for reading real code.");
+    push(lines, "");
+    push(lines, "Start with the till. It is the same program four times, and the comparison is the argument.");
+    push(lines, "");
+    push(lines, "<div class=\"picker\" role=\"tablist\">");
+    push(lines, "");
+    return string_join(lines, "\n");
+}
+
+function page_middle() -> String {
+    let mutable lines: [String] = [];
+    push(lines, "");
+    push(lines, "</div>");
+    push(lines, "");
+    push(lines, "<h2 data-title></h2>");
+    push(lines, "<p id=\"point\"></p>");
+    push(lines, "");
+    push(lines, "<div class=\"picker\" id=\"langs\" role=\"tablist\" aria-label=\"Language\"></div>");
+    push(lines, "<div class=\"picker\" id=\"files\" role=\"tablist\" aria-label=\"File\"></div>");
+    push(lines, "");
+    push(lines, "<div id=\"code\"></div>");
+    push(lines, "");
+    push(lines, "<div class=\"out\">");
+    push(lines, "  <h4 id=\"outhead\">Output</h4>");
+    push(lines, "  <pre><code id=\"out\"></code></pre>");
+    push(lines, "  <p class=\"note\" id=\"note\"></p>");
+    push(lines, "</div>");
+    push(lines, "");
+    push(lines, "<p id=\"read\" style=\"margin-top:1.5rem;\"></p>");
+    push(lines, "");
+    push(lines, "<p style=\"font-size:14px; margin-top:2rem;\">");
+    push(lines, "Every file above is in the repository — follow the filename to read it in context. To run any of them,");
+    push(lines, "<a href=\"\{\{ site.baseurl \}\}/install/\">install the compiler</a> or");
+    push(lines, "<a href=\"https://codespaces.new/andrecorugda/burxt?quickstart=1\">open a Codespace</a>, where it is a");
+    push(lines, "click away.");
+    push(lines, "</p>");
+    push(lines, "");
+    push(lines, "<script>");
+    push(lines, "const PANELS = ");
+    return string_join(lines, "\n");
+}
+
+function page_tail() -> String {
+    let mutable lines: [String] = [];
+    push(lines, ";");
+    push(lines, "");
+    push(lines, "const picker = document.querySelectorAll('.picker[role=tablist] > button[data-panel]');");
+    push(lines, "const langs = document.getElementById('langs');");
+    push(lines, "const files = document.getElementById('files');");
+    push(lines, "const code = document.getElementById('code');");
+    push(lines, "const out = document.getElementById('out');");
+    push(lines, "const head = document.getElementById('outhead');");
+    push(lines, "const note = document.getElementById('note');");
+    push(lines, "const point = document.getElementById('point');");
+    push(lines, "const title = document.querySelector('[data-title]');");
+    push(lines, "const read = document.getElementById('read');");
+    push(lines, "");
+    push(lines, "const HEAD = \{");
+    push(lines, "  ok:      ['', ''],");
+    push(lines, "  compile: ['Refused at compile time', 'stale'],");
+    push(lines, "  runtime: ['Stopped at run time', 'stale'],");
+    push(lines, "\};");
+    push(lines, "const NOTE = \{");
+    push(lines, "  ok:      'Recorded by running this program.',");
+    push(lines, "  compile: 'The real message from the compiler, not a paraphrase.',");
+    push(lines, "  runtime: 'It typechecks. It stops when the value cannot be represented.',");
+    push(lines, "\};");
+    push(lines, "");
+    push(lines, "let panel = PANELS[0];");
+    push(lines, "let lang = 'Burxt';");
+    push(lines, "let file = 0;");
+    push(lines, "");
+    push(lines, "function md(text) \{");
+    push(lines, "  // The one-line prose fields carry `code` spans and **strong**, and nothing else.");
+    push(lines, "  return text");
+    push(lines, "    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')");
+    push(lines, "    .replace(/`([^`]+)`/g, '<code>$1</code>')");
+    push(lines, "    .replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');");
+    push(lines, "\}");
+    push(lines, "");
+    push(lines, "function draw() \{");
+    push(lines, "  const set = panel.langs[lang];");
+    push(lines, "  if (file >= set.length) file = 0;");
+    push(lines, "  const f = set[file];");
+    push(lines, "");
+    push(lines, "  title.textContent = panel.title;");
+    push(lines, "  point.innerHTML = md(panel.point);");
+    push(lines, "  read.innerHTML = panel.read ? md(panel.read) : '';");
+    push(lines, "");
+    push(lines, "  langs.hidden = panel.order.length < 2;");
+    push(lines, "  langs.innerHTML = panel.order.map(name =>");
+    push(lines, "    '<button role=\"tab\" data-lang=\"' + name + '\" aria-selected=\"' +");
+    push(lines, "    (name === lang) + '\">' + name + '</button>').join('');");
+    push(lines, "");
+    push(lines, "  files.innerHTML = set.map((x, i) =>");
+    push(lines, "    '<button role=\"tab\" data-file=\"' + i + '\" aria-selected=\"' + (i === file) + '\">' +");
+    push(lines, "    x.name + '</button>').join('');");
+    push(lines, "");
+    push(lines, "  const escaped = f.source");
+    push(lines, "    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');");
+    push(lines, "  code.innerHTML = '<pre data-file=\"' + f.name + '\"><code class=\"language-' + f.lang + '\">' +");
+    push(lines, "    escaped + '</code></pre>';");
+    push(lines, "  // The panel was just replaced, so its code has to be enhanced again.");
+    push(lines, "  if (window.BurxtEditor) window.BurxtEditor.enhance(code);");
+    push(lines, "");
+    push(lines, "  out.textContent = panel.output || '';");
+    push(lines, "  head.textContent = HEAD[panel.kind][0] || panel.outputLabel || 'Output';");
+    push(lines, "  head.className = HEAD[panel.kind][1];");
+    push(lines, "  note.textContent = lang === 'Burxt'");
+    push(lines, "    ? NOTE[panel.kind]");
+    push(lines, "    : 'This port prints the same thing. A test runs it and compares, and skips if ' + lang +");
+    push(lines, "      ' is not installed.';");
+    push(lines, "");
+    push(lines, "  picker.forEach(t => t.setAttribute('aria-selected', String(t.dataset.panel === panel.id)));");
+    push(lines, "\}");
+    push(lines, "");
+    push(lines, "picker.forEach(t => t.addEventListener('click', () => \{");
+    push(lines, "  panel = PANELS.find(p => p.id === t.dataset.panel);");
+    push(lines, "  lang = 'Burxt';");
+    push(lines, "  file = 0;");
+    push(lines, "  draw();");
+    push(lines, "\}));");
+    push(lines, "");
+    push(lines, "langs.addEventListener('click', e => \{");
+    push(lines, "  const b = e.target.closest('button[data-lang]');");
+    push(lines, "  if (!b) return;");
+    push(lines, "  lang = b.dataset.lang;");
+    push(lines, "  draw();");
+    push(lines, "\});");
+    push(lines, "");
+    push(lines, "files.addEventListener('click', e => \{");
+    push(lines, "  const b = e.target.closest('button[data-file]');");
+    push(lines, "  if (!b) return;");
+    push(lines, "  file = Number(b.dataset.file);");
+    push(lines, "  draw();");
+    push(lines, "\});");
+    push(lines, "");
+    push(lines, "draw();");
+    push(lines, "</script>");
+    push(lines, "");
+    return string_join(lines, "\n");
+}
+
+// ---- what the machine was asked for ----------------------------------------------------------
+
+pure function wants_check(args: [String]) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(args) {
+        if args[i] == "--check" {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// `BURXT` in the environment wins, so the test suite can say which binary — it is handed one by cargo
+// whatever profile it built. Falling back to release is right for a human typing this by hand.
+//
+// It used to be the release path and nothing else, and CI paid for thirteen versions: CI builds debug,
+// so the release binary was never there. One test hard-failed on it and another SKIPPED silently,
+// which is the worse half — a check that has never run looks exactly like one that passes.
+//
+// An empty `BURXT` counts as absent. A variable exported without a value is a variable somebody meant
+// to set, and honouring `""` would look for a compiler called nothing.
+function compiler_path(root: String) -> String touches input {
+    match os_env("BURXT") {
+        None => {
+            return path_join(root, "target/release/burxt");
+        }
+        Some(given) => {
+            if len(given) == 0 {
+                return path_join(root, "target/release/burxt");
+            }
+            return given;
+        }
+    }
+}
+
+region site_examples {
+    // See the header: the working directory IS the repository, because a Burxt program cannot ask
+    // where its own source is. Both halves are checked — a directory to write into and a program to
+    // read — so a wrong directory says so instead of writing an empty page.
+    let mutable root: String = ".";
+    match os_cwd() {
+        None => {
+            print_error("cannot read the working directory");
+            exit(1);
+        }
+        Some(here) => {
+            root = here;
+        }
+    }
+    if !file_is_directory(path_join(root, "docs/examples"))
+            || !file_exists(path_join(root, "examples/pos/till.bx")) {
+        print_error("run this from the repository root: " + root
+                + " holds no docs/examples and no examples/pos/till.bx");
+        exit(1);
+    }
+
+    let burxt: String = compiler_path(root);
+    if !file_exists(burxt) {
+        print_error("build the compiler first: cargo build --release  (or set BURXT=<path>)");
+        exit(1);
+    }
+
+    // docs/examples/index.md, not docs/examples.md. Jekyll serves a bare `examples.md` at
+    // `/examples.html`, and only `<dir>/index.md` gets the directory URL — so the nav linking
+    // `/examples/` 404'd until the file moved.
+    let out: String = path_join(root, "docs/examples/index.md");
+
+    let all: [Program] = programs();
+    let page: String = page_head() + tabs_html(all) + page_middle()
+            + panels_json(burxt, root, all) + page_tail();
+
+    // The page is built BEFORE `--check` decides anything, so a check runs every program too. A check
+    // that compared the file against a cheaper answer would be comparing it against something else.
+    if wants_check(os_args()) {
+        let mutable on_disk: String = "";
+        if file_exists(out) {
+            on_disk = file_read(out);
+        }
+        if on_disk != page {
+            print_error("docs/examples/index.md is out of date — run: burxt run scripts/site-examples.bx");
+            exit(1);
+        }
+        print("docs/examples/index.md is current");
+    } else {
+        let written: Int = file_write(out, page);
+        print("wrote docs/examples/index.md");
+    }
+}

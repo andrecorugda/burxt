@@ -55,5 +55,5 @@ To be found, add the **`burxt-lang`** topic to your repository. [github.com/topi
 gh repo edit --add-topic burxt-lang
 ```
 
-To be listed here as well, open a pull request adding an entry to `scripts/site-packages.py`. The list is authored rather than scraped, because a page a reader trusts should not contain whatever a search happened to return.
+To be listed here as well, open a pull request adding an entry to `scripts/site-packages.bx`. The list is authored rather than scraped, because a page a reader trusts should not contain whatever a search happened to return.
 

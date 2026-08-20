@@ -22,7 +22,7 @@ directory holds that half of the project.
 > | `the_documented_install_command_names_the_file_pack_py_writes` | the install command in `README.md` naming version 0.1.3 while `package.json` said 0.1.4 — so the front door pointed at a file the packer does not write |
 > | `the_manifest_grammars_cover_the_whole_vocabulary` | `burxt.package` and `burxt.lock` opening as plain text, and a grammar registered but not packaged |
 >
-> After touching the grammar, run `python3 vscode/pack.py` and bump the version in
+> After touching the grammar, run `burxt run vscode/pack.bx` and bump the version in
 > `vscode/package.json` — an installed extension does not upgrade to the same version number, and
 > **the filename no longer tells you anything**: it is `burxt.vsix` at every version, deliberately, so
 > the version lives only where a tool reads it.
@@ -49,11 +49,11 @@ directory holds that half of the project.
 Package it and install it — no npm, no `vsce`, no bundler:
 
 ```bash
-python3 editors/vscode/pack.py                                  # writes burxt.vsix
+burxt run editors/vscode/pack.bx                                  # writes burxt.vsix
 code --install-extension editors/vscode/burxt.vsix
 ```
 
-`pack.py` is a .vsix writer in the standard library: a .vsix is a ZIP holding an OPC
+`pack.bx` is a .vsix writer **in Burxt**, on `lib/zip.bx` and `lib/deflate.bx`: a .vsix is a ZIP holding an OPC
 content-types map, a VSIX manifest, and the extension under `extension/`. `vsce`
 does more — linting, dependency bundling, marketplace checks — and all of it is for
 publishing rather than installing, so none of it is needed here.
@@ -66,7 +66,7 @@ UI, and it is the shape every other extension has.
 On a remote — WSL, SSH, a container — the manifest declares
 `"extensionKind": ["workspace"]`, because the extension spawns the compiler and the
 language server and therefore has to run where the code is rather than on the UI
-side. **`pack.py` refuses to build a package whose manifest does not say so** rather than
+side. **the packer refuses to build a package whose manifest does not say so** rather than
 supplying a default: the wrong value loads the extension on the UI side of a remote, where
 the compiler it spawns does not exist, and a default is invisible exactly when it is wrong.
 

@@ -1237,7 +1237,10 @@ impl Parser {
                 }
                 None => {
                     return Err(format!(
-                        "`{}` is not an effect this language knows. The effects are: {}.",
+                        "`{}` is not an effect this language knows. The effects are: {}. \
+                         Printing needs none of them — `print` is not an effect here, because a \
+                         program that writes to its own output has not reached anything a reader \
+                         needs warning about.",
                         word,
                         Effect::all()
                     ))

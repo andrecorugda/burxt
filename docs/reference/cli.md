@@ -18,7 +18,7 @@ Read out of the usage block in `src/rust-compiler/main.rs`, so this cannot list 
 | `burxt fetch` | — | get the dependencies, write burxt.lock |
 | `burxt where` | `<import>` | where a package import lands on disk |
 | `burxt build` | `<file.bx> [link args...]` | compile to a native executable |
-| `burxt run` | `<file.bx> [link args...]` | compile then run |
+| `burxt run` | `<file.bx> [link args] [-- program args]` | compile then run |
 | `burxt emit-ir` | `<file.bx> [--target ...]` | print LLVM IR |
 | `burxt fmt` | `<file.bx>...` | set indentation, in place |
 | `burxt layout` | `<file.bx>` | print class layouts |
@@ -37,7 +37,7 @@ Scraped from the same usage block. Flags may be written before or after the file
 | `-O0` | do not optimise. Independent of -g on purpose: -O2 -g is for a crash report from the field, -O0 -g is for stepping. Use both to follow a program statement by statement. |
 | `--target <triple>` | build for another machine, e.g. aarch64-apple-darwin. Emits an OBJECT and stops: linking needs that target's libc and linker, so it is left to that target's toolchain. The emitted IR is identical for every target, which is what makes the decimal answers identical too. |
 
-Arguments after the source file that are not flags go to the linker unchanged, so `burxt run pay.bx cside.o -lm` links the C you call.
+**Everything after a bare `--` goes to the PROGRAM** — `burxt run parse.bx -- document.bmx` — which is the only way to hand a compiled program an argument, and `os_args()` in `lib/os.bx` reads them without the program's own name in front. Arguments after the source file that are not flags go to the linker unchanged, so `burxt run pay.bx cside.o -lm` links the C you call.
 
 
 {% endraw %}

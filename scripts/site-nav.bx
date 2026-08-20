@@ -1,0 +1,273 @@
+// ============================================================================
+// scripts/site-nav.bx — Generate docs/_data/nav.yml — the sidebar, read out of the pages it
+// navigates.
+//
+//     burxt run scripts/site-nav.bx              # writes docs/_data/nav.yml
+//     burxt run scripts/site-nav.bx -- --check   # exits 1 if the file on disk is out of date
+//
+// The site had no sidebar at all: twelve guide pages, each a document you could only reach by going
+// back to an index, with no way to see what a page contained before opening it and no way to see what
+// the language contained at all. The report was "there is no side bar where I can explore topics and
+// sub topics".
+//
+// A sidebar needs the headings of every page while rendering any one of them, and Jekyll on GitHub
+// Pages allows no plugins — so it is built here and read from Liquid as `site.data.nav`. Extracting
+// H2s in Liquid is possible and would be a page-scanning loop per request; a generated data file with
+// a test that diffs it is the same discipline `site-examples.py` and `refused.py` already use.
+//
+// The heading anchors have to match what kramdown generates, because they are what the links point at.
+// kramdown lowercases, drops anything that is not a letter, digit, space or hyphen, and joins on
+// hyphens — `generate_id` in its HTML converter. `slug` below is that, and
+// `the_sidebar_anchors_match_the_headings` in tests/runner.rs holds it to a page it can verify.
+//
+// ---- this is a port of scripts/site-nav.bx, and the bar is BYTE-IDENTICAL output -----------
+//
+// So the two strings that name the Python by filename — the banner in the generated file and the
+// `--check` remedy — still say `site-nav.py`. They are the file's CONTENTS, not this program's
+// identity, and changing either would be a diff. Whoever retires the Python changes them then.
+//
+// Three things the Python does with a library that had to be written out here, each marked at its
+// definition: the four regular substitutions `label` and `slug` share, kramdown's id rule, and
+// kramdown's inline attribute list. They are hand-written scanners rather than a regex engine, and
+// each carries the reading of the Python pattern it replaces — including where a byte scan and a
+// character scan provably agree, because that is the step where a port of a regex goes quietly wrong.
+//
+// The one mechanism that could not be transliterated is `ROOT`. The Python takes it from `__file__`,
+// so it works from any directory. Burxt has no `__file__` and `argument(0)` names the executable
+// `burxt run` wrote into the working directory, not this source file — so the root is FOUND, by
+// walking up from the working directory. See `repository_root`.
+//
+// ---- where the heading rule went -----------------------------------------------------------
+//
+// `label`, `slug`, `ial_id`, `headings`, `title_of` and their helpers are no longer in this file.
+// `scripts/site-reference.bx` needs the same ones — the search index and the sidebar have to agree,
+// byte for byte, about the id a section carries — and the Python pair shared them by importing this
+// script from that one. `use` concatenates sources, so a program with a top-level `region` cannot be
+// imported: the region would run. They therefore live in `scripts/nav-headings.bx`, which has no
+// region and no top-level statement, and both generators `use` it. See that file's header.
+// ============================================================================
+
+use "nav-headings.bx";
+use "../lib/string.bx";
+use "../lib/array.bx";
+use "../lib/files.bx";
+use "../lib/path.bx";
+use "../lib/os.bx";
+
+// One page in a hand-named group: what the sidebar shows, where the file is under `docs/`, and
+// where the link goes.
+class Page { shown: String, relative: String, link: String }
+
+// One sidebar group of hand-named pages — `EXTRA_GROUPS` and `LATER_GROUPS`. The guide and the
+// reference are not built from this: one comes from a directory listing and the other numbers its
+// own items, so each has its own block in `build`, exactly as in the Python.
+class Group { title: String, url: String, pages: [Page] }
+
+pure function quote(text: String) -> String {
+    return "\"" + string_replace(string_replace(text, "\\", "\\\\"), "\"", "\\\"") + "\"";
+}
+
+// The `steps:` block under one item, which every one of the three sections needs identically.
+function steps(mutable out: [String], path: String) -> Int touches files {
+    let mutable texts: [String] = [];
+    let mutable ids: [String] = [];
+    let found: Int = headings(path, texts, ids);
+    if found > 0 {
+        push(out, "      steps:");
+        let mutable i: Int = 0;
+        while i < len(texts) {
+            push(out, "        - name: " + quote(label(texts[i])));
+            push(out, "          id: " + ids[i]);
+            i += 1;
+        }
+    }
+    return found;
+}
+
+// One sidebar group from hand-named pages, with sub-headings read from each.
+function group(mutable out: [String], root: String, g: Group) -> Int touches files, commands {
+    push(out, "- title: " + g.title);
+    push(out, "  url: " + g.url);
+    push(out, "  items:");
+    for page in g.pages {
+        let path: String = root + "/docs/" + page.relative;
+        if !file_exists(path) {
+            die("the sidebar names docs/" + page.relative + " and it does not exist");
+        }
+        push(out, "    - name: " + quote(page.shown));
+        push(out, "      url: " + page.link);
+        let counted: Int = steps(out, path);
+    }
+    return 0;
+}
+
+// The reference's pages, in the order the reference itself lists them. Kept beside
+// scripts/site-reference.py's MODULES rather than derived from the directory, because alphabetical
+// would put `builtins` between `os` and `result` and the reading order is the point.
+//
+// A function rather than a top-level table, because a top-level `let` is invisible inside a function
+// body and this is read by one.
+function reference_pages(mutable names: [String], mutable shown: [String]) -> Int {
+    push(names, "index");    push(shown, "Overview");
+    push(names, "builtins"); push(shown, "Builtins");
+    push(names, "cli");      push(shown, "The command line");
+    push(names, "option");   push(shown, "lib/option.bx");
+    push(names, "result");   push(shown, "lib/result.bx");
+    push(names, "string");   push(shown, "lib/string.bx");
+    push(names, "map");      push(shown, "lib/map.bx");
+    push(names, "json");     push(shown, "lib/json.bx");
+    push(names, "files");    push(shown, "lib/files.bx");
+    push(names, "os");       push(shown, "lib/os.bx");
+    return len(names);
+}
+
+// **Two groups the sidebar did not have, and the reason is what the site is FOR.**
+//
+// It had `The guide` and `Reference` — how to learn it, and what everything is called. Neither
+// answers "how do I read a file", which is what somebody types into a search box, and neither
+// offers a way in at all: Install, Refuses and Examples were reachable only from the topbar, so a
+// reader looking at the sidebar had no starting point and no exit.
+//
+// `docs/log/` is nine published pages that nothing linked to. Somebody fixed nine 404s to publish
+// them (`99708b9`) and the same setup deliberately keeps them out of the section map — reachable and
+// off the learner's path, which is right for a development log. It just never got its one link.
+//
+// Every entry still reads its sub-headings out of the page, so these are as unable to go stale as
+// the generated ones.
+function extra_groups(mutable groups: [Group]) -> Int {
+    push(groups, Group { title: "Start here", url: "/install/", pages: [
+        Page { shown: "Install",          relative: "install/index.md", link: "/install/" },
+        Page { shown: "How do I…?",       relative: "how-do-i.md",      link: "/how-do-i.html" },
+        Page { shown: "What it refuses",  relative: "refused/index.md", link: "/refused/" },
+        Page { shown: "Examples",         relative: "examples/index.md", link: "/examples/" },
+        Page { shown: "Packages",         relative: "packages.md",      link: "/packages.html" },
+    ] });
+    return len(groups);
+}
+
+function later_groups(mutable groups: [Group]) -> Int {
+    push(groups, Group { title: "About", url: "/limitations.html", pages: [
+        Page { shown: "What it does not do",  relative: "limitations.md",
+               link: "/limitations.html" },
+        Page { shown: "Compared with others", relative: "comparison.md",
+               link: "/comparison.html" },
+        Page { shown: "What it promises",     relative: "compatibility.md",
+               link: "/compatibility.html" },
+        Page { shown: "The design log",       relative: "log/01-the-language-runs.md",
+               link: "/log/01-the-language-runs.html" },
+    ] });
+    return len(groups);
+}
+
+function build(root: String, mutable out: [String]) -> Int touches files, commands, input {
+    // GENERATED by scripts/site-nav.bx, and it still says so: this banner is the file's contents
+    // and the bar for this port is a byte-identical file.
+    push(out, "# The sidebar. GENERATED by scripts/site-nav.bx — do not edit.");
+    push(out, "#");
+    push(out, "# Every entry is read out of the page it links to, so a renamed heading moves its own");
+    push(out, "# sidebar entry and cannot leave a dead anchor behind. A test regenerates this and diffs.");
+    push(out, "");
+
+    let mutable extra: [Group] = [];
+    let extras: Int = extra_groups(extra);
+    for g in extra {
+        let done: Int = group(out, root, g);
+    }
+
+    let guide: String = root + "/docs/guide";
+    let mutable pages: [String] = [];
+    match file_list_directory(guide) {
+        Some(names) => {
+            for name in names {
+                if is_numbered_guide_page(name) {
+                    push(pages, name);
+                }
+            }
+        }
+        None => { die("there is no docs/guide to read the guide out of"); }
+    }
+    // `sorted(...)`: byte order, which is what Python compares these ASCII names by.
+    let sorted: Int = array_sort(pages);
+    if len(pages) < 11 {
+        die("found only " + to_string(len(pages)) + " numbered guide pages — that cannot be right");
+    }
+
+    push(out, "- title: The guide");
+    push(out, "  url: /guide/");
+    push(out, "  items:");
+    for page in pages {
+        let path: String = guide + "/" + page;
+        push(out, "    - name: " + quote(label(title_of(path))));
+        push(out, "      url: /guide/" + substring(page, 0, len(page) - 3) + ".html");
+        let counted: Int = steps(out, path);
+    }
+
+    let reference: String = root + "/docs/reference";
+    if file_is_directory(reference) {
+        push(out, "- title: Reference");
+        push(out, "  url: /reference/");
+        push(out, "  items:");
+        let mutable names: [String] = [];
+        let mutable shown: [String] = [];
+        let listed: Int = reference_pages(names, shown);
+        let mutable i: Int = 0;
+        while i < len(names) {
+            let name: String = names[i];
+            let path: String = reference + "/" + name + ".md";
+            if !file_exists(path) {
+                die("docs/reference/" + name
+                    + ".md is missing. Run: burxt run scripts/site-reference.bx");
+            }
+            let mutable url: String = "/reference/" + name + ".html";
+            if name == "index" {
+                url = "/reference/";
+            }
+            push(out, "    - name: " + quote(shown[i]));
+            push(out, "      url: " + url);
+            let counted: Int = steps(out, path);
+            i += 1;
+        }
+    }
+
+    let mutable later: [Group] = [];
+    let laters: Int = later_groups(later);
+    for g in later {
+        let done: Int = group(out, root, g);
+    }
+    return len(out);
+}
+
+// ---- the run -----------------------------------------------------------------------------
+
+region nav {
+    let root: String = repository_root();
+    let out_path: String = root + "/docs/_data/nav.yml";
+
+    let mutable lines: [String] = [];
+    let built: Int = build(root, lines);
+    // `"\n".join(out) + "\n"`
+    let text: String = string_join(lines, "\n") + "\n";
+
+    let mutable checking: Bool = false;
+    let given: [String] = os_args();
+    for argument in given {
+        if argument == "--check" {
+            checking = true;
+        }
+    }
+
+    if checking {
+        let mutable on_disk: String = "";
+        if file_exists(out_path) {
+            on_disk = file_read(out_path);
+        }
+        if on_disk != text {
+            die("docs/_data/nav.yml is out of date — run: burxt run scripts/site-nav.bx");
+        }
+        print("docs/_data/nav.yml is current");
+    } else {
+        let made: Bool = file_make_directory(root + "/docs/_data");
+        let written: Int = write_file(out_path, text);
+        print("wrote docs/_data/nav.yml");
+    }
+}

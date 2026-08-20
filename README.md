@@ -295,7 +295,7 @@ message. Adding a test means dropping two files in a directory.
 highlighting, live diagnostics and hover, with no `npm install`:
 
 ```sh
-python3 editors/vscode/pack.py                            # no npm, no vsce
+burxt run editors/vscode/pack.bx                          # no npm, no vsce, no Python
 code --install-extension editors/vscode/burxt.vsix        # then reload the window
 ```
 

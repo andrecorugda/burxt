@@ -267,7 +267,7 @@ to the linker unchanged: `burxt run pay.bx cside.o -lm`. Every command is docume
 **In an editor:**
 
 ```sh
-python3 editors/vscode/pack.py
+burxt run editors/vscode/pack.bx
 code --install-extension editors/vscode/burxt.vsix
 ```
 

@@ -15,7 +15,7 @@ time** — an overflow past what an Int holds, and a precondition handed a value
 because each depends on a VALUE, so no compiler in any language can catch them earlier. Calling
 either a compile error would misdescribe how the language works.
 
-Every message here was produced by running the program. `scripts/refused.py` regenerates this
+Every message here was produced by running the program. `scripts/refused.bx` regenerates this
 file and a test diffs it, so the page cannot claim a refusal the compiler does not make.
 
 ---

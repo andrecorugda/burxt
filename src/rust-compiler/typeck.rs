@@ -4440,7 +4440,7 @@ impl TypeChecker {
         let (ty, mutable) = self
             .env
             .get(name)
-            .ok_or_else(|| format!("unknown variable: {}", name))?;
+            .ok_or_else(|| self.unknown_name(name))?;
         if !*mutable {
             return Err(format!(
                 "cannot call the mutating method `{}` on `{}`: it was declared immutable. {}",
@@ -6259,7 +6259,7 @@ impl TypeChecker {
                 let (declared, mutable) = self
                     .env
                     .get(name)
-                    .ok_or_else(|| format!("unknown variable: {}", name))?
+                    .ok_or_else(|| self.unknown_name(name))?
                     .clone();
                 if matches!(declared, Type::Array { .. }) {
                     return Err(format!(
@@ -6389,7 +6389,7 @@ impl TypeChecker {
                 let (mut cur_ty, mutable) = self
                     .env
                     .get(name)
-                    .ok_or_else(|| format!("unknown variable: {}", name))?
+                    .ok_or_else(|| self.unknown_name(name))?
                     .clone();
                 if !mutable {
                     return Err(format!(
@@ -6505,7 +6505,7 @@ impl TypeChecker {
                 let (declared, mutable) = self
                     .env
                     .get(name)
-                    .ok_or_else(|| format!("unknown variable: {}", name))?
+                    .ok_or_else(|| self.unknown_name(name))?
                     .clone();
                 // A growable array is assignable too, and its bound is its LENGTH, which is
                 // only known at run time — so `len` is 0 here and codegen checks the
@@ -9185,7 +9185,7 @@ impl TypeChecker {
                     let (_, mutable) = self
                         .env
                         .get(name)
-                        .ok_or_else(|| format!("unknown variable: {}", name))?;
+                        .ok_or_else(|| self.unknown_name(name))?;
                     if !*mutable {
                         // Through `how_to_make_writable` like the other seven, and it was NOT
                         // before: this site hardcoded the `let mutable` form, so a mutating
@@ -9472,8 +9472,11 @@ impl TypeChecker {
             return format!(
                 "unknown variable: {} — there is a top-level `let {}`, but a function body cannot \
                  see one: a `let` at the top belongs to the program's own statements, which run \
-                 after the functions are defined. Write `const {}` instead and every function can \
-                 read it.",
+                 after the functions are defined. If it is a fixed value, write `const {}` and \
+                 every function can read it. If it is a TALLY or a list that grows, `const` cannot \
+                 help — it holds one scalar and nothing may push to it: return the count from the \
+                 function and add it up in the caller, or pass the collection in as a `mutable` \
+                 parameter.",
                 name, name, name
             );
         }

@@ -1415,22 +1415,34 @@ fn vscode_extension_speaks_to_the_language_server() {
          the same number"
     );
 
-    // Everything the packager ships has to exist, or `pack.py` fails at the worst
+    // Everything the packager ships has to exist, or the packer fails at the worst
     // possible moment — when someone is trying to install it.
-    let packer = fs::read_to_string(root.join("editors/vscode/pack.py")).unwrap();
+    // **Read out of `extension_files`, which pushes literals one per line.** The Python listed them
+    // in a `FILES = [...]` array; the Burxt version pushes into a caller-owned array, because a
+    // function there may not return a locally-built one. Same property either way — the list is
+    // AUTHORED, so a stray file in the directory never ships — and this reads whichever shape it is.
+    let packer = fs::read_to_string(root.join("editors/vscode/pack.bx")).unwrap();
     let listed = packer
-        .split("FILES = [")
+        .split("function extension_files(")
         .nth(1)
-        .and_then(|s| s.split(']').next())
-        .expect("pack.py should list the files it packages");
+        .and_then(|s| s.split("\n}").next())
+        .expect("pack.bx should list the files it packages in extension_files");
     for line in listed.lines() {
-        let name = line.trim().trim_end_matches(',').trim_matches('"');
-        if name.is_empty() || name.starts_with('#') {
+        let line = line.trim();
+        if !line.starts_with("push(out, \"") {
+            continue;
+        }
+        let name = line
+            .trim_start_matches("push(out, \"")
+            .split('"')
+            .next()
+            .unwrap_or("");
+        if name.is_empty() {
             continue;
         }
         assert!(
             root.join("editors/vscode").join(name).exists(),
-            "pack.py packages `{}`, which does not exist",
+            "pack.bx packages `{}`, which does not exist",
             name
         );
     }
@@ -5849,13 +5861,13 @@ fn the_packaged_extension_matches_the_grammar_in_the_repository() {
             packaged.trim(),
             grammar.trim(),
             "{} was packaged from an older grammar — the editor would highlight a language \
-             this repository no longer has. Re-run `python3 editors/vscode/pack.py`.",
+             this repository no longer has. Re-run `burxt run editors/vscode/pack.bx`.",
             package.file_name().unwrap().to_string_lossy()
         );
     }
 }
 
-/// **Every documented install command must name the file `pack.py` actually writes.**
+/// **Every documented install command must name the file the packer actually writes.**
 ///
 /// The filename used to carry the version, which put the number in five places outside
 /// `package.json`. The predicted drift had already happened silently: at version 0.1.4 both
@@ -5870,12 +5882,12 @@ fn the_packaged_extension_matches_the_grammar_in_the_repository() {
 /// document gains an install command, it is added here — which is the point, because that is also
 /// when someone last read it.
 #[test]
-fn the_documented_install_command_names_the_file_pack_py_writes() {
+fn the_documented_install_command_names_the_file_the_packer_writes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 
     // What the packer writes, asked of the packer rather than assumed.
     //
-    // **Packed into a copy, not into the checkout.** `pack.py` writes beside itself, so running it
+    // **Packed into a copy, not into the checkout.** The packer writes beside itself, so running it
     // here would rewrite `editors/vscode/burxt.vsix` while
     // `the_packaged_extension_matches_the_grammar_in_the_repository` is reading it — the suite runs
     // tests in parallel, and a reader that opens a half-written ZIP fails somewhere else entirely.
@@ -5883,35 +5895,45 @@ fn the_documented_install_command_names_the_file_pack_py_writes() {
     let scratch = std::env::temp_dir().join(format!("burxt-vsix-name-{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     fs::create_dir_all(&scratch).unwrap();
-    assert!(Command::new("cp")
-        .arg("-r")
-        .arg(root.join("editors/vscode"))
-        .arg(scratch.join("vscode"))
-        .status()
-        .expect("cp")
-        .success());
-    let packed = Command::new("python3")
-        .arg(scratch.join("vscode/pack.py"))
+    // **The copy has to mirror the SHAPE, not just the directory.** `pack.bx` imports
+    // `../../lib/zip.bx`, and an import inside a `.bx` resolves against that file's own location —
+    // so copying `editors/vscode` alone puts the packer somewhere `../../lib` does not exist. The
+    // copy is therefore `editors/vscode` AND `lib`, in their real relative positions.
+    fs::create_dir_all(scratch.join("editors")).unwrap();
+    for (from, to) in [("editors/vscode", "editors/vscode"), ("lib", "lib")] {
+        assert!(Command::new("cp")
+            .arg("-r")
+            .arg(root.join(from))
+            .arg(scratch.join(to))
+            .status()
+            .expect("cp")
+            .success());
+    }
+    // The packer is Burxt now, so it runs through the compiler. Still into a COPY, for the reason
+    // below: packing in the checkout races the test that reads the artefact.
+    let packed = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(scratch.join("editors/vscode/pack.bx"))
         .output()
-        .expect("python3");
+        .expect("burxt run pack.bx");
     assert!(
         packed.status.success(),
-        "pack.py failed: {}",
+        "pack.bx failed: {}",
         String::from_utf8_lossy(&packed.stderr)
     );
-    let written = scratch.join("vscode/burxt.vsix");
+    let written = scratch.join("editors/vscode/burxt.vsix");
     let exists = written.exists();
     let _ = fs::remove_dir_all(&scratch);
     assert!(
         exists,
-        "pack.py wrote no burxt.vsix — if the name changed on purpose, change it here and in \
+        "the packer wrote no burxt.vsix — if the name changed on purpose, change it here and in \
          every file this test reads"
     );
 
     for doc in [
         "README.md",
         "editors/README.md",
-        "editors/vscode/pack.py",
+        "editors/vscode/pack.bx",
         "docs/guide/01-getting-started.md",
         "docs/install/index.md",
         ".devcontainer/setup.sh",
@@ -5941,13 +5963,97 @@ fn the_documented_install_command_names_the_file_pack_py_writes() {
             }
             assert!(
                 token.ends_with("burxt.vsix"),
-                "{} names `{}`, which pack.py does not write. A version in the filename is what \
+                "{} names `{}`, which the packer does not write. A version in the filename is what \
                  this test exists to keep out: it lives in package.json, where VS Code reads it.",
                 doc,
                 token
             );
         }
     }
+}
+
+/// **`burxt run x.bx -- args` must reach the PROGRAM, and everything before `--` must still reach
+/// the linker.**
+///
+/// There was no way to hand a program an argument at all. Every unrecognised word became a link
+/// argument, so `burxt run prog.bx x` sent `x` to `cc`, and `burxt run prog.bx -- x` sent `--`, where
+/// it dies with `unrecognized command-line option '--'`. The only working shape was `build -o` and
+/// then run the binary — fine for a person, impossible for a documented one-liner.
+///
+/// **It was found in another repository's documentation rather than here.** BMX's
+/// `burxt/examples/parse.bx` carried `burxt run … -- document.bmx` in its usage block since the day
+/// it was written, in a program whose entire interface is its argument, and it had never worked. It
+/// survived because their CI only ever *built* that file. **A usage line nobody executes is prose.**
+///
+/// Both directions, because a forwarding rule that swallowed link arguments would be a worse bug
+/// than the one it fixed: a bogus `-l` must still reach the linker and still fail.
+#[test]
+fn run_forwards_arguments_after_a_double_dash() {
+    let scratch = std::env::temp_dir().join(format!("burxt-runargs-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let program = scratch.join("echo.bx");
+    fs::write(
+        &program,
+        format!(
+            "use \"{}\";\n\
+             \n\
+             region r {{\n\
+             \x20   let args: [String] = os_args();\n\
+             \x20   print(to_string(len(args)));\n\
+             \x20   let mutable i: Int = 0;\n\
+             \x20   while i < len(args) {{\n\
+             \x20       print(args[i]);\n\
+             \x20       i = i + 1;\n\
+             \x20   }}\n\
+             }}\n",
+            root.join("lib/os.bx").display()
+        ),
+    )
+    .unwrap();
+
+    let burxt = |args: &[&str]| -> (bool, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("run")
+            .arg(&program)
+            .args(args)
+            .current_dir(&scratch)
+            .output()
+            .expect("burxt run");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        )
+    };
+
+    // Forwarded, in order, and nothing else added.
+    let (ok, said) = burxt(&["--", "document.bmx", "--check"]);
+    assert!(ok, "the program did not run: {}", said);
+    assert_eq!(
+        said.lines().collect::<Vec<_>>(),
+        vec!["2", "document.bmx", "--check"],
+        "arguments after `--` did not arrive intact"
+    );
+
+    // **`os_args` excludes the program's own name**, so an argument is at index 0. Asserted because
+    // a port that assumed otherwise would read every argument one slot late.
+    let (ok, said) = burxt(&["--", "only"]);
+    assert!(ok);
+    assert_eq!(said.lines().collect::<Vec<_>>(), vec!["1", "only"]);
+
+    // No `--` at all: still no arguments, and still builds.
+    let (ok, said) = burxt(&[]);
+    assert!(ok, "a plain run broke: {}", said);
+    assert_eq!(said, "0");
+
+    // **The other direction.** A word before `--` is the linker's, and a bogus one must still fail —
+    // otherwise this change quietly swallowed link arguments, which is worse than what it fixed.
+    let (ok, _) = burxt(&["-lnosuchlibraryanywhere"]);
+    assert!(!ok, "a bogus link argument was accepted, so it never reached the linker");
+
+    let _ = fs::remove_dir_all(&scratch);
 }
 
 /// **`lib/inflate.bx` must read what zlib writes — including the blocks Burxt never writes.**
@@ -6531,7 +6637,7 @@ fn burxt_where_names_the_file_the_build_reads() {
 /// edit them, and this test then makes them edit the grammar too.
 ///
 /// It also checks the second list nobody thinks about: a grammar registered in `package.json` and
-/// not listed in `pack.py` is a grammar that works in the checkout and is missing from the package.
+/// not listed in `pack.bx` is a grammar that works in the checkout and is missing from the package.
 #[test]
 fn the_manifest_grammars_cover_the_whole_vocabulary() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -6602,7 +6708,7 @@ fn the_manifest_grammars_cover_the_whole_vocabulary() {
 
     // Every grammar and configuration the manifest contributes must also be in the packer's list.
     let pkg = fs::read_to_string(dir.join("package.json")).unwrap();
-    let pack = fs::read_to_string(dir.join("pack.py")).unwrap();
+    let pack = fs::read_to_string(dir.join("pack.bx")).unwrap();
     for line in pkg.lines() {
         let line = line.trim();
         let is_asset = (line.starts_with("\"path\":") || line.starts_with("\"configuration\":"))
@@ -6617,7 +6723,7 @@ fn the_manifest_grammars_cover_the_whole_vocabulary() {
             .trim_end_matches(&[',', '"'][..]);
         assert!(
             pack.contains(&format!("\"{}\"", file)),
-            "package.json contributes `{}` and pack.py does not ship it — it would work in the \
+            "package.json contributes `{}` and pack.bx does not ship it — it would work in the \
              checkout and be missing from every installed copy",
             file
         );
@@ -6942,7 +7048,7 @@ fn one_word_per_concept_in_the_burxt_compiler() {
 /// Two failures this guards, both of which have already happened once in this project:
 ///
 ///   1. Output typed by hand and then drifting. `docs/examples.md` is GENERATED by
-///      `scripts/site-examples.py`, which runs every snippet through the real compiler. This test
+///      `scripts/site-examples.bx`, which runs every snippet through the real compiler. This test
 ///      regenerates it and diffs, so a change in behaviour breaks the build rather than the page.
 ///   2. A page nobody links to. Eleven guide pages exist; the site's index has to reach all of them,
 ///      the same rule `the_guide_and_examples_are_linked_and_compile` already applies to the
@@ -7038,12 +7144,12 @@ fn the_site_is_honest_and_complete() {
     // exactly that: the compiler ran fine and the editor had no highlighting and no diagnostics,
     // because setup.sh looked for a .vsix that git had never carried.
     //
-    // `pack.py` needs only the standard library, so building it in the container is free. This
+    // The packer needs only the compiler the container just arranged. This
     // asserts the container does that rather than hoping.
     let setup = fs::read_to_string(root.join(".devcontainer/setup.sh")).expect("the setup script");
     assert!(
-        setup.contains("pack.py"),
-        ".devcontainer/setup.sh must BUILD the extension with editors/vscode/pack.py. The .vsix is \
+        setup.contains("pack.bx"),
+        ".devcontainer/setup.sh must BUILD the extension with editors/vscode/pack.bx. The .vsix is \
          git-ignored, so a fresh clone has none and the editor gets no highlighting or diagnostics."
     );
     // And the compiler has to land where an extension host can find it. A PATH edited in .bashrc is
@@ -7083,9 +7189,11 @@ fn the_site_is_honest_and_complete() {
     // this test rather than looking for a release one itself, which is what it used to do — and in
     // CI, which builds debug, that meant this check SKIPPED for thirteen versions. A check that has
     // never run looks exactly like one that passes, so it no longer has a way to opt out.
-    let checked = Command::new("python3")
-        .arg("scripts/site-examples.py")
-        .arg("--check")
+    // **The generator is Burxt now**, so it is invoked through the compiler and its argument goes
+    // after a bare `--` — before it, `--check` would be handed to the linker. It no longer needs
+    // `BURXT` in its environment either: it runs the compiler it was built by.
+    let checked = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .args(["run", "scripts/site-examples.bx", "--", "--check"])
         .env("BURXT", env!("CARGO_BIN_EXE_burxt"))
         .current_dir(root)
         .output()
@@ -7093,7 +7201,7 @@ fn the_site_is_honest_and_complete() {
     assert!(
         checked.status.success(),
         "docs/examples/index.md no longer matches what the compiler does. Regenerate it:\n    \
-         python3 scripts/site-examples.py\n{}{}",
+         burxt run scripts/site-examples.bx\n{}{}",
         String::from_utf8_lossy(&checked.stdout),
         String::from_utf8_lossy(&checked.stderr)
     );
@@ -7532,24 +7640,36 @@ fn the_reference_is_not_stale() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 
     for (script, what) in [
-        ("scripts/site-reference.py", "docs/reference/ and docs/assets/search.json"),
-        ("scripts/site-nav.py", "docs/_data/nav.yml"),
+        ("scripts/site-reference.bx", "docs/reference/ and docs/assets/search.json"),
+        ("scripts/site-nav.bx", "docs/_data/nav.yml"),
         // The package index. Authored rather than scraped — a page a reader trusts should not
         // contain whatever a search returned — so the thing that can rot is the page falling
         // behind the list, which is exactly what a regenerate-and-diff catches.
-        ("scripts/site-packages.py", "docs/packages.md"),
+        ("scripts/site-packages.bx", "docs/packages.md"),
     ] {
-        let checked = Command::new("python3")
-            .arg(script)
-            .arg("--check")
-            .env("BURXT", env!("CARGO_BIN_EXE_burxt"))
-            .current_dir(root)
-            .output()
-            .unwrap_or_else(|e| panic!("running {}: {}", script, e));
+        // **A generator written in Burxt is invoked through the compiler**, and the arguments go
+        // after a bare `--` or they would be handed to the linker instead. That forwarding did not
+        // exist until this port needed it: `burxt run x.bx --check` sent `--check` to `cc`, so a
+        // ported script could not have a `--check` mode at all. The shared dependency came first.
+        let checked = if script.ends_with(".bx") {
+            Command::new(env!("CARGO_BIN_EXE_burxt"))
+                .args(["run", script, "--", "--check"])
+                .current_dir(root)
+                .output()
+                .unwrap_or_else(|e| panic!("running {}: {}", script, e))
+        } else {
+            Command::new("python3")
+                .arg(script)
+                .arg("--check")
+                .env("BURXT", env!("CARGO_BIN_EXE_burxt"))
+                .current_dir(root)
+                .output()
+                .unwrap_or_else(|e| panic!("running {}: {}", script, e))
+        };
         assert!(
             checked.status.success(),
             // **"matches the compiler" was true of two of the three and is now wrong for one.**
-            // `site-packages.py` reads an authored list, not the compiler, so a reader whose
+            // `site-packages.bx` reads an authored list, not the compiler, so a reader whose
             // package entry drifted was told to go look at a compiler that had nothing to do with
             // it. The generator's own `--check` already names the file and the command; this says
             // only what it can know, which is that the two disagree.
@@ -7605,7 +7725,7 @@ fn the_reference_is_not_stale() {
         orphans.is_empty(),
         "the search index points at {} anchor(s) the sidebar does not list, so one of the two is \
          wrong and both will look like they work: {:?}\nBoth ids must come from `headings` in \
-         scripts/site-nav.py.",
+         scripts/site-nav.bx.",
         orphans.len(),
         orphans
     );
@@ -8612,7 +8732,7 @@ fn the_wasm_host_states_the_node_it_needs() {
     eprintln!("the wasm host needs Node {} ({}), and says so", shown, why);
 }
 
-/// The editor icons are what `scripts/editor-icons.py` makes from the brand assets.
+/// The editor icons are what `scripts/editor-icons.bx` makes from the brand assets.
 ///
 /// **Why this is a test and not a note in a README.** The artwork is a designer's and arrives as a
 /// tarball; the PADDING is a derivation with one number in it, and three icons have to agree on
@@ -8629,30 +8749,21 @@ fn the_wasm_host_states_the_node_it_needs() {
 #[test]
 fn the_editor_icons_are_derived_from_the_brand_assets() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    if Command::new("python3").arg("--version").output().is_err() {
-        eprintln!("skipping: python3 is not available");
-        return;
-    }
-    // Pillow is what does the resampling; without it the script cannot answer.
-    let has_pil = Command::new("python3")
-        .args(["-c", "import PIL"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !has_pil {
-        eprintln!("skipping: python3 Pillow is not installed");
-        return;
-    }
-    let out = Command::new("python3")
-        .arg(root.join("scripts/editor-icons.py"))
-        .arg("--check")
+    // **This test used to have two ways to skip and now has none.** It ran `python3` with Pillow,
+    // so it opted out when either was missing — and *a check that has never run looks exactly like
+    // one that passes*, which is the failure this repository has been bitten by more than once.
+    // The deriver is Burxt now: PNG decode through `lib/inflate.bx`, the resampling in the language,
+    // PNG encode through `lib/deflate.bx`. It needs the compiler cargo just built and nothing else,
+    // so there is no dependency left to be absent and no branch left to return early on.
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .args(["run", "scripts/editor-icons.bx", "--", "--check"])
         .current_dir(root)
         .output()
-        .expect("editor-icons.py");
+        .expect("burxt run scripts/editor-icons.bx");
     assert!(
         out.status.success(),
-        "the editor icons are not what scripts/editor-icons.py makes — regenerate them:\n\
-             python3 scripts/editor-icons.py\n\n{}{}",
+        "the editor icons are not what scripts/editor-icons.bx makes — regenerate them:\n\
+             burxt run scripts/editor-icons.bx\n\n{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -11929,14 +12040,13 @@ fn review_reports_weakened_promises_and_nothing_else() {
 #[test]
 fn the_refusals_page_is_not_stale() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = root.join("scripts/refused.py");
-    let out = Command::new("python3")
-        .arg(&script)
-        .arg("--check")
+    // Burxt now, so through the compiler, with the argument after a bare `--`.
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .args(["run", "scripts/refused.bx", "--", "--check"])
         .env("BURXT", env!("CARGO_BIN_EXE_burxt"))
         .current_dir(root)
         .output()
-        .expect("python3 scripts/refused.py --check");
+        .expect("burxt run scripts/refused.bx -- --check");
     assert!(
         out.status.success(),
         "{}{}",
@@ -11966,7 +12076,7 @@ fn the_refusals_page_is_not_stale() {
 /// messages and a function that did not exist; both were caught by running the examples, not by
 /// proofreading.
 ///
-/// So the rule is the same one `scripts/site-examples.py` and `scripts/refused.py` follow: if a
+/// So the rule is the same one `scripts/site-examples.bx` and `scripts/refused.bx` follow: if a
 /// page shows code, a test compiles it. Fragments are skipped — a three-line excerpt with no
 /// declaration in sight is not wrong, it is partial — which is decided by whether the block
 /// contains a `function`, a `class` or a `let`.
@@ -13166,6 +13276,15 @@ fn the_ir_is_the_same_for_every_target() {
     assert!(host.contains("define"), "the host IR is empty:\n{}", host);
 
     let mut differ = Vec::new();
+    // **The loop counts itself.** BMX passed on a finding worth stealing: a check that DERIVES a
+    // number reports the best possible answer when it measures nothing. Their `portability.py`, with
+    // an emptied feature table, announced *"needs nothing newer than Node 0"* and exited 0 — a floor
+    // check reporting maximum portability from zero measurements. This list is an authored literal
+    // rather than a scrape, so it cannot be silently emptied by a reformat the way a regex can; but
+    // the test's whole claim is about COVERAGE — "the same for every target" — and a claim about
+    // coverage should assert its own. An empty list would otherwise pass, loudly, having compared
+    // nothing.
+    let mut compared = 0;
     for triple in [
         "aarch64-unknown-linux-gnu",
         "x86_64-unknown-linux-gnu",
@@ -13210,7 +13329,17 @@ fn the_ir_is_the_same_for_every_target() {
                 .unwrap_or_else(|| "the IR is a different length".to_string());
             differ.push(format!("{}\n{}", triple, first));
         }
+        compared += 1;
     }
+
+    // The coverage assertion, before the sameness one. A test that compared nothing would otherwise
+    // report the strongest possible result — every target agrees — having emitted IR for none.
+    assert!(
+        compared >= 12,
+        "this compared only {} targets, so 'the same for every target' is a claim about almost \
+         nothing. Either the list lost entries or the loop stopped running.",
+        compared
+    );
 
     assert!(
         differ.is_empty(),

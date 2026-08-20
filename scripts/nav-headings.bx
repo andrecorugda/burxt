@@ -1,0 +1,437 @@
+// ============================================================================
+// scripts/nav-headings.bx — the one rule for what a page's headings are called.
+//
+// **Functions only. No top-level statement, and no `region`.** That is the whole reason this file
+// exists as a file: `use` concatenates sources, so a program with a top-level `region` cannot be
+// `use`d — running it would run the region. Two generators need these functions, so they live where
+// neither of them owns them.
+//
+// The two generators are `scripts/site-nav.bx`, which writes the sidebar, and
+// `scripts/site-reference.bx`, which writes the reference pages and the search index. The Python
+// pair they replace shared this code by importing one script from the other, and the comment above
+// that import said why:
+//
+//     The sidebar generator owns the one rule for what id a heading carries: it prefers a `{: #…}`
+//     the page states outright and falls back to kramdown's slug. The search index has to agree
+//     with the sidebar exactly — two rules would mean the sidebar and the search box disagreeing
+//     about where a section is, and both would look like they worked.
+//
+// So a copy of `slug` in each generator is the one arrangement that is not allowed here, and
+// `the_reference_is_not_stale` in `tests/runner.rs` checks the consequence rather than the cause:
+// every anchor the search index points at must be one the sidebar lists.
+//
+// `repository_root` and `is_numbered_guide_page` moved here for the same reason and not because
+// they are about headings. Both generators have to agree on where the repository is and on which
+// files under `docs/guide/` are guide pages — a generator that read eleven pages while the other
+// read twelve would produce a sidebar and a search index covering different sets, which is the
+// same failure with a different name.
+//
+// Every comment below came across unchanged from `scripts/site-nav.bx`, including the readings of
+// the Python patterns each function replaces. They are the evidence that this is a port and not a
+// rewrite; do not compress them into "kramdown's slug rule".
+// ============================================================================
+
+use "../lib/string.bx";
+use "../lib/files.bx";
+use "../lib/path.bx";
+use "../lib/os.bx";
+
+// `sys.exit("...")`: the message on standard error, and status 1.
+function die(message: String) -> Int {
+    print_error(message);
+    exit(1);
+    return 1;
+}
+
+// ---- the four substitutions `label` and `slug` share ---------------------------------------
+//
+// Python:
+//
+//     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+//     text = text.replace("`", "")
+//     text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+//     text = re.sub(r"\*(.+?)\*", r"\1", text)
+//
+// In that order, in both functions, so it is one function here.
+pure function markup_away(text: String) -> String {
+    let linked: String = link_text_only(text);
+    let plain: String = string_replace(linked, "`", "");
+    let bolded: String = unwrap_emphasis(plain, "**");
+    return unwrap_emphasis(bolded, "*");
+}
+
+// `re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)` — a markdown link becomes its own text.
+//
+// `[^\]]*` cannot cross a `]`, so it ends at the FIRST one; `[^)]*` likewise at the first `)`.
+// That makes the whole pattern two searches and two literal bytes, with no backtracking to model:
+// when any of the four parts is missing there is no other way to split the text, so the engine
+// gives up at this position and copies one character. That is the `else` branch.
+pure function link_text_only(text: String) -> String {
+    let stop: Int = len(text);
+    let mutable out: String = "";
+    let mutable run: Int = 0;
+    let mutable i: Int = 0;
+    while i < stop {
+        let mutable matched: Bool = false;
+        if byte_at(text, i) == 91 {                                  // `[`
+            let close: Int = string_find_from(text, "]", i + 1);
+            if close >= 0 && close + 1 < stop && byte_at(text, close + 1) == 40 {   // `](`
+                let paren: Int = string_find_from(text, ")", close + 2);
+                if paren >= 0 {
+                    out += substring(text, run, i - run);
+                    out += substring(text, i + 1, close - i - 1);    // the group
+                    i = paren + 1;
+                    run = i;
+                    matched = true;
+                }
+            }
+        }
+        if !matched {
+            i += 1;
+        }
+    }
+    out += substring(text, run, stop - run);
+    return out;
+}
+
+// `re.sub(r"\*\*(.+?)\*\*", r"\1", text)` for `marker` of `**`, and the same for a single `*`.
+//
+// **`.+?` is where a port of a non-greedy regex goes wrong, so the reading is written out.** It is
+// lazy and it requires at least one character, so the closing marker is the FIRST occurrence at or
+// after `i + len(marker) + 1` — not the first occurrence at all, which would let `****` close on
+// itself. Python then continues scanning AFTER the closing marker, so the markers a match consumed
+// cannot open a second one.
+//
+// `.` counts CHARACTERS and this loop counts BYTES, and for this pattern the two agree: a marker is
+// ASCII, and no byte of a multi-byte character is ASCII, so a marker can never begin inside one.
+// The earliest byte a marker could start at is therefore also the earliest character boundary, and
+// searching from `i + len(marker) + 1` bytes admits exactly the same matches as one character.
+//
+// Worth stating what that gives on the input people write by accident: `****text****` comes out
+// `**text**`, then the single-marker pass makes it `*text*`. That is Python's answer, character for
+// character, and it is not what anyone would guess.
+pure function unwrap_emphasis(text: String, marker: String) -> String {
+    let width: Int = len(marker);
+    let stop: Int = len(text);
+    let mutable out: String = "";
+    let mutable run: Int = 0;
+    let mutable i: Int = 0;
+    while i < stop {
+        let mutable matched: Bool = false;
+        if string_matches_at(text, marker, i) {
+            let close: Int = string_find_from(text, marker, i + width + 1);
+            if close >= 0 {
+                out += substring(text, run, i - run);
+                out += substring(text, i + width, close - i - width);   // the group
+                i = close + width;
+                run = i;
+                matched = true;
+            }
+        }
+        if !matched {
+            i += 1;
+        }
+    }
+    out += substring(text, run, stop - run);
+    return out;
+}
+
+// `\s` — Python's, minus the Unicode part. Every heading in `docs/` was checked for a tab or a
+// non-ASCII space and there is none, so the two classes agree on this input; ASCII is written out
+// rather than implied so a later heading that grows one is a difference somebody can find.
+pure function is_regex_space(byte: Int) -> Bool {
+    return byte == 32 || byte == 9 || byte == 10 || byte == 11 || byte == 12 || byte == 13;
+}
+
+// A heading as the sidebar should SHOW it — the words, without the markdown.
+//
+// Without this the sidebar reads ``print`` with the backticks in it, because a heading's source is
+// markdown and Liquid prints the string it is given.
+pure function label(text: String) -> String {
+    let bare: String = markup_away(text);
+    // `re.sub(r"\s+", " ", text).strip()`
+    let stop: Int = len(bare);
+    let mutable out: String = "";
+    let mutable i: Int = 0;
+    while i < stop {
+        if is_regex_space(byte_at(bare, i)) {
+            out += " ";
+            while i < stop && is_regex_space(byte_at(bare, i)) {
+                i += 1;
+            }
+        } else {
+            out += substring(bare, i, 1);
+            i += 1;
+        }
+    }
+    return string_trim(out);
+}
+
+// kramdown's `basic_generate_id`, character for character.
+//
+// This is a FALLBACK. A page that states its own id with `{: #…}` is believed instead, and the
+// generated reference pages all do — because reproducing another project's slug rule is exactly
+// the kind of near-miss that fails silently: the link resolves, the page loads, and the reader
+// lands at the top instead of at the section.
+//
+// The rule, from kramdown's HTML converter, and each line of it matters:
+//
+//     gen_id = str.gsub(/^[^a-zA-Z]+/, '')   # a leading "1. " is dropped entirely
+//     gen_id.tr!('^a-zA-Z0-9 -', '')         # underscores are DELETED, not hyphenated
+//     gen_id.tr!(' ', '-')                   # one hyphen per space, so two spaces give two
+//     gen_id.downcase!
+//
+// So `to_string` is `tostring`, not `to-string`, and `region — a tray` keeps a double hyphen where
+// the em dash was removed from between two spaces. Neither is what you would guess.
+//
+// Note what is NOT here: `label`'s whitespace collapse. That is what makes the double hyphen
+// survive, so the two functions cannot share their tail.
+//
+// Both character classes are ASCII-only and both are used to DELETE, so a byte scan answers what
+// Python's character scan answers: every byte of a multi-byte character fails both tests, so the
+// whole character goes either way.
+pure function slug(text: String) -> String {
+    // kramdown hashes the heading's TEXT, after inline markup has been parsed away.
+    let bare: String = markup_away(text);
+
+    // `re.sub(r"^[^a-zA-Z]+", "", text)`
+    let stop: Int = len(bare);
+    let mutable from: Int = 0;
+    while from < stop && !string_is_alpha(byte_at(bare, from)) {
+        from += 1;
+    }
+
+    // `re.sub(r"[^a-zA-Z0-9 \-]", "", text)`, then `text.replace(" ", "-")`
+    let mutable kept: String = "";
+    let mutable i: Int = from;
+    while i < stop {
+        let byte: Int = byte_at(bare, i);
+        if string_is_alnum(byte) {
+            kept += substring(bare, i, 1);
+        } else if byte == 32 || byte == 45 {                         // space or `-`
+            kept += "-";
+        }
+        i += 1;
+    }
+
+    // `return text.lower() or "section"`
+    if len(kept) == 0 {
+        return "section";
+    }
+    return string_to_lower_ascii(kept);
+}
+
+// `{: #an-id}` on the line after a heading — kramdown's inline attribute list. A page that says what
+// its anchor is does not need anyone to work it out.
+//
+// Python: `IAL = re.compile(r"^\{:\s*#([A-Za-z0-9_-]+)\s*\}\s*$")`, matched against the STRIPPED
+// line. `+` is greedy and `}` is in neither of the classes that follow it, so the greedy run stops
+// where it has to and there is nothing to backtrack — the scan below is the pattern with no
+// alternatives left out.
+pure function ial_id(line: String) -> Option<String> {
+    let stop: Int = len(line);
+    if !string_starts_with(line, "\{:") {
+        return Option.None;
+    }
+    let mutable i: Int = 2;
+    while i < stop && is_regex_space(byte_at(line, i)) {
+        i += 1;
+    }
+    if i >= stop || byte_at(line, i) != 35 {                         // `#`
+        return Option.None;
+    }
+    i += 1;
+    let from: Int = i;
+    while i < stop && is_ial_id_byte(byte_at(line, i)) {
+        i += 1;
+    }
+    if i == from {                                                   // `+` needs one
+        return Option.None;
+    }
+    let ident: String = substring(line, from, i - from);
+    while i < stop && is_regex_space(byte_at(line, i)) {
+        i += 1;
+    }
+    if i >= stop || byte_at(line, i) != 125 {                        // `\}`
+        return Option.None;
+    }
+    i += 1;
+    while i < stop && is_regex_space(byte_at(line, i)) {
+        i += 1;
+    }
+    if i != stop {
+        return Option.None;
+    }
+    return Option.Some(ident);
+}
+
+// `[A-Za-z0-9_-]`.
+pure function is_ial_id_byte(byte: Int) -> Bool {
+    return string_is_alnum(byte) || byte == 95 || byte == 45;        // `_` or `-`
+}
+
+// A String's lines the way Python's `str.splitlines()` gives them: no terminator, and NO extra empty
+// line for the newline the text ends with. `string_lines` splits on `\n` and drops a `\r` before
+// it — universal newlines, which is what text mode does — so the only difference left to close is
+// that trailing piece.
+//
+// **Dropping it changes nothing for either reader of a page, measured.** An extra `""` at the end is
+// not a fence and is not a heading, and the one thing it could do — resolve a heading still pending
+// at EOF — is what the tail of `headings` does anyway, to the same id. It is written this way
+// because "Python's lines" is the thing being ported and a reader should not have to prove the
+// difference is inert; the note is here so nobody proves it twice.
+//
+// What is NOT covered: a lone `\r` as a line terminator, and the four other characters
+// `str.splitlines()` splits on — `\v`, `\f`, and the two ASCII separators. Every file either
+// generator reads was checked for all of them and none contains one.
+pure function python_lines(text: String) -> [String] {
+    let mutable out: [String] = [];
+    if len(text) == 0 {
+        return out;                                                  // empty text has no lines
+    }
+    let pieces: [String] = string_lines(text);
+    let mutable count: Int = len(pieces);
+    if byte_at(text, len(text) - 1) == 10 && count > 0 {
+        count -= 1;
+    }
+    let mutable i: Int = 0;
+    while i < count {
+        push(out, pieces[i]);
+        i += 1;
+    }
+    return out;
+}
+
+// A file's lines the way Python's `for line in f` gives them — `python_lines` of its contents.
+function read_lines(path: String, mutable out: [String]) -> Int touches files {
+    match file_read_maybe(path) {
+        Some(text) => {
+            let pieces: [String] = python_lines(text);
+            for piece in pieces {
+                push(out, piece);
+            }
+            return len(pieces);
+        }
+        None => {
+            die("cannot read " + path);
+            return 0;
+        }
+    }
+}
+
+// Every H2 on a page, with the id it will actually carry. Fences are skipped.
+//
+// Two arrays rather than a list of pairs, because a function may not hand back storage it built
+// itself: the caller owns them and this fills them.
+//
+// The order of the three tests is the Python's, and it is load-bearing in a way worth naming: the
+// fence test comes FIRST, so a heading whose next line opens a fence stays pending across the whole
+// fence and takes its id from the first line after it. That is what the Python does; it is written
+// down here so nobody tidies the branches into a different answer.
+function headings(path: String, mutable texts: [String], mutable ids: [String]) -> Int
+        touches files {
+    let mutable lines: [String] = [];
+    let read: Int = read_lines(path, lines);
+    let mutable fenced: Bool = false;
+    // `pending` is a String and `has_pending` is Python's `is not None` — `## ` alone leaves an
+    // EMPTY heading pending, which is not the same as nothing pending.
+    let mutable pending: String = "";
+    let mutable has_pending: Bool = false;
+    let mutable found: Int = 0;
+    for line in lines {
+        if string_starts_with(line, "```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let mutable consumed: Bool = false;
+        if has_pending {
+            match ial_id(string_trim(line)) {
+                Some(ident) => {
+                    push(texts, pending);
+                    push(ids, ident);
+                    // The Python's `if m: continue` — a line that stated the id is spent, so it
+                    // cannot also be read as a heading. A `continue` here would leave `found` and
+                    // `has_pending` unset, so the flag is set and the skip happens below.
+                    //
+                    // **It is inert, in both programs, and that is worth writing down rather than
+                    // leaving for someone to discover.** The test it skips is
+                    // `startswith("## ")`, and a line that matched the attribute list begins
+                    // `{:` — so the skip can never change an answer. Measured: setting this to
+                    // `false` leaves the generated file byte-identical. Kept because it is the
+                    // Python's shape and because the guard is right if either pattern ever moves.
+                    consumed = true;
+                }
+                None => {
+                    push(texts, pending);
+                    push(ids, slug(pending));
+                }
+            }
+            found += 1;
+            has_pending = false;
+        }
+        if !consumed && string_starts_with(line, "## ") {
+            pending = string_trim(substring(line, 3, len(line) - 3));
+            has_pending = true;
+        }
+    }
+    if has_pending {
+        push(texts, pending);
+        push(ids, slug(pending));
+        found += 1;
+    }
+    return found;
+}
+
+// The H1, which is what the page calls itself.
+function title_of(path: String) -> String touches files {
+    let mutable lines: [String] = [];
+    let read: Int = read_lines(path, lines);
+    for line in lines {
+        if string_starts_with(line, "# ") {
+            return string_trim(substring(line, 2, len(line) - 2));
+        }
+    }
+    return path_basename(path);
+}
+
+// `^\d\d-.*\.md$`. `.*` may be empty, so the shortest name that matches is `01-.md` — six bytes,
+// which is why the `.md` has to start at index 3 or later rather than merely be at the end.
+pure function is_numbered_guide_page(name: String) -> Bool {
+    return len(name) >= 6
+            && string_is_digit(byte_at(name, 0))
+            && string_is_digit(byte_at(name, 1))
+            && byte_at(name, 2) == 45                                // `-`
+            && string_ends_with(name, ".md");
+}
+
+// Where the repository is, which is the one thing `__file__` was doing for the Python.
+//
+// Walked up from the working directory rather than derived from `argument(0)`: `burxt run` compiles
+// to an executable in the working directory, so argument 0 says where you ARE, never where this
+// source file is. `Cargo.toml` beside `docs/` is the pair only the root has.
+function repository_root() -> String touches files, commands {
+    let mutable here: String = "";
+    match os_cwd() {
+        Some(directory) => { here = directory; }
+        None => { die("cannot read the working directory"); }
+    }
+    let mutable steps_up: Int = 0;
+    while steps_up < 64 {
+        if file_exists(here + "/Cargo.toml") && file_is_directory(here + "/docs") {
+            return here;
+        }
+        let up: String = path_dirname(here);
+        if up == here {
+            steps_up = 64;
+        } else {
+            here = up;
+            steps_up += 1;
+        }
+    }
+    die("run this from inside the repository — no directory above the working directory holds both "
+        + "Cargo.toml and docs/");
+    return "";
+}

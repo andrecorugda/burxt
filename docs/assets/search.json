@@ -282,7 +282,7 @@
  {
   "kind": "command",
   "name": "burxt run",
-  "text": "<file.bx> [link args...]",
+  "text": "<file.bx> [link args] [-- program args]",
   "url": "/reference/cli.html",
   "where": "compile then run"
  },

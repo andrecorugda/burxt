@@ -1,0 +1,726 @@
+// ============================================================================
+// scripts/release.bx — assemble the release tarball, then refuse to hand it over until it has been
+// unpacked and used.
+//
+//     sh scripts/release.sh            # builds the compiler with cargo, then runs this
+//     burxt run scripts/release.bx     # everything below, with a compiler you already have
+//
+// The binary statically links LLVM, so whoever installs it needs no LLVM, no Rust and no
+// cargo — only a C compiler, because `burxt build` calls `cc` to link. That is stated in
+// the tarball's README rather than discovered.
+//
+// ---- why `scripts/release.sh` still exists ------------------------------------------------
+//
+// Seven lines of shell, none of them a decision, and it is not a leftover. On a fresh clone there
+// is no Burxt binary, so nothing here can run until cargo has produced one — the same
+// chicken-and-egg as `install.sh`.
+// The shell entry point therefore keeps exactly the part that must work before Burxt exists
+// (`cargo build --release`) and hands over. Everything the release IS — what goes in the tarball,
+// and every assertion about what came out — is here, in the language this repository ships.
+//
+// One consequence worth stating: by the time this program prints `building burxt <version>`, the
+// compiler is already built. The line is kept word for word because it is the release's own log,
+// and cargo writes its progress to stderr, so what a caller sees on stdout is unchanged by the
+// split.
+//
+// ---- the assertions are the point of this file --------------------------------------------
+//
+// A tarball that was merely produced is not a release. Everything after `tar` unpacks what a
+// stranger downloads, into a directory that has never seen this project, and uses the UNPACKED
+// binary. The repository being green says nothing about the artifact.
+// ============================================================================
+
+use "../lib/os.bx";
+use "../lib/files.bx";
+use "../lib/string.bx";
+
+// How far up the tree to look for the checkout before giving up. A checkout is never this deep
+// below itself; the bound exists so a program run outside one stops instead of walking to `/`.
+const ROOT_SEARCH_LIMIT: Int = 12;
+
+// ---- the checkout -------------------------------------------------------------------------
+
+// The checkout this program is cutting a release from, or `None`.
+//
+// Discovered rather than derived from the program's own path, because a Burxt program cannot see
+// its source: under `burxt run` the executable lives in a scratch directory that says nothing
+// about where the source came from. The anchor is the two things every path below is built from —
+// `Cargo.toml`, which carries the version, and `lib/`, which is what gets packaged.
+function discover_root() -> Option<String> touches commands, files {
+    match os_cwd() {
+        None => {
+            return Option.None;
+        }
+        Some(start) => {
+            let mutable here: String = start;
+            let mutable up: Int = 0;
+            while up < ROOT_SEARCH_LIMIT {
+                if file_exists(here + "/Cargo.toml") && file_is_directory(here + "/lib") {
+                    return Option.Some(here);
+                }
+                let cut: Int = string_rfind(here, "/");
+                if cut <= 0 {
+                    return Option.None;
+                }
+                here = substring(here, 0, cut);
+                up += 1;
+            }
+            return Option.None;
+        }
+    }
+}
+
+// The version the tarball is named after, from the one place that decides it.
+//
+// `Cargo.toml`'s FIRST `version = ` line, which is the package's own — a dependency further down
+// the file has one too, and taking the last would name the tarball after somebody else's crate.
+function read_version(root: String) -> Option<String> touches files {
+    let text: String = file_read_maybe(root + "/Cargo.toml")?;
+    let lines: [String] = string_lines(text);
+    let mutable i: Int = 0;
+    while i < len(lines) {
+        if string_starts_with(lines[i], "version = ") {
+            let opened: Int = string_find(lines[i], "\"");
+            if opened < 0 {
+                return Option.None;
+            }
+            let rest: String = substring(lines[i], opened + 1, len(lines[i]) - opened - 1);
+            let closed: Int = string_find(rest, "\"");
+            if closed < 0 {
+                return Option.None;
+            }
+            return Option.Some(substring(rest, 0, closed));
+        }
+        i += 1;
+    }
+    return Option.None;
+}
+
+// What `uname` says, or empty when it could not be asked.
+function uname_field(flag: String) -> String touches commands, files, input {
+    let seen: Capture = os_capture_status("uname " + flag);
+    if seen.code != 0 {
+        return "";
+    }
+    return string_trim(seen.output);
+}
+
+// The host triple as the download page spells it: `linux-x86_64`, `darwin-arm64`.
+//
+// The SYSTEM is lower-cased and the machine is not, which is what `uname -s | tr A-Z a-z` did and
+// is not an oversight: `x86_64` and `arm64` are already lower case, and `uname -m` is the one field
+// a host is entitled to answer in its own spelling.
+//
+// `os_platform()` is deliberately not used here. It answers `macos` for Darwin, which is the right
+// answer for a program asking what it is running on and the wrong one for a file name — the
+// published tarballs say `darwin`.
+function target_name(system: String, machine: String) -> String {
+    return string_to_lower_ascii(system) + "-" + machine;
+}
+
+// ---- stopping ------------------------------------------------------------------------------
+
+// Everything the shell got from `set -e`, said out loud. A release script that carried on after a
+// failed copy would ship whatever was in the directory from last time.
+function stop(message: String) -> Int touches commands, files, input {
+    print_error("FAIL: " + message);
+    exit(1);
+    return 1;
+}
+
+// The same, from inside the smoke test, where a scratch tree is open. `release.sh` had this as a
+// `trap ... EXIT`; here it is the one door every failure after the unpack goes through.
+function stop_in(work: String, message: String) -> Int touches commands, files, input {
+    print_error("FAIL: " + message);
+    let cleaned: Bool = remove_tree(work);
+    exit(1);
+    return 1;
+}
+
+// A tree, gone. `lib/files.bx` has no recursive delete on purpose — `rm -rf` on a path a program
+// computed is the most expensive mistake a standard library can offer — so this is the three lines
+// it tells the caller to write in the open: walk, delete backwards, then the directory itself.
+// `file_walk` sorts, so a parent always precedes its contents and going backwards puts the
+// contents first.
+function remove_tree(path: String) -> Bool touches commands, files, input {
+    if !file_is_directory(path) {
+        if !file_exists(path) {
+            return true;
+        }
+        return file_delete(path);
+    }
+    match file_walk(path) {
+        None => {
+            return false;
+        }
+        Some(paths) => {
+            let mutable i: Int = len(paths) - 1;
+            while i >= 0 {
+                if file_is_directory(paths[i]) {
+                    let gone_directory: Bool = file_remove_directory(paths[i]);
+                } else {
+                    let gone: Bool = file_delete(paths[i]);
+                }
+                i -= 1;
+            }
+            return file_remove_directory(path);
+        }
+    }
+}
+
+// ---- what goes in the tarball --------------------------------------------------------------
+
+// The README a stranger reads first. Everything in it is a promise this file then checks:
+// the C compiler, the single host, and the library file names.
+//
+// `str.bx` is why the smoke test below exists at all. This page once named a `lib/str.bx` that has
+// never existed — the file is `string.bx` — and nothing caught it because nothing ever opened the
+// tarball.
+function tarball_readme(version: String, target: String) -> String {
+    return "# Burxt " + version + " — " + target + "\n"
+        + "\n"
+        + "A typed, compiled, native language where exact decimals are the default.\n"
+        + "\n"
+        + "## Install\n"
+        + "\n"
+        + "    sudo cp burxt /usr/local/bin/\n"
+        + "    sudo mkdir -p /usr/local/lib/burxt && sudo cp -r lib/* /usr/local/lib/burxt/\n"
+        + "\n"
+        + "Or keep it wherever you unpacked it and call it by path.\n"
+        + "\n"
+        + "## Run something\n"
+        + "\n"
+        + "    cat > hello.bx <<'BX'\n"
+        + "    let price: Decimal<2> = 19.99;\n"
+        + "    print(price * 3);\n"
+        + "    BX\n"
+        + "    burxt run hello.bx        # 59.97, exactly\n"
+        + "\n"
+        + "## What this needs from your machine\n"
+        + "\n"
+        + "- **A C compiler** (`cc`), because `burxt build` hands the object file to the system\n"
+        + "  linker. Nothing else: LLVM is inside this binary.\n"
+        + "- **" + target + "** — this tarball runs on that and nothing else. Other hosts are published\n"
+        + "  alongside it: Linux x86-64, Linux arm64, macOS arm64 and macOS x86-64.\n"
+        + "\n"
+        + "  On **Windows**, use the container image rather than this tarball:\n"
+        + "\n"
+        + "      docker run --rm -v \"$PWD:/work\" ghcr.io/andrecorugda/burxt run hello.bx\n"
+        + "      wslc   run --rm -v \"$PWD:/work\" ghcr.io/andrecorugda/burxt run hello.bx\n"
+        + "\n"
+        + "  `wslc` is Windows 11's built-in Linux container runtime — no Docker Desktop needed.\n"
+        + "\n"
+        + "## Compiling FOR another machine\n"
+        + "\n"
+        + "The host above is where the *compiler* runs. What it can *emit* is a longer list, and the\n"
+        + "LLVM IR is byte-identical for every one of them, which is what makes the decimal answers\n"
+        + "identical too:\n"
+        + "\n"
+        + "    burxt build pay.bx --target aarch64-linux-android -o pay.o\n"
+        + "\n"
+        + "That writes an **object and stops**, on purpose: linking needs that platform's libc, sysroot\n"
+        + "and linker, so it is handed to the toolchain that already has them (the NDK here). Verified\n"
+        + "to emit: `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, `riscv64-unknown-linux-gnu`,\n"
+        + "`aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-pc-windows-msvc`,\n"
+        + "`armv7-unknown-linux-gnueabihf`, `wasm32-unknown-unknown`, `wasm32-wasi`,\n"
+        + "`aarch64-apple-ios`, and the three Android ABIs\n"
+        + "(`aarch64-linux-android`, `armv7a-linux-androideabi`, `x86_64-linux-android`).\n"
+        + "\n"
+        + "## Where things are\n"
+        + "\n"
+        + "- `lib/` — the standard library, written in Burxt. `option.bx` and `result.bx` are how\n"
+        + "  absence and failure work at all; `map.bx` is a key-value table in insertion order;\n"
+        + "  `string.bx`, `files.bx` and `os.bx` are what their names say.\n"
+        + "  `use \"/usr/local/lib/burxt/string.bx\";`\n"
+        + "- The guide, the examples and the source: https://github.com/andrecorugda/burxt\n";
+}
+
+// Every `.bx` in `lib/`, copied. Answers how many, or `-1` if a copy failed.
+//
+// Globbed rather than listed, exactly as `cp lib/*.bx` was: a new library module joins the release
+// by existing, which is why `the_repository_layout_is_declared` can insist `lib/` holds no
+// subdirectory — a directory would be skipped here in silence.
+function copy_library(root: String, out: String) -> Int touches commands, files, input {
+    match file_list_directory(root + "/lib") {
+        None => {
+            return -1;
+        }
+        Some(entries) => {
+            let mutable copied: Int = 0;
+            let mutable i: Int = 0;
+            while i < len(entries) {
+                if string_ends_with(entries[i], ".bx") {
+                    if !file_copy(root + "/lib/" + entries[i], out + "/lib/" + entries[i]) {
+                        return -1;
+                    }
+                    copied += 1;
+                }
+                i += 1;
+            }
+            return copied;
+        }
+    }
+}
+
+// `dist/<name>/`, filled. Anything that goes wrong here stops the release where it stands.
+function assemble(root: String, out: String, version: String, target: String) -> Bool
+        touches commands, files, input {
+    if !remove_tree(out) {
+        let stopped: Int = stop("could not clear " + out);
+    }
+    if !file_make_directory(out + "/lib") {
+        let stopped: Int = stop("could not create " + out + "/lib");
+    }
+
+    // Copy then strip IN PLACE, rather than `strip -o dest src`. GNU and BSD strip disagree about
+    // `-o` in ways that are not worth discovering on a release runner, and copy-then-strip is the
+    // spelling both agree on.
+    if !file_copy(root + "/target/release/burxt", out + "/burxt") {
+        let stopped: Int = stop("could not copy the compiler into " + out);
+    }
+    if os_run("strip " + file_quote(out + "/burxt")) != 0 {
+        let stopped: Int = stop("strip failed on " + out + "/burxt");
+    }
+
+    if copy_library(root, out) < 0 {
+        let stopped: Int = stop("could not copy lib/*.bx into " + out + "/lib");
+    }
+    if !file_copy(root + "/lib/README.md", out + "/lib/README.md") {
+        let stopped: Int = stop("could not copy lib/README.md");
+    }
+    if !file_copy(root + "/LICENSE-MIT", out + "/LICENSE-MIT") {
+        let stopped: Int = stop("could not copy LICENSE-MIT");
+    }
+    if !file_copy(root + "/LICENSE-APACHE", out + "/LICENSE-APACHE") {
+        let stopped: Int = stop("could not copy LICENSE-APACHE");
+    }
+
+    let wrote: Int = file_write(out + "/README.md", tarball_readme(version, target));
+    if wrote <= 0 {
+        let stopped: Int = stop("could not write " + out + "/README.md");
+    }
+    return true;
+}
+
+// ---- the archive, verified rather than believed ----------------------------------------------
+//
+// **`tar`'s exit status is a hint; the comparison below is the assertion.** GNU tar exits **1** for
+// a WARNING — `file changed as we read it`, which a 32 MB binary read while the filesystem settles
+// is enough to earn — and **2** for a real failure. Reading 1 as "the release is broken" makes this
+// script FLAKY, and a flaky release script is worse than a broken one: a broken one fails every
+// time and gets fixed. Reading 1 as "fine" would be worse still, trading a false alarm for a silent
+// one in the one file whose whole value is its assertions.
+//
+// So neither. The archive is listed and compared against what is actually on disk, which answers
+// the question the exit code was only gesturing at — and it is compared on a SUCCESSFUL run too,
+// because a tar that exits 0 having quietly skipped a file is a failure nothing else here would
+// ever see. Trusting a status is trusting a name.
+
+// How many non-empty lines. `string_lines` keeps the empty piece a trailing newline leaves, which
+// is right for splitting and wrong for counting.
+pure function line_count(text: String) -> Int {
+    let lines: [String] = string_lines(text);
+    let mutable found: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(lines) {
+        if lines[i] != "" {
+            found += 1;
+        }
+        i += 1;
+    }
+    return found;
+}
+
+// Every path `assemble` left on disk, looked for in the archive's own table of contents. Answers
+// how many paths were compared, or `-1` if the staging tree could not be walked at all — which is
+// a different fact from "nothing is missing" and must not answer 0. `missing` collects the paths
+// the archive does not hold.
+//
+// The listing is `os_capture_status`'s stdout rather than `os_capture`'s merge, deliberately: tar
+// writes its warnings to stderr, and merging them into a table of contents puts a sentence where a
+// path belongs — which would then be compared against, and reported as, a missing file.
+function missing_from_archive(name: String, out: String, listing: String, mutable missing: [String]) -> Int
+        touches commands, files, input {
+    match file_walk(out) {
+        None => {
+            return -1;
+        }
+        Some(paths) => {
+            let mutable compared: Int = 0;
+            let mutable i: Int = 0;
+            while i < len(paths) {
+                // `dist/<name>/lib/os.bx` is `<name>/lib/os.bx` inside the archive, because tar was
+                // handed `-C dist <name>`. A directory carries a trailing slash there and none here.
+                let mutable inside: String = name
+                        + substring(paths[i], len(out), len(paths[i]) - len(out));
+                if file_is_directory(paths[i]) {
+                    inside = inside + "/";
+                }
+                if !has_exact_line(listing, inside) {
+                    push(missing, inside);
+                }
+                compared += 1;
+                i += 1;
+            }
+            return compared;
+        }
+    }
+}
+
+// ---- the smoke test, against the TARBALL ---------------------------------------------------
+
+// The last piece of a path.
+//
+// Used on a line of `ldd` or `otool -L` output, which is why it is a name and not a path: the
+// question below is what the LIBRARY is called, and a line can carry a directory whose name says
+// something else entirely.
+pure function basename_of(line: String) -> String {
+    let cut: Int = string_rfind(line, "/");
+    if cut < 0 {
+        return line;
+    }
+    return substring(line, cut + 1, len(line) - cut - 1);
+}
+
+// How to list a binary's shared libraries here, or empty on a host where nobody knows.
+//
+// The tool differs by platform, and getting this wrong is silent rather than loud: `ldd` does not
+// exist on macOS, so the original `ldd | grep` simply found nothing there and the check PASSED for
+// every Darwin build without ever looking. A guard that cannot fail is not a guard — so the tool is
+// chosen explicitly and an unknown platform is a hard stop, not a shrug.
+function shared_libraries_command(system: String, binary: String) -> String {
+    if system == "Linux" {
+        return "ldd " + file_quote(binary);
+    }
+    if system == "Darwin" {
+        return "otool -L " + file_quote(binary);
+    }
+    return "";
+}
+
+// The line naming libLLVM, or empty.
+//
+// **Matched on the library's NAME, not on the line.** `grep -i llvm` over `otool -L` output flagged
+// `/opt/homebrew/opt/llvm@18/lib/libunwind.1.dylib` — whose *path* contains `llvm@18` while the
+// library is libunwind — and reported "the binary links libLLVM" about a binary that had libLLVM
+// statically linked correctly.
+//
+// The name is trimmed before it is judged, which the `sed | grep '^libllvm'` this replaces could
+// not do: a line with no slash in it at all — `libLLVM-18.so.1 => not found` is exactly that
+// shape — keeps `ldd`'s leading tab, and an anchored match then fails on the one line it most
+// needed to catch.
+function llvm_library_line(listing: String) -> String {
+    let lines: [String] = string_lines(listing);
+    let mutable i: Int = 0;
+    while i < len(lines) {
+        let name: String = string_to_lower_ascii(string_trim(basename_of(lines[i])));
+        if string_starts_with(name, "libllvm") {
+            return lines[i];
+        }
+        i += 1;
+    }
+    return "";
+}
+
+// A package manager's prefix, if this line names one.
+//
+// This is the question the check was always really asking, and it is the one that catches what the
+// libLLVM test misses. libunwind from Homebrew is a genuine failure: a user who has never run
+// `brew` does not have `/opt/homebrew` at all. macOS ships its unwinder and libc++ in `/usr/lib`,
+// and a standalone tarball must use those. Anything under /usr/lib, /System or the vdso is the
+// platform and is fine.
+pure function package_manager_prefix(line: String) -> String {
+    if string_contains(line, "/opt/homebrew") {
+        return "/opt/homebrew";
+    }
+    if string_contains(line, "/usr/local/opt") {
+        return "/usr/local/opt";
+    }
+    if string_contains(line, "/opt/local") {
+        return "/opt/local";
+    }
+    if string_contains(line, "/home/linuxbrew") {
+        return "/home/linuxbrew";
+    }
+    return "";
+}
+
+// The line linking something from a package manager, or empty.
+pure function package_manager_line(listing: String) -> String {
+    let lines: [String] = string_lines(listing);
+    let mutable i: Int = 0;
+    while i < len(lines) {
+        if package_manager_prefix(lines[i]) != "" {
+            return lines[i];
+        }
+        i += 1;
+    }
+    return "";
+}
+
+// Whether some whole line of `text` is exactly `wanted` — `grep -qx`.
+pure function has_exact_line(text: String, wanted: String) -> Bool {
+    let lines: [String] = string_lines(text);
+    let mutable i: Int = 0;
+    while i < len(lines) {
+        if lines[i] == wanted {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// The program that proves the packaged library not only exists but LOADS.
+//
+// `option.bx` and `map.bx` together, because a Map of Ints answering through an Option is the
+// library exercising both halves of what a program actually asks of it.
+pure function library_program() -> String {
+    return "use \"lib/option.bx\";\n"
+        + "use \"lib/map.bx\";\n"
+        + "region r \{\n"
+        + "    let mutable counts: Map<String, Int> = map_new();\n"
+        + "    let put: Int = counts.set(\"apples\", 3);\n"
+        + "    print(option_or(counts.find(\"apples\"), 0));\n"
+        + "\}\n";
+}
+
+// Unpack what a stranger downloads and use it. Answers true, or does not answer.
+function smoke_test(system: String, name: String, tarball: String) -> Bool
+        touches commands, files, input {
+    match file_temp_directory("release") {
+        None => {
+            let stopped: Int = stop("no scratch directory to unpack the tarball into");
+            return false;
+        }
+        Some(work) => {
+            if os_run("tar xzf " + file_quote(tarball) + " -C " + file_quote(work)) != 0 {
+                let stopped: Int = stop_in(work, "could not unpack " + tarball);
+            }
+            let unpacked: String = work + "/" + name;
+            let binary: String = unpacked + "/burxt";
+            if os_run("test -x " + file_quote(binary)) != 0 {
+                let stopped: Int = stop_in(work, "no executable in the tarball");
+            }
+
+            // If this links libLLVM then "needs no LLVM installed" is false, and that sentence is
+            // on the install page.
+            let listing_command: String = shared_libraries_command(system, binary);
+            if listing_command == "" {
+                let stopped: Int = stop_in(work, "no way to list shared libraries on " + system);
+            }
+            let listed: Capture = os_capture_status(listing_command);
+            if listed.code != 0 {
+                let stopped: Int = stop_in(work,
+                        "could not inspect the binary's shared libraries with: " + listing_command);
+            }
+            // Two questions, not one, because the first version asked only the first and matched a
+            // PATH. See `llvm_library_line` and `package_manager_prefix` for what each one is for.
+            let llvm: String = llvm_library_line(listed.output);
+            if llvm != "" {
+                let stopped: Int = stop_in(work,
+                        "the binary links libLLVM, so it is not standalone\n" + llvm);
+            }
+            let vendored: String = package_manager_line(listed.output);
+            if vendored != "" {
+                let stopped: Int = stop_in(work,
+                        "the binary links a library from a package manager, so it is not standalone\n"
+                        + vendored);
+            }
+
+            // From the unpacked directory, with the unpacked binary. `burxt run` writes its
+            // executable into the working directory, which is this scratch tree and not the
+            // repository — a stray binary in the root is something the suite refuses.
+            let hello_wrote: Int = file_write(unpacked + "/hello.bx", "print(\"Hello, world!\");\n");
+            let hello: Capture = os_capture_status("cd " + file_quote(unpacked) + " && "
+                    + file_quote(binary) + " run hello.bx");
+            if hello.code != 0 {
+                let stopped: Int = stop_in(work,
+                        "cannot run a one-line program\n" + hello.output + hello.errors);
+            }
+            if !has_exact_line(hello.output, "Hello, world!") {
+                let stopped: Int = stop_in(work, "wrong output for hello\n" + hello.output);
+            }
+
+            // Every library file the README names must be there and must RESOLVE. Existence was
+            // all the shell asked, and existence is the weaker half of the question: a module that
+            // is present and does not compile fails in a user's hands instead of here. `burxt
+            // check` answers both at once, and answers it from the unpacked tree, so a `use` that
+            // reaches back into this repository would fail rather than pass.
+            let mutable modules: [String] = [];
+            push(modules, "option");
+            push(modules, "result");
+            push(modules, "map");
+            push(modules, "string");
+            push(modules, "files");
+            push(modules, "os");
+            let mutable m: Int = 0;
+            while m < len(modules) {
+                let module: String = modules[m];
+                if !file_exists(unpacked + "/lib/" + module + ".bx") {
+                    let stopped: Int = stop_in(work,
+                            "lib/" + module + ".bx is named in the README and missing");
+                }
+                let probe: Int = file_write(unpacked + "/module_check.bx",
+                        "use \"lib/" + module + ".bx\";\n");
+                let checked: Capture = os_capture_status("cd " + file_quote(unpacked) + " && "
+                        + file_quote(binary) + " check module_check.bx");
+                if checked.code != 0 {
+                    let stopped: Int = stop_in(work,
+                            "lib/" + module + ".bx does not resolve from the tarball\n"
+                            + checked.output + checked.errors);
+                }
+                m += 1;
+            }
+
+            let library_wrote: Int = file_write(unpacked + "/lib_check.bx", library_program());
+            let library: Capture = os_capture_status("cd " + file_quote(unpacked) + " && "
+                    + file_quote(binary) + " run lib_check.bx");
+            if library.code != 0 {
+                let stopped: Int = stop_in(work,
+                        "the library does not work from the tarball\n"
+                        + library.output + library.errors);
+            }
+            if !has_exact_line(library.output, "3") {
+                let stopped: Int = stop_in(work,
+                        "wrong output from the library\n" + library.output);
+            }
+
+            let cleaned: Bool = remove_tree(work);
+            return true;
+        }
+    }
+}
+
+// ---- what the release says about itself -----------------------------------------------------
+
+// `du -h`, the one number a download page needs.
+function tarball_size(path: String) -> String touches commands, files, input {
+    let seen: Capture = os_capture_status("du -h " + file_quote(path) + " | cut -f1");
+    if seen.code != 0 {
+        return "";
+    }
+    return string_trim(seen.output);
+}
+
+// The checksum, from whichever tool this host spells it with. Empty where neither exists, which is
+// a hard stop at the call site — a release whose checksum is missing is a release nobody can
+// verify, and printing `sha256` followed by nothing would look like one that had been.
+function tarball_sha256(system: String, path: String) -> String touches commands, files, input {
+    let mutable tool: String = "";
+    if system == "Linux" {
+        tool = "sha256sum";
+    }
+    if system == "Darwin" {
+        tool = "shasum -a 256";
+    }
+    if tool == "" {
+        return "";
+    }
+    let seen: Capture = os_capture_status(tool + " " + file_quote(path) + " | cut -d' ' -f1");
+    if seen.code != 0 {
+        return "";
+    }
+    return string_trim(seen.output);
+}
+
+// ---- the release -----------------------------------------------------------------------------
+
+function cut_release(root: String) -> Int touches commands, files, input {
+    let system: String = uname_field("-s");
+    let machine: String = uname_field("-m");
+    if system == "" || machine == "" {
+        let stopped: Int = stop("uname could not say what machine this is");
+    }
+    let target: String = target_name(system, machine);
+
+    let mutable version: String = "";
+    match read_version(root) {
+        None => {
+            let stopped: Int = stop("no `version = ` in Cargo.toml");
+        }
+        Some(found) => {
+            version = found;
+        }
+    }
+
+    let name: String = "burxt-" + version + "-" + target;
+    let out: String = root + "/dist/" + name;
+    let tarball: String = root + "/dist/" + name + ".tar.gz";
+
+    print("building burxt " + version + " for " + target);
+
+    // `release.sh` has already run cargo by the time this program starts. It says so if it did not.
+    if !file_exists(root + "/target/release/burxt") {
+        let stopped: Int = stop("no target/release/burxt — run: cargo build --release");
+    }
+
+    if !file_make_directory(root + "/dist") {
+        let stopped: Int = stop("could not create dist/");
+    }
+    let built: Bool = assemble(root, out, version, target);
+
+    // 2 and above is fatal on the spot: a real tar error, or a signal, which `os_exit_code` reports
+    // as 128 + n. What a 1 MEANS is not guessed at — it is settled three lines down by looking.
+    let packed: Int = os_run("tar -czf " + file_quote(tarball) + " -C " + file_quote(root + "/dist")
+            + " " + file_quote(name));
+    if packed >= 2 {
+        let stopped: Int = stop("tar failed on " + tarball);
+    }
+    let listed: Capture = os_capture_status("tar tzf " + file_quote(tarball));
+    if listed.code != 0 {
+        let stopped: Int = stop("the archive cannot even be listed, so it cannot be shipped: " + tarball);
+    }
+    let mutable missing: [String] = [];
+    let compared: Int = missing_from_archive(name, out, listed.output, missing);
+    if compared < 0 {
+        let stopped: Int = stop("could not walk " + out + " to check the archive against it");
+    }
+    if len(missing) > 0 {
+        let stopped: Int = stop("the archive is missing " + to_string(len(missing)) + " of the "
+                + to_string(compared) + " assembled paths: " + string_join(missing, ", "));
+    }
+    // The reverse direction, which is the half a correspondence check forgets: the archive holds
+    // every assembled path PLUS its own root directory, and nothing else. Without this, anything
+    // that found its way into `dist/<name>` after the assemble would ride along unremarked.
+    let entries: Int = line_count(listed.output);
+    if entries != compared + 1 {
+        let stopped: Int = stop("the archive holds " + to_string(entries) + " entries where "
+                + to_string(compared) + " paths were assembled — it carries something that was not");
+    }
+    if packed != 0 {
+        // A warning, and the archive is provably whole. Said out loud on stderr — a release that
+        // printed nothing here would read exactly like one where tar was quiet.
+        print_error("note: tar exited " + to_string(packed) + ", a warning, and the archive holds all "
+                + to_string(compared) + " assembled paths — continuing");
+    }
+    if !remove_tree(out) {
+        let stopped: Int = stop("could not clear the staging directory " + out);
+    }
+
+    let smoked: Bool = smoke_test(system, name, tarball);
+
+    let size: String = tarball_size(tarball);
+    if size == "" {
+        let stopped: Int = stop("could not measure " + tarball);
+    }
+    let sum: String = tarball_sha256(system, tarball);
+    if sum == "" {
+        let stopped: Int = stop("no sha256 tool on " + system);
+    }
+    print("wrote dist/" + name + ".tar.gz (" + size + ") — smoke test passed");
+    print("sha256 " + sum);
+    return 0;
+}
+
+region main {
+    match discover_root() {
+        None => {
+            print_error("run this from inside the checkout: no Cargo.toml and lib/ above the working directory");
+            exit(1);
+        }
+        Some(root) => {
+            let code: Int = cut_release(root);
+        }
+    }
+}

@@ -37,7 +37,7 @@ artwork changes, and repackage:
 ```sh
 cp assets/burxt-b-favicon-512.png editors/vscode/icon.png
 cp assets/burxt-b-favicon-48.png  editors/vscode/file-icon.png
-python3 editors/vscode/pack.py
+burxt run editors/vscode/pack.bx
 ```
 
 ## The palette, sampled from the artwork

@@ -69,15 +69,18 @@ fi
 #
 # `.gitignore` has `*.vsix`, on the sound principle that a binary in a repository is a binary nobody
 # can reproduce — so a fresh clone has no package at all, and the first real Codespace found exactly
-# that: the compiler ran and the editor had no highlighting and no diagnostics. `pack.py` uses only
+# that: the compiler ran and the editor had no highlighting and no diagnostics. The packer needs only
 # the standard library, so building it in the container costs nothing and needs no network.
 say "Building and installing the editor extension"
-python3 editors/vscode/pack.py
-# Named, not globbed: `pack.py` writes exactly one path and a glob that matched a leftover from
+# The packer is Burxt now, so it needs the compiler this script has just arranged — either the
+# installed release or the one built from source above. `command -v burxt` covers both, because both
+# paths end with it on PATH.
+"$(command -v burxt)" run editors/vscode/pack.bx
+# Named, not globbed: the packer writes exactly one path and a glob that matched a leftover from
 # an older naming would install yesterday's grammar and report success.
 VSIX="editors/vscode/burxt.vsix"
 if [ ! -f "$VSIX" ]; then
-    echo "    FAILED: pack.py produced no .vsix" >&2
+    echo "    FAILED: pack.bx produced no .vsix" >&2
     exit 1
 fi
 if command -v code >/dev/null 2>&1; then

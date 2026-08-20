@@ -1,0 +1,1436 @@
+// ============================================================================
+// scripts/editor-icons.bx — derive the editor file-tree icons from the brand assets,
+// with room to breathe.
+//
+//     burxt run scripts/editor-icons.bx              # write them
+//     burxt run scripts/editor-icons.bx --check      # fail if what is committed is not this
+//
+// ============================================================================
+// WHY THIS IS A SCRIPT AND NOT THREE FILES SOMEBODY CROPPED
+// ============================================================================
+//
+// The artwork is a designer's, but the PADDING is a derivation, and it has one number in it: how
+// much of the icon's box the ink is allowed to fill. Every icon in the family has to agree on that
+// number or the tree looks ragged — `.bx`, `.bmx` and `.sbmx` sit on consecutive rows, and an eye
+// reads inconsistent margins as misalignment rather than as three different logos.
+//
+// **The number is 70%, and it came from a complaint rather than taste.** The shipped `.bx` icon
+// filled 86% of its height: 4 pixels of clear space at 48px, which in a VS Code row puts the glyph
+// against the filename. At 70% there are 7 clear pixels above and below, which is what every other
+// language icon in a tree has.
+//
+// The source PNGs are cropped to their own ink first, so the margin is measured from the ARTWORK
+// and not from whatever canvas the exporter happened to use — two of the three sources had
+// different amounts of built-in slack, which is exactly how a family drifts.
+//
+// ============================================================================
+// WHY THIS FILE IS LONG: IT IS A BIT-FOR-BIT PORT, NOT A REIMPLEMENTATION
+// ============================================================================
+//
+// This replaces `scripts/editor-icons.py`, which reached for Pillow. The committed `.png` files are
+// a designer's brand assets, so the port had one hard constraint: **the pixels it makes must be the
+// pixels already committed**, byte for byte in the DATA (not in the PNG encoding — any valid
+// encoding is fine, and this one writes filter-0 rows through `lib/deflate.bx`).
+//
+// Three of the four stages are plain integer work and port in a few lines each:
+//
+//   * PNG in and out — `lib/inflate.bx`, `lib/deflate.bx`, `lib/hash.bx` already had every piece.
+//   * The bounding box, the crop and the centred paste.
+//   * Pillow's premultiply / straighten pair. **This one is not optional and it is not obvious:**
+//     `Image.resize` on an `RGBA` image converts to `RGBa`, resamples the PREMULTIPLIED bytes, and
+//     converts back. Resampling straight RGBA instead agrees on 85% of the pixels and is 255 out on
+//     the ones near an edge — which reads as "the filter is nearly right" when the filter was never
+//     the problem. `muldiv255` and `straighten_pixel` below are Pillow's own two conversions.
+//
+// The fourth stage is `Image.LANCZOS`, and matching it exactly is what the rest of this file is:
+//
+//   * Lanczos support 3, its coefficient normalisation, its **22-bit** fixed point and its
+//     round-half-away-from-zero — `PIL_BITS` and `fx_to_pil_weight`.
+//   * The accumulator seeded with a half — `PIL_ROUND` — and an arithmetic shift with a clamp,
+//     which is Pillow's `clip8`.
+//   * `sin` to about 2^-50, from a Horner series over exact fixed point. There are no floats in
+//     Burxt and none are needed: `fx_mul` and `fx_div` below carry 50 fractional bits through a
+//     64-bit Int by splitting at 27 bits, so every coefficient is exact to far better than the
+//     22 bits Pillow keeps.
+//
+// **And one place where being MORE accurate than Pillow is the wrong answer.** Pillow's tap range
+// is `(int)(centre - support + 0.5)`, computed in C doubles. For a 430 -> 90 resize at output row 52
+// the exact value of that expression is 237; the double arithmetic yields 236.99999999999997, and
+// the C cast truncates to **236**. An exactly-correct implementation picks 237, shifts that row's
+// window by one input pixel, and produces a visibly different icon. So `ieee_*` below is a small
+// IEEE-754 double emulator — from_ratio, multiply-by-small-int, add, truncate — used for nothing
+// except reproducing that rounding.
+//
+// **What was measured, because "it matches" is a claim and not a number.** The bound emulation was
+// checked against the shipped Pillow on 6,521 (input, output) size pairs while it was being written.
+// Then this file's own resampler was run against `Image.resize(..., LANCZOS)` over 21 output sizes —
+// including a pure upscale, a 1x1, and 2x500 — on four sources of very different shapes (256x256,
+// 512x512, 823x217, 1311x360): **84 of 84 byte-identical**. Then the six real icons: identical to
+// the committed PNGs, pixel for pixel. The 21 sizes matter more than the 6 icons do, because six
+// fixtures cannot tell "correct" from "correct here".
+//
+// The same reason governs the two SIZE roundings: `INK_MANTISSA` is the literal IEEE double that
+// `0.70` denotes, because `round(box * 0.70)` is a rounding of a value that is not 0.7.
+//
+// ============================================================================
+// WHAT WOULD BE WRONG TO DO HERE
+// ============================================================================
+//
+// If this file ever stops agreeing with a committed icon, **do not rewrite the icon.** The icons are
+// the artefact and this file is the derivation; a re-baseline that silences a disagreement destroys
+// the only evidence that the derivation still holds. `--check` names the file and returns non-zero
+// so that a human decides.
+// ============================================================================
+
+use "../lib/files.bx";
+use "../lib/result.bx";
+use "../lib/hash.bx";
+use "../lib/inflate.bx";
+use "../lib/deflate.bx";
+
+// ---- the one decision, and the places it is read from ----------------------------------
+
+// The fraction of the box the ink may fill, as the IEEE-754 double that the literal `0.70` actually
+// denotes: 3152519739159347 / 2^52, which is 0.6999999999999999555910790149937383830547332763671875.
+// Rounding `box * 0.7` exactly and rounding `box * that` differ whenever `box * 7` ends in 5 — 48 and
+// 128 do not, but writing the exact rational here would be a silent difference waiting for a box size
+// nobody has asked for yet.
+const INK_MANTISSA: Int = 3152519739159347;
+const INK_EXPONENT: Int = -52;
+
+// ---- fixed point: 50 fractional bits in an Int -----------------------------------------
+
+// Why 50 and not more: `fx_mul` splits its operands at 27 bits, so an operand may be up to 2^54 —
+// sixteen — and the widest intermediate it forms is 2^58. Why not fewer: a coefficient error of e
+// becomes an error of e * 2^22 in the number Pillow keeps, so e must be far below 2^-23 or a
+// coefficient lands on the wrong side of a rounding boundary. 2^-50 leaves eleven bits of margin.
+const FX_BITS: Int = 50;
+const FX_ONE: Int = 1125899906842624;              // 2^50
+const FX_LIMIT: Int = 18014398509481984;           // 2^54 — the operand bound `fx_mul` needs
+const FX_PI: Int = 3537118876014220;               // round(pi * 2^50)
+
+// How many terms of sin(u)/u = 1 - u^2/3! + u^4/5! - ... are kept. After range reduction |u| <= pi/2,
+// so u^2 <= 2.4675 and the first dropped term is (2.4675^12)/25!, about 3e-21 — three orders below
+// the last bit this arithmetic holds.
+const FX_SIN_TERMS: Int = 12;
+
+// ---- Pillow's own fixed point, which is a different and coarser one --------------------
+
+// `Resample.c`: PRECISION_BITS is 32 - 8 - 2. Every coefficient is stored as round(w * 2^22) and
+// the accumulator starts at 2^21, so that the final arithmetic shift rounds instead of truncating.
+// **The two are a set.** 2^21 belongs to a shift of 22 and to no other; changing the shift alone
+// leaves an accumulator biased by half a bit, which is a whole level on some pixels and none on
+// most — the shape of a difference that survives a spot check.
+const PIL_BITS: Int = 22;
+const PIL_ROUND: Int = 2097152;                    // 2^21
+
+// Lanczos support, from `ImagingResampleLanczos`.
+const LANCZOS_SUPPORT: Int = 3;
+
+// ============================================================================
+// SMALL INTEGER HELPERS
+// ============================================================================
+
+pure function abs_of(x: Int) -> Int
+        requires x > -9223372036854775807 - 1
+        {
+    if x < 0 {
+        return -x;
+    }
+    return x;
+}
+
+// How many bits the magnitude occupies; `bits_of(0)` is 0. Written as a loop rather than a table
+// because it is called once per double operation, not once per pixel.
+pure function bits_of(x: Int) -> Int
+        requires x >= 0
+        {
+    let mutable v: Int = x;
+    let mutable n: Int = 0;
+    while v > 0 {
+        v = shift_right_zeros(v, 1);
+        n = n + 1;
+    }
+    return n;
+}
+
+// ============================================================================
+// IEEE-754 DOUBLE EMULATION
+//
+// A double is carried as a pair `(m, e)` meaning `m * 2^e`, with `|m| < 2^54`. Only four operations
+// exist, because Pillow's bound arithmetic uses only four:
+//
+//     scale     = (double)in_size / out_size            ieee_from_ratio
+//     support   = 3.0 * scale                           ieee_mul_int
+//     centre    = (xx + 0.5) * scale                    ieee_mul_int, with the exponent lowered
+//     centre +- support, then + 0.5                     ieee_add, ieee_add_half
+//     (int) of the result                               ieee_trunc
+//
+// Nothing else in this file emulates a double. The filter arguments themselves are computed as EXACT
+// rationals, which is both simpler and closer to the real Lanczos than Pillow's own doubles are —
+// that difference is around 1e-16 and cannot reach the 22 bits Pillow keeps.
+// ============================================================================
+
+// Round `m * 2^e` to a 53-bit mantissa, ties to even. `sticky` says a strictly positive remainder
+// sits below `m`'s lowest bit — the caller must then have left more than 53 bits to round, because
+// with 53 or fewer there is nothing to round and the remainder would silently vanish. That is a
+// `requires` rather than a comment: every caller here leaves at least 54, and a future one that does
+// not will stop rather than be quietly wrong by one bit.
+pure function ieee_norm(m: Int, e: Int, sticky: Bool) -> (Int, Int)
+        requires !sticky || bits_of(abs_of(m)) > 53
+        {
+    if m == 0 {
+        return (0, 0);
+    }
+    let negative: Bool = m < 0;
+    let magnitude: Int = abs_of(m);
+    let width: Int = bits_of(magnitude);
+    if width <= 53 {
+        return (m, e);
+    }
+    let drop: Int = width - 53;
+    let mutable kept: Int = shift_right_zeros(magnitude, drop);
+    let remainder_bits: Int = magnitude - shift_left(kept, drop);
+    let half: Int = shift_left(1, drop - 1);
+    let mutable exponent: Int = e + drop;
+    let mutable up: Bool = false;
+    if remainder_bits > half {
+        up = true;
+    } else {
+        if remainder_bits == half {
+            up = sticky || remainder(kept, 2) == 1;
+        }
+    }
+    if up {
+        kept = kept + 1;
+        if kept == shift_left(1, 53) {
+            kept = shift_right_zeros(kept, 1);
+            exponent = exponent + 1;
+        }
+    }
+    if negative {
+        return (-kept, exponent);
+    }
+    return (kept, exponent);
+}
+
+// The correctly rounded double of `n / d`. Long division to exactly 54 significant bits, then one
+// rounding — the remainder is the sticky bit, so a tie is decided by what is actually left over
+// rather than by what happens to fit.
+pure function ieee_from_ratio(n: Int, d: Int) -> (Int, Int)
+        requires n >= 0
+        requires d > 0
+        {
+    if n == 0 {
+        return (0, 0);
+    }
+    let mutable numerator: Int = n;
+    let mutable exponent: Int = 0;
+    while numerator < d {
+        numerator = numerator * 2;
+        exponent = exponent - 1;
+    }
+    let mutable quotient: Int = divide_floor(numerator, d);
+    let mutable left: Int = numerator - quotient * d;
+    let mutable more: Int = 54 - bits_of(quotient);
+    while more > 0 {
+        left = left * 2;
+        quotient = quotient * 2;
+        if left >= d {
+            left = left - d;
+            quotient = quotient + 1;
+        }
+        exponent = exponent - 1;
+        more = more - 1;
+    }
+    return ieee_norm(quotient, exponent, left > 0);
+}
+
+// The correctly rounded double of `(m * 2^e) * k`, `k` a positive Int. The product must fit in 62
+// bits with room for the rounding, so a wide mantissa is narrowed FIRST and what it drops becomes
+// the sticky bit. Dropping it silently is the same defect as ignoring a remainder.
+pure function ieee_mul_int(m: Int, e: Int, k: Int) -> (Int, Int)
+        requires k > 0
+        {
+    if m == 0 {
+        return (0, 0);
+    }
+    let factor_width: Int = bits_of(k);
+    let mutable mantissa: Int = m;
+    let mutable exponent: Int = e;
+    let mutable sticky: Bool = false;
+    let width: Int = bits_of(abs_of(m));
+    if width + factor_width > 62 {
+        let drop: Int = width + factor_width - 62;
+        let negative: Bool = mantissa < 0;
+        let magnitude: Int = abs_of(mantissa);
+        let kept: Int = shift_right_zeros(magnitude, drop);
+        sticky = magnitude != shift_left(kept, drop);
+        mantissa = kept;
+        if negative {
+            mantissa = -kept;
+        }
+        exponent = exponent + drop;
+    }
+    return ieee_norm(mantissa * k, exponent, sticky);
+}
+
+// The correctly rounded double of the sum. The two mantissas are brought to one exponent; when the
+// exponents are too far apart for that to fit, the smaller one is shifted down and what it loses
+// becomes the sticky bit — the 61 bits kept are more than the 53 the answer needs, so the only thing
+// the sticky bit can still decide is a tie.
+pure function ieee_add(m1: Int, e1: Int, m2: Int, e2: Int) -> (Int, Int) {
+    if m1 == 0 {
+        return ieee_norm(m2, e2, false);
+    }
+    if m2 == 0 {
+        return ieee_norm(m1, e1, false);
+    }
+    let mutable big: Int = m1;
+    let mutable big_e: Int = e1;
+    let mutable small: Int = m2;
+    let mutable small_e: Int = e2;
+    if e1 < e2 {
+        big = m2;
+        big_e = e2;
+        small = m1;
+        small_e = e1;
+    }
+    let gap: Int = big_e - small_e;
+    let mutable room: Int = 61 - bits_of(abs_of(big));
+    if room < 0 {
+        room = 0;
+    }
+    if gap <= room {
+        return ieee_norm(shift_left(big, gap) + small, small_e, false);
+    }
+    let extra: Int = gap - room;
+    let mutable shrunk: Int = 0;
+    let mutable sticky: Bool = false;
+    if extra >= 63 {
+        if small < 0 {
+            shrunk = -1;
+        }
+        sticky = small != 0;
+    } else {
+        shrunk = shift_right_sign(small, extra);
+        sticky = small != shift_left(shrunk, extra);
+    }
+    return ieee_norm(shift_left(big, room) + shrunk, big_e - room, sticky);
+}
+
+// `(m * 2^e) + 0.5`, correctly rounded. Kept separate only because 0.5 is the one addend the bound
+// arithmetic ever uses and `(1, -1)` at the call site reads as noise.
+pure function ieee_add_half(m: Int, e: Int) -> (Int, Int) {
+    return ieee_add(m, e, 1, -1);
+}
+
+// C's `(int)` cast: truncate toward zero. Pillow's comment above these two lines says "Round the
+// value", which it does not do; the cast is what runs.
+pure function ieee_trunc(m: Int, e: Int) -> Int {
+    let negative: Bool = m < 0;
+    let magnitude: Int = abs_of(m);
+    let mutable whole: Int = 0;
+    if e >= 0 {
+        whole = shift_left(magnitude, e);
+    } else {
+        if -e < 63 {
+            whole = shift_right_zeros(magnitude, -e);
+        }
+    }
+    if negative {
+        return -whole;
+    }
+    return whole;
+}
+
+// Python's `round()`: to the nearest Int, ties to even. Used for the two SIZE decisions, which are
+// `round(box * 0.70)` and `round(height * ink_width / ink_height)`.
+pure function ieee_round(m: Int, e: Int) -> Int {
+    let negative: Bool = m < 0;
+    let magnitude: Int = abs_of(m);
+    let mutable whole: Int = 0;
+    if e >= 0 {
+        whole = shift_left(magnitude, e);
+    } else {
+        if -e < 63 {
+            let drop: Int = -e;
+            whole = shift_right_zeros(magnitude, drop);
+            let left: Int = magnitude - shift_left(whole, drop);
+            let half: Int = shift_left(1, drop - 1);
+            if left > half {
+                whole = whole + 1;
+            } else {
+                if left == half && remainder(whole, 2) == 1 {
+                    whole = whole + 1;
+                }
+            }
+        }
+    }
+    if negative {
+        return -whole;
+    }
+    return whole;
+}
+
+// Is `m * 2^e` below 1? Pillow clamps `filterscale` to a floor of 1.0, which is the difference
+// between a downscale (the filter widens) and an upscale (it does not).
+pure function ieee_below_one(m: Int, e: Int) -> Bool {
+    if m <= 0 {
+        return true;
+    }
+    if e >= 0 {
+        return false;
+    }
+    if -e >= 63 {
+        return true;
+    }
+    return m < shift_left(1, -e);
+}
+
+// ============================================================================
+// FIXED-POINT ARITHMETIC WITH 50 FRACTIONAL BITS
+// ============================================================================
+
+// round(a * b / 2^50), exactly, for |a| and |b| below 2^54.
+//
+// The product of two 54-bit numbers needs 108 bits and there is no such Int, so the operands are
+// split at 27 bits and the four partial products are recombined at the scale rather than above it.
+// The widest intermediate is `high * 16`, which is 2^58 — the `requires` is what keeps it there, and
+// it is a `requires` and not a comment because `*` traps on overflow and a trap is a dead process,
+// not a wrong answer somebody can read off a test.
+pure function fx_mul(a: Int, b: Int) -> Int
+        requires abs_of(a) < FX_LIMIT
+        requires abs_of(b) < FX_LIMIT
+        {
+    let negative: Bool = (a < 0) != (b < 0);
+    let x: Int = abs_of(a);
+    let y: Int = abs_of(b);
+    let x_high: Int = shift_right_zeros(x, 27);
+    let x_low: Int = bit_and(x, 134217727);
+    let y_high: Int = shift_right_zeros(y, 27);
+    let y_low: Int = bit_and(y, 134217727);
+
+    let high: Int = x_high * y_high;                        // weight 2^54, so 2^4 at the scale
+    let middle: Int = x_high * y_low + x_low * y_high;      // weight 2^27, so 2^-23 at the scale
+    let low: Int = x_low * y_low;                           // weight 2^0, so 2^-50 at the scale
+
+    let middle_whole: Int = shift_right_zeros(middle, 23);
+    let middle_part: Int = bit_and(middle, 8388607);
+    // Everything still below the scale, as a numerator over 2^50.
+    let fraction: Int = shift_left(middle_part, 27) + low;
+    let carry: Int = shift_right_zeros(fraction, FX_BITS);
+    let left: Int = fraction - shift_left(carry, FX_BITS);
+    let mutable answer: Int = shift_left(high, 4) + middle_whole + carry;
+    if left * 2 >= FX_ONE {
+        answer = answer + 1;
+    }
+    if negative {
+        return -answer;
+    }
+    return answer;
+}
+
+// round(a * 2^50 / b), exactly. Binary long division, 50 steps, then one rounding step — `a * 2^50`
+// does not fit an Int for any `a` worth dividing, so the shift happens one bit at a time inside the
+// loop instead of once in front of it.
+pure function fx_div(a: Int, b: Int) -> Int
+        requires b != 0
+        {
+    let negative: Bool = (a < 0) != (b < 0);
+    let numerator: Int = abs_of(a);
+    let denominator: Int = abs_of(b);
+    let whole: Int = divide_floor(numerator, denominator);
+    let mutable left: Int = numerator - whole * denominator;
+    let mutable bits: Int = 0;
+    let mutable step: Int = 0;
+    while step < FX_BITS {
+        left = left * 2;
+        bits = bits * 2;
+        if left >= denominator {
+            left = left - denominator;
+            bits = bits + 1;
+        }
+        step = step + 1;
+    }
+    if left * 2 >= denominator {
+        bits = bits + 1;
+    }
+    let mutable answer: Int = whole * FX_ONE + bits;
+    if negative {
+        return -answer;
+    }
+    return answer;
+}
+
+// round(a / d) for a small positive Int divisor, ties away from zero. The factorial denominators of
+// the sine series go through here; a truncating divide would bias every term the same way and the
+// bias would survive into the coefficients.
+pure function fx_div_int(a: Int, d: Int) -> Int
+        requires d > 0
+        {
+    if a < 0 {
+        return -divide_floor(-a * 2 + d, d * 2);
+    }
+    return divide_floor(a * 2 + d, d * 2);
+}
+
+// sin(u)/u for |u| <= pi/2, by Horner over u^2 — which is the same series as sin(u) with the leading
+// `u` factored out, and factoring it out is the point. Computing sin(u) and then dividing by u loses
+// every bit of the quotient's precision that the series' absolute error eats, and for a small u that
+// is most of them: the taps nearest a centre have |u| around 3e-3, where sin(u)/u must still be
+// right to 2^-50 and sin(u) itself is only right to 2^-50 in absolute terms.
+pure function fx_sin_over_x(u: Int) -> Int
+        requires abs_of(u) < FX_LIMIT
+        {
+    let squared: Int = fx_mul(u, u);
+    let mutable series: Int = FX_ONE;
+    let mutable term: Int = FX_SIN_TERMS;
+    while term >= 1 {
+        let denominator: Int = (2 * term) * (2 * term + 1);
+        series = FX_ONE - fx_div_int(fx_mul(squared, series), denominator);
+        term = term - 1;
+    }
+    return series;
+}
+
+// sin(u) for any u this file forms, which is |u| <= 3 * pi. One reduction step against FX_PI, then
+// the series. FX_PI is pi to within 2^-51, and `n` is at most 3, so the reduced argument carries at
+// most 3 * 2^-51 of error — which divides out of the sinc below rather than accumulating.
+pure function fx_sin(u: Int) -> Int
+        requires abs_of(u) < FX_LIMIT
+        {
+    let negative: Bool = u < 0;
+    let magnitude: Int = abs_of(u);
+    let turns: Int = divide_floor(magnitude + divide_floor(FX_PI, 2), FX_PI);
+    let reduced: Int = magnitude - turns * FX_PI;
+    let mutable answer: Int = fx_mul(reduced, fx_sin_over_x(reduced));
+    if remainder(turns, 2) == 1 {
+        answer = -answer;
+    }
+    if negative {
+        return -answer;
+    }
+    return answer;
+}
+
+// Pillow's `sinc_filter(p / q)`: sin(pi x) / (pi x), and exactly 1 at x = 0.
+//
+// The argument arrives as a RATIONAL because it is one — `(i + start + 0.5 - centre) * ss` reduces to
+// an integer over `2 * max(in_size, out_size)` — so nothing here has to reconstruct a value Pillow
+// arrived at by two double multiplications.
+pure function fx_sinc(p: Int, q: Int) -> Int
+        requires q > 0
+        {
+    if p == 0 {
+        return FX_ONE;
+    }
+    let x: Int = fx_div(p, q);
+    let u: Int = fx_mul(FX_PI, x);
+    let half_pi: Int = divide_floor(FX_PI, 2);
+    if -half_pi <= u && u <= half_pi {
+        return fx_sin_over_x(u);
+    }
+    return fx_div(fx_sin(u), u);
+}
+
+// Pillow's `lanczos_filter`: a truncated sinc, `sinc(x) * sinc(x / 3)`, zero outside [-3, 3).
+// The half-open interval is Pillow's, and it is asymmetric on purpose — `-3.0 <= x && x < 3.0`.
+pure function fx_lanczos(p: Int, q: Int) -> Int
+        requires q > 0
+        {
+    if p < -LANCZOS_SUPPORT * q || p >= LANCZOS_SUPPORT * q {
+        return 0;
+    }
+    return fx_mul(fx_sinc(p, q), fx_sinc(p, LANCZOS_SUPPORT * q));
+}
+
+// A normalised coefficient, at 50 fractional bits, as the 22-bit number Pillow stores. Pillow writes
+// `(int)(0.5 + w * (1 << 22))` for a positive w and `(int)(-0.5 + ...)` for a negative one, and since
+// C truncates toward zero that pair is round-half-AWAY-from-zero, not round-half-up.
+pure function fx_to_pil_weight(w: Int) -> Int {
+    let drop: Int = FX_BITS - PIL_BITS;
+    let half: Int = shift_left(1, drop - 1);
+    if w < 0 {
+        return -shift_right_zeros(-w + half, drop);
+    }
+    return shift_right_zeros(w + half, drop);
+}
+
+// ============================================================================
+// THE COEFFICIENT TABLE
+// ============================================================================
+
+// One entry per output pixel: where its window starts in the input, how many taps it has, and where
+// its weights begin in the shared `weight` array.
+//
+// A flat array with an offset rather than an array of arrays, because a growable array cannot hold
+// another array — the compiler says so by name: *"a growable array cannot hold another array yet —
+// its element would need its own region reasoning. Use a class element."* An array of a one-field
+// class would compile; a flat buffer with offsets is what Pillow itself uses (`kk[xx * ksize]`), so
+// this is the shape the algorithm wanted anyway.
+class Taps {
+    start: [Int],
+    count: [Int],
+    at: [Int],
+    weight: [Int],
+}
+
+// Pillow's `precompute_coeffs`, for a full-image box, at 8 bits per channel.
+//
+// Two arithmetics live in this function and mixing them up is the whole difficulty:
+//
+//   * The BOUNDS are emulated doubles, because a cast truncates and a truncation can move a whole
+//     input pixel. See the header — 430 -> 90 at row 52 is the case that proves it.
+//   * The ARGUMENTS are exact rationals, because a filter value is smooth and 1e-16 of disagreement
+//     cannot reach the 22 bits that get stored.
+function taps_for(in_size: Int, out_size: Int) -> Taps
+        requires in_size > 0
+        requires out_size > 0
+        {
+    let mutable table: Taps = Taps { start: [], count: [], at: [], weight: [] };
+
+    // `scale` and `support` as Pillow's doubles.
+    let scale: (Int, Int) = ieee_from_ratio(in_size, out_size);
+    let mutable filter_scale: (Int, Int) = scale;
+    if ieee_below_one(scale.0, scale.1) {
+        filter_scale = (1, 0);                             // max(1.0, scale)
+    }
+    let support: (Int, Int) = ieee_mul_int(filter_scale.0, filter_scale.1, LANCZOS_SUPPORT);
+
+    // The argument `(i + start + 0.5 - centre) * ss` over its own denominator. With `ss` equal to
+    // `1 / filter_scale`, both the downscale and the upscale case reduce to a denominator of
+    // `2 * max(in_size, out_size)`, which is why there is no second branch below.
+    let mutable widest: Int = in_size;
+    if out_size > widest {
+        widest = out_size;
+    }
+    let centre_denominator: Int = 2 * out_size;
+    let argument_denominator: Int = 2 * widest;
+
+    for index in 0..out_size {
+        let centre_numerator: Int = (2 * index + 1) * in_size;
+        // centre = (index + 0.5) * scale, i.e. (2 * index + 1) * scale / 2 — the halving is the
+        // exponent, so it costs nothing and rounds nothing.
+        let centre: (Int, Int) = ieee_mul_int(scale.0, scale.1 - 1, 2 * index + 1);
+        let below: (Int, Int) = ieee_add(centre.0, centre.1, -support.0, support.1);
+        let above: (Int, Int) = ieee_add(centre.0, centre.1, support.0, support.1);
+        let low: (Int, Int) = ieee_add_half(below.0, below.1);
+        let high: (Int, Int) = ieee_add_half(above.0, above.1);
+
+        let mutable start: Int = ieee_trunc(low.0, low.1);
+        if start < 0 {
+            start = 0;
+        }
+        let mutable stop: Int = ieee_trunc(high.0, high.1);
+        if stop > in_size {
+            stop = in_size;
+        }
+        let taps: Int = stop - start;
+
+        let base: Int = len(table.weight);
+        let mutable total: Int = 0;
+        for tap in 0..taps {
+            let p: Int = (tap + start) * centre_denominator + out_size - centre_numerator;
+            let w: Int = fx_lanczos(p, argument_denominator);
+            let grew: Int = push(table.weight, w);
+            total = total + w;
+        }
+        for tap in 0..taps {
+            let raw: Int = table.weight[base + tap];
+            let mutable share: Int = raw;
+            if total != 0 {
+                share = fx_div(raw, total);
+            }
+            table.weight[base + tap] = fx_to_pil_weight(share);
+        }
+        let a: Int = push(table.start, start);
+        let b: Int = push(table.count, taps);
+        let c: Int = push(table.at, base);
+    }
+    return table;
+}
+
+// Pillow's `clip8`: an arithmetic shift down by PRECISION_BITS, then a clamp into a byte. The shift
+// is arithmetic and not logical — a negative accumulator is real, because Lanczos coefficients are
+// negative on the outer lobes, and shifting its sign bit away turns a small undershoot into 255.
+pure function pil_clip8(accumulated: Int) -> Int {
+    let value: Int = shift_right_sign(accumulated, PIL_BITS);
+    if value < 0 {
+        return 0;
+    }
+    if value > 255 {
+        return 255;
+    }
+    return value;
+}
+
+// ============================================================================
+// IMAGES
+// ============================================================================
+
+// Four bytes per pixel, row-major: the layout `getdata()` hands back, so `--check` compares the same
+// thing the Python compared.
+class Image {
+    w: Int,
+    h: Int,
+    px: [Int],
+}
+
+function image_blank(w: Int, h: Int) -> Image
+        requires w >= 0
+        requires h >= 0
+        {
+    let mutable px: [Int] = [];
+    let bytes: Int = w * h * 4;
+    for i in 0..bytes {
+        let grew: Int = push(px, 0);
+    }
+    return Image { w: w, h: h, px: px };
+}
+
+// Pillow's two-pass resample: horizontal first into an intermediate of the new width and the old
+// height, then vertical. **The intermediate is rounded to 8 bits**, which is not an implementation
+// detail — a single-pass or a floating intermediate disagrees with Pillow on a third of the pixels.
+function resampled(source: Image, new_w: Int, new_h: Int) -> Image
+        requires new_w > 0
+        requires new_h > 0
+        {
+    let mutable current: Image = source;
+    if current.w != new_w {
+        let table: Taps = taps_for(current.w, new_w);
+        let mutable out: Image = image_blank(new_w, current.h);
+        for row in 0..current.h {
+            for column in 0..new_w {
+                let start: Int = table.start[column];
+                let taps: Int = table.count[column];
+                let base: Int = table.at[column];
+                for band in 0..4 {
+                    let mutable accumulated: Int = PIL_ROUND;
+                    for tap in 0..taps {
+                        accumulated = accumulated
+                                + current.px[(row * current.w + start + tap) * 4 + band]
+                                * table.weight[base + tap];
+                    }
+                    out.px[(row * new_w + column) * 4 + band] = pil_clip8(accumulated);
+                }
+            }
+        }
+        current = out;
+    }
+    if current.h != new_h {
+        let table: Taps = taps_for(current.h, new_h);
+        let mutable out: Image = image_blank(current.w, new_h);
+        for row in 0..new_h {
+            let start: Int = table.start[row];
+            let taps: Int = table.count[row];
+            let base: Int = table.at[row];
+            for column in 0..current.w {
+                for band in 0..4 {
+                    let mutable accumulated: Int = PIL_ROUND;
+                    for tap in 0..taps {
+                        accumulated = accumulated
+                                + current.px[((start + tap) * current.w + column) * 4 + band]
+                                * table.weight[base + tap];
+                    }
+                    out.px[(row * current.w + column) * 4 + band] = pil_clip8(accumulated);
+                }
+            }
+        }
+        current = out;
+    }
+    return current;
+}
+
+// Pillow's `MULDIV255`: `a * b / 255` without a division, and it is not `(a * b + 127) / 255` either.
+// The exact spelling matters because the round trip through premultiplied alpha has to land back on
+// the byte it started from for an opaque pixel.
+pure function muldiv255(a: Int, b: Int) -> Int {
+    let t: Int = a * b + 128;
+    return shift_right_zeros(shift_right_zeros(t, 8) + t, 8);
+}
+
+// RGBA -> RGBa, which is what `Image.resize` does to an RGBA image before it resamples anything.
+function premultiplied(source: Image) -> Image {
+    let mutable out: Image = image_blank(source.w, source.h);
+    let pixels: Int = source.w * source.h;
+    for i in 0..pixels {
+        let alpha: Int = source.px[i * 4 + 3];
+        out.px[i * 4] = muldiv255(source.px[i * 4], alpha);
+        out.px[i * 4 + 1] = muldiv255(source.px[i * 4 + 1], alpha);
+        out.px[i * 4 + 2] = muldiv255(source.px[i * 4 + 2], alpha);
+        out.px[i * 4 + 3] = alpha;
+    }
+    return out;
+}
+
+// RGBa -> RGBA. A truncating divide, and the two exact alphas pass through untouched — 0 because
+// there is no colour to recover and 255 because dividing by 255 and clamping would be a no-op that
+// is not quite a no-op.
+function straightened(source: Image) -> Image {
+    let mutable out: Image = image_blank(source.w, source.h);
+    let pixels: Int = source.w * source.h;
+    for i in 0..pixels {
+        let alpha: Int = source.px[i * 4 + 3];
+        if alpha == 0 || alpha == 255 {
+            out.px[i * 4] = source.px[i * 4];
+            out.px[i * 4 + 1] = source.px[i * 4 + 1];
+            out.px[i * 4 + 2] = source.px[i * 4 + 2];
+        } else {
+            for band in 0..3 {
+                let mutable value: Int = divide_floor(255 * source.px[i * 4 + band], alpha);
+                if value < 0 {
+                    value = 0;
+                }
+                if value > 255 {
+                    value = 255;
+                }
+                out.px[i * 4 + band] = value;
+            }
+        }
+        out.px[i * 4 + 3] = alpha;
+    }
+    return out;
+}
+
+// Where the ink is. Half-open on the right and the bottom, like `Image.getbbox`.
+class InkBox {
+    left: Int,
+    top: Int,
+    right: Int,
+    bottom: Int,
+}
+
+// Pillow's `getbbox` is the box of every pixel with a non-zero BYTE, not a non-zero alpha. On these
+// three sources the two answers agree, which is exactly why it is worth saying: an asset with a
+// coloured fully-transparent margin would crop differently and nothing here would notice.
+function ink_box(image: Image) -> Option<InkBox> {
+    let mutable left: Int = image.w;
+    let mutable top: Int = image.h;
+    let mutable right: Int = 0;
+    let mutable bottom: Int = 0;
+    let mutable found: Bool = false;
+    for y in 0..image.h {
+        for x in 0..image.w {
+            let base: Int = (y * image.w + x) * 4;
+            if image.px[base] != 0 || image.px[base + 1] != 0
+                    || image.px[base + 2] != 0 || image.px[base + 3] != 0 {
+                found = true;
+                if x < left {
+                    left = x;
+                }
+                if x + 1 > right {
+                    right = x + 1;
+                }
+                if y < top {
+                    top = y;
+                }
+                if y + 1 > bottom {
+                    bottom = y + 1;
+                }
+            }
+        }
+    }
+    if !found {
+        return Option.None;
+    }
+    return Option.Some(InkBox { left: left, top: top, right: right, bottom: bottom });
+}
+
+function cropped(source: Image, box: InkBox) -> Image {
+    let w: Int = box.right - box.left;
+    let h: Int = box.bottom - box.top;
+    let mutable out: Image = image_blank(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let from: Int = ((y + box.top) * source.w + x + box.left) * 4;
+            let to: Int = (y * w + x) * 4;
+            for band in 0..4 {
+                out.px[to + band] = source.px[from + band];
+            }
+        }
+    }
+    return out;
+}
+
+// `Image.new("RGBA", (box, box), (0,0,0,0))` then `paste` — a paste with no mask REPLACES, so this is
+// a copy and not a blend. The offsets are Python's `(box - width) // 2`, floor and not round.
+function centred_on(box: Int, ink: Image) -> Image {
+    let mutable out: Image = image_blank(box, box);
+    let offset_x: Int = divide_floor(box - ink.w, 2);
+    let offset_y: Int = divide_floor(box - ink.h, 2);
+    for y in 0..ink.h {
+        for x in 0..ink.w {
+            let to: Int = ((y + offset_y) * box + x + offset_x) * 4;
+            let from: Int = (y * ink.w + x) * 4;
+            for band in 0..4 {
+                out.px[to + band] = ink.px[from + band];
+            }
+        }
+    }
+    return out;
+}
+
+pure function same_pixels(first: Image, second: Image) -> Bool {
+    if first.w != second.w || first.h != second.h {
+        return false;
+    }
+    for i in 0..len(first.px) {
+        if first.px[i] != second.px[i] {
+            return false;
+        }
+    }
+    return true;
+}
+
+// ============================================================================
+// PNG
+// ============================================================================
+
+pure function png_be32(bytes: [Int], at: Int) -> Int
+        requires at >= 0
+        requires at + 4 <= len(bytes)
+        {
+    return bytes[at] * 16777216 + bytes[at + 1] * 65536 + bytes[at + 2] * 256 + bytes[at + 3];
+}
+
+function png_push_be32(mutable out: [Int], value: Int) -> Int
+        requires value >= 0
+        {
+    let a: Int = push(out, bit_and(shift_right_zeros(value, 24), 255));
+    let b: Int = push(out, bit_and(shift_right_zeros(value, 16), 255));
+    let c: Int = push(out, bit_and(shift_right_zeros(value, 8), 255));
+    return push(out, bit_and(value, 255));
+}
+
+pure function png_chunk_is(bytes: [Int], at: Int, a: Int, b: Int, c: Int, d: Int) -> Bool
+        requires at >= 0
+        requires at + 4 <= len(bytes)
+        {
+    return bytes[at] == a && bytes[at + 1] == b && bytes[at + 2] == c && bytes[at + 3] == d;
+}
+
+// A chunk's four type bytes, for a diagnostic. Anything outside printable ASCII becomes `?`,
+// because the one file that needs this message is a corrupt one and its type bytes may be any
+// value at all — including a NUL, which a Burxt String cannot carry through to the reader.
+pure function png_chunk_name(bytes: [Int], at: Int) -> String
+        requires at >= 0
+        requires at + 4 <= len(bytes)
+        {
+    let mutable name: String = "";
+    for i in 0..4 {
+        let b: Int = bytes[at + i];
+        if b >= 32 && b < 127 {
+            name = name + byte_as_string(b);
+        } else {
+            name = name + "?";
+        }
+    }
+    return name;
+}
+
+// How many samples a colour type carries per pixel, or 0 for one this file will not read. Colour
+// type 3 is a palette and 0 is what says so — the caller turns that into the refusal, because the
+// message belongs where the file name is known and this function does not have it.
+pure function png_channels_for(colour: Int) -> Int {
+    if colour == 0 {
+        return 1;                                          // grey
+    }
+    if colour == 2 {
+        return 3;                                          // RGB
+    }
+    if colour == 4 {
+        return 2;                                          // grey + alpha
+    }
+    if colour == 6 {
+        return 4;                                          // RGBA
+    }
+    return 0;
+}
+
+// PNG's fifth filter, from RFC 2083 §6.6. The predictor is whichever of left, above and corner is
+// nearest to `left + above - corner`, with the ties resolved in that order — the order is part of the
+// specification, so a `<` where a `<=` belongs decodes most images and corrupts some.
+pure function png_paeth(left: Int, above: Int, corner: Int) -> Int {
+    let estimate: Int = left + above - corner;
+    let d_left: Int = abs_of(estimate - left);
+    let d_above: Int = abs_of(estimate - above);
+    let d_corner: Int = abs_of(estimate - corner);
+    if d_left <= d_above && d_left <= d_corner {
+        return left;
+    }
+    if d_above <= d_corner {
+        return above;
+    }
+    return corner;
+}
+
+// Every IDAT payload, inflated once, unfiltered, and widened to RGBA.
+//
+// **The payloads are concatenated before anything inflates.** A PNG may split IDAT anywhere,
+// including mid-symbol, so inflating chunk by chunk reports a truncated stream on a file that is
+// perfectly valid. Nine of the nine PNGs in this repository happen to carry a single IDAT, which is
+// precisely why this is written down rather than discovered later.
+function png_decode(bytes: [Int]) -> Result<Image, String> {
+    if len(bytes) < 8 {
+        return Result.Error("shorter than a PNG signature");
+    }
+    if !png_chunk_is(bytes, 0, 137, 80, 78, 71) || !png_chunk_is(bytes, 4, 13, 10, 26, 10) {
+        return Result.Error("the eight-byte PNG signature does not match");
+    }
+
+    let mutable width: Int = 0;
+    let mutable height: Int = 0;
+    let mutable channels: Int = 0;
+    let mutable seen_header: Bool = false;
+    let mutable payload: [Int] = [];
+    let mutable at: Int = 8;
+
+    while at + 8 <= len(bytes) {
+        let length: Int = png_be32(bytes, at);
+        if length < 0 || at + 12 + length > len(bytes) {
+            return Result.Error("a chunk header claims more bytes than the file holds");
+        }
+        let body: Int = at + 8;
+        // **The chunk's own CRC-32, checked rather than skipped — and this is the one place this
+        // file is deliberately STRICTER than the Python it replaces.** Pillow does not verify chunk
+        // CRCs, so `editor-icons.py` would happily crop a file with a flipped bit in IHDR. Writing
+        // a CRC and then ignoring it on the way back in is the defect `lib/inflate.bx` names about
+        // reading one copy of duplicated metadata; and the cost of leniency lands on a reader, not
+        // here — one wrong bit in `height` surfaces as "the inflated IDAT is N bytes where M
+        // filtered rows were expected", which sends them to look at the compression when the header
+        // is what broke. A corrupt brand asset should be named as corrupt.
+        let mutable covered: [Int] = [];
+        for i in 0..(length + 4) {
+            let grew: Int = push(covered, bytes[at + 4 + i]);
+        }
+        if crc32(covered) != png_be32(bytes, body + length) {
+            return Result.Error("the " + png_chunk_name(bytes, at + 4) + " chunk at byte "
+                    + to_string(at) + " fails its own CRC-32 — the file is corrupt");
+        }
+        if png_chunk_is(bytes, at + 4, 73, 72, 68, 82) {
+            if length != 13 {
+                return Result.Error("IHDR is not 13 bytes");
+            }
+            width = png_be32(bytes, body);
+            height = png_be32(bytes, body + 4);
+            let depth: Int = bytes[body + 8];
+            let colour: Int = bytes[body + 9];
+            let compression: Int = bytes[body + 10];
+            let filtering: Int = bytes[body + 11];
+            let interlace: Int = bytes[body + 12];
+            if width <= 0 || height <= 0 {
+                return Result.Error("IHDR gives a zero dimension");
+            }
+            if depth != 8 {
+                return Result.Error("bit depth " + to_string(depth)
+                        + " is not supported here — this reads 8 bits per channel");
+            }
+            if interlace != 0 {
+                return Result.Error("an interlaced PNG is not supported here — re-export "
+                        + "without Adam7 interlacing");
+            }
+            if compression != 0 || filtering != 0 {
+                return Result.Error("an unknown compression or filter method in IHDR");
+            }
+            channels = png_channels_for(colour);
+            if channels == 0 {
+                return Result.Error("colour type " + to_string(colour)
+                            + " is not supported here — this reads grey, grey+alpha, RGB and RGBA, "
+                        + "but not a palette");
+            }
+            seen_header = true;
+        } else {
+            if png_chunk_is(bytes, at + 4, 73, 68, 65, 84) {
+                for i in 0..length {
+                    let grew: Int = push(payload, bytes[body + i]);
+                }
+            } else {
+                if png_chunk_is(bytes, at + 4, 73, 69, 78, 68) {
+                    at = len(bytes);
+                }
+            }
+        }
+        if at < len(bytes) {
+            at = at + 12 + length;
+        }
+    }
+
+    if !seen_header {
+        return Result.Error("no IHDR chunk");
+    }
+    if len(payload) == 0 {
+        return Result.Error("no IDAT data");
+    }
+
+    let mutable raw: [Int] = [];
+    let written: Int = zlib_into(raw, payload);
+    if written < 0 {
+        return Result.Error("the IDAT zlib stream did not inflate");
+    }
+    let stride: Int = width * channels;
+    let expected: Int = height * (stride + 1);
+    if len(raw) != expected {
+        return Result.Error("the inflated IDAT is " + to_string(len(raw))
+                + " bytes where " + to_string(expected) + " filtered rows were expected");
+    }
+
+    let mutable flat: [Int] = [];
+    for i in 0..(height * stride) {
+        let grew: Int = push(flat, 0);
+    }
+    for y in 0..height {
+        let row: Int = y * (stride + 1);
+        let filtering: Int = raw[row];
+        if filtering > 4 {
+            return Result.Error("row filter " + to_string(filtering) + " is not one of the five");
+        }
+        let out: Int = y * stride;
+        let up: Int = out - stride;
+        for x in 0..stride {
+            let mutable left: Int = 0;
+            if x >= channels {
+                left = flat[out + x - channels];
+            }
+            let mutable above: Int = 0;
+            if y > 0 {
+                above = flat[up + x];
+            }
+            let mutable corner: Int = 0;
+            if y > 0 && x >= channels {
+                corner = flat[up + x - channels];
+            }
+            let mutable value: Int = raw[row + 1 + x];
+            if filtering == 1 {
+                value = value + left;
+            }
+            if filtering == 2 {
+                value = value + above;
+            }
+            if filtering == 3 {
+                value = value + divide_floor(left + above, 2);
+            }
+            if filtering == 4 {
+                value = value + png_paeth(left, above, corner);
+            }
+            flat[out + x] = bit_and(value, 255);
+        }
+    }
+
+    let mutable px: [Int] = [];
+    let pixels: Int = width * height;
+    for i in 0..pixels {
+        let source: Int = i * channels;
+        if channels == 1 {
+            let r: Int = push(px, flat[source]);
+            let g: Int = push(px, flat[source]);
+            let b: Int = push(px, flat[source]);
+            let a: Int = push(px, 255);
+        }
+        if channels == 2 {
+            let r: Int = push(px, flat[source]);
+            let g: Int = push(px, flat[source]);
+            let b: Int = push(px, flat[source]);
+            let a: Int = push(px, flat[source + 1]);
+        }
+        if channels == 3 {
+            let r: Int = push(px, flat[source]);
+            let g: Int = push(px, flat[source + 1]);
+            let b: Int = push(px, flat[source + 2]);
+            let a: Int = push(px, 255);
+        }
+        if channels == 4 {
+            let r: Int = push(px, flat[source]);
+            let g: Int = push(px, flat[source + 1]);
+            let b: Int = push(px, flat[source + 2]);
+            let a: Int = push(px, flat[source + 3]);
+        }
+    }
+    return Result.Ok(Image { w: width, h: height, px: px });
+}
+
+// One chunk: its length, its type, its data, and a CRC-32 over the type AND the data — over the type
+// as well, which is the part a reader of the format description skips.
+function png_chunk(mutable out: [Int], a: Int, b: Int, c: Int, d: Int, data: [Int]) -> Int {
+    let header: Int = png_push_be32(out, len(data));
+    let mutable covered: [Int] = [];
+    let ta: Int = push(covered, a);
+    let tb: Int = push(covered, b);
+    let tc: Int = push(covered, c);
+    let td: Int = push(covered, d);
+    for i in 0..len(data) {
+        let grew: Int = push(covered, data[i]);
+    }
+    for i in 0..len(covered) {
+        let grew: Int = push(out, covered[i]);
+    }
+    return png_push_be32(out, crc32(covered));
+}
+
+// A valid RGBA PNG. **Not Pillow's bytes** — this filters every row with 0 and compresses with fixed
+// Huffman, so the file is bigger than Pillow's and decodes to the same pixels. `--check` compares
+// pixels for exactly that reason: matching an encoder is a different and pointless problem.
+function png_encode(image: Image) -> [Int] {
+    let mutable rows: [Int] = [];
+    for y in 0..image.h {
+        let start: Int = push(rows, 0);                    // filter type 0: None
+        for i in 0..(image.w * 4) {
+            let grew: Int = push(rows, image.px[y * image.w * 4 + i]);
+        }
+    }
+
+    // A zlib stream, which is what IDAT holds: 0x78 0x01 is deflate with a 32 KB window and the
+    // header's own check value already satisfied (0x7801 is a multiple of 31), then the raw deflate
+    // stream, then an adler32 of the UNCOMPRESSED bytes.
+    let mutable stream: [Int] = [];
+    let cmf: Int = push(stream, 120);
+    let flg: Int = push(stream, 1);
+    let deflated: Int = deflate_into(stream, rows);
+    let sum: Int = adler32(rows);
+    let checksum: Int = png_push_be32(stream, sum);
+
+    let mutable header: [Int] = [];
+    let w: Int = png_push_be32(header, image.w);
+    let h: Int = png_push_be32(header, image.h);
+    let depth: Int = push(header, 8);
+    let colour: Int = push(header, 6);                     // RGBA
+    let compression: Int = push(header, 0);
+    let filtering: Int = push(header, 0);
+    let interlace: Int = push(header, 0);
+
+    let mutable out: [Int] = [];
+    let s0: Int = push(out, 137);
+    let s1: Int = push(out, 80);
+    let s2: Int = push(out, 78);
+    let s3: Int = push(out, 71);
+    let s4: Int = push(out, 13);
+    let s5: Int = push(out, 10);
+    let s6: Int = push(out, 26);
+    let s7: Int = push(out, 10);
+    let ihdr: Int = png_chunk(out, 73, 72, 68, 82, header);
+    let idat: Int = png_chunk(out, 73, 68, 65, 84, stream);
+    let mutable nothing: [Int] = [];
+    let iend: Int = png_chunk(out, 73, 69, 78, 68, nothing);
+    return out;
+}
+
+// ============================================================================
+// THE ICON FAMILY
+// ============================================================================
+
+class IconSpec {
+    source: String,
+    target: String,
+    box: Int,
+}
+
+// The `.bx` one lands in the extension that ships; the other two are for the extensions BMX and
+// star-burxt own, so they land in `assets/subprojects/` where those repositories can take them
+// without this one reaching into theirs.
+//
+// A function and not a `const`, because `const` holds scalars only — it cannot hold an array and
+// cannot be pushed to — and a top-level `let` is invisible inside a function body. So the table is
+// built where it is read.
+function icon(mutable all: [IconSpec], source: String, target: String, box: Int) -> Int {
+    return push(all, IconSpec { source: source, target: target, box: box });
+}
+
+function icons() -> [IconSpec] {
+    let mutable all: [IconSpec] = [];
+    let a: Int = icon(all, "assets/burxt-b-favicon-512.png",
+            "editors/vscode/file-icon.png", 48);
+    let b: Int = icon(all, "assets/burxt-b-favicon-512.png",
+            "assets/subprojects/burxt-bx-icon-128.png", 128);
+    let c: Int = icon(all, "assets/subprojects/bmx_fileicon_256.png",
+            "assets/subprojects/bmx-file-icon-48.png", 48);
+    let d: Int = icon(all, "assets/subprojects/bmx_fileicon_256.png",
+            "assets/subprojects/bmx-file-icon-128.png", 128);
+    let e: Int = icon(all, "assets/subprojects/star_gearicon_256.png",
+            "assets/subprojects/sbmx-gear-icon-48.png", 48);
+    let f: Int = icon(all, "assets/subprojects/star_gearicon_256.png",
+            "assets/subprojects/sbmx-gear-icon-128.png", 128);
+    return all;
+}
+
+// `round(box * 0.70)`, on the double `0.70` denotes rather than on seven tenths.
+pure function ink_extent(box: Int) -> Int
+        requires box > 0
+        {
+    let scaled: (Int, Int) = ieee_mul_int(INK_MANTISSA, INK_EXPONENT, box);
+    return ieee_round(scaled.0, scaled.1);
+}
+
+// `round(a / b)` through a double, which is what Python's `/` then `round()` is.
+pure function ratio_rounded(a: Int, b: Int) -> Int
+        requires a >= 0
+        requires b > 0
+        {
+    let ratio: (Int, Int) = ieee_from_ratio(a, b);
+    return ieee_round(ratio.0, ratio.1);
+}
+
+// One icon, from the source PNG to the composed square. Every step here is Pillow's `derive`, in
+// Pillow's order, with the premultiply and straighten that `Image.resize` performs for you made
+// explicit — because they are not optional and reading `resize` does not tell you they happened.
+function derive(root: String, source: String, box: Int) -> Result<Image, String> touches files {
+    match file_read_bytes(root + source) {
+        None => {
+            return Result.Error(source + " could not be read");
+        }
+        Some(bytes) => {
+            match png_decode(bytes) {
+                Error(why) => {
+                    return Result.Error(source + ": " + why);
+                }
+                Ok(whole) => {
+                    match ink_box(whole) {
+                        None => {
+                            return Result.Error(source + " is entirely transparent");
+                        }
+                        Some(box_of_ink) => {
+                            let ink: Image = cropped(whole, box_of_ink);
+                            let mutable height: Int = ink_extent(box);
+                            let mutable width: Int = ratio_rounded(height * ink.w, ink.h);
+                            if width < 1 {
+                                width = 1;
+                            }
+                            if width > box {
+                                // A wide mark is bounded by the width instead.
+                                width = ink_extent(box);
+                                height = ratio_rounded(width * ink.h, ink.w);
+                                if height < 1 {
+                                    height = 1;
+                                }
+                            }
+                            let scaled: Image =
+                                    straightened(resampled(premultiplied(ink), width, height));
+                            return Result.Ok(centred_on(box, scaled));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// DRIVING IT
+// ============================================================================
+
+function looks_like_root(prefix: String) -> Bool touches files {
+    match file_read_bytes(prefix + "scripts/editor-icons.bx") {
+        None => {
+            return false;
+        }
+        Some(bytes) => {
+            return len(bytes) > 0;
+        }
+    }
+}
+
+// Python had `Path(__file__).resolve().parent.parent`; Burxt has no `__file__`, and `argument(0)` is
+// the temporary binary `burxt run` built rather than the source. So the root is found by looking for
+// this file — which is the same question asked a different way, and it refuses rather than guessing.
+function find_root() -> Option<String> touches files {
+    if looks_like_root("") {
+        return Option.Some("");
+    }
+    if looks_like_root("../") {
+        return Option.Some("../");
+    }
+    if looks_like_root("../../") {
+        return Option.Some("../../");
+    }
+    return Option.None;
+}
+
+function wants_check() -> Bool touches input {
+    for i in 1..argument_count() {
+        if argument(i) == "--check" {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---- main ----------------------------------------------------------------------------------
+
+let discovered: Option<String> = find_root();
+let mutable root: String = "";
+match discovered {
+    None => {
+        print_error("editor-icons: run this from the repository root — "
+                + "scripts/editor-icons.bx was not found from here");
+        exit(2);
+    }
+    Some(found) => {
+        root = found;
+    }
+}
+
+let check: Bool = wants_check();
+let specs: [IconSpec] = icons();
+let mutable stale: [String] = [];
+
+for i in 0..len(specs) {
+    let spec: IconSpec = specs[i];
+    match derive(root, spec.source, spec.box) {
+        Error(why) => {
+            print_error("editor-icons: " + why);
+            exit(1);
+        }
+        Ok(made) => {
+            if check {
+                match file_read_bytes(root + spec.target) {
+                    None => {
+                        let noted: Int = push(stale, spec.target + " does not exist");
+                    }
+                    Some(committed) => {
+                        match png_decode(committed) {
+                            Error(why) => {
+                                let noted: Int = push(stale,
+                                        spec.target + " could not be read: " + why);
+                            }
+                            Ok(there) => {
+                                if !same_pixels(there, made) {
+                                    let noted: Int = push(stale,
+                                            spec.target + " is not what this script makes");
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                let bytes: [Int] = png_encode(made);
+                let wrote: Int = write_bytes(root + spec.target, bytes);
+                if wrote != len(bytes) {
+                    print_error("editor-icons: writing " + spec.target + " wrote "
+                            + to_string(wrote) + " of " + to_string(len(bytes)) + " bytes");
+                    exit(1);
+                }
+                let mutable clear: Int = 0;
+                match ink_box(made) {
+                    None => {
+                        clear = 0;
+                    }
+                    Some(where_it_is) => {
+                        clear = where_it_is.top;
+                    }
+                }
+                print("wrote " + spec.target + " (" + to_string(spec.box) + "px, "
+                        + to_string(clear) + " clear above and below)");
+            }
+        }
+    }
+}
+
+if check {
+    if len(stale) > 0 {
+        print("editor icons are stale — run: burxt run scripts/editor-icons.bx");
+        for i in 0..len(stale) {
+            print("  " + stale[i]);
+        }
+        exit(1);
+    }
+    print("editor icons are current");
+}

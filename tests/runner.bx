@@ -905,7 +905,7 @@ function mascot_plays_once() -> String touches files {
 // An absolute path for something the caller may have named relatively.
 //
 // **The third time this exact class of bug has cost me a debugging round**, so it is a named
-// function now rather than a fix at each site. `refused.py` launches the compiler from the panel
+// function now rather than a fix at each site. `refused.bx` launches the compiler from the panel
 // directory, so `./target/release/burxt` — a perfectly good path from the repository root — became
 // `FileNotFoundError: './target/release/burxt'`. The Rust twin never sees this because
 // `CARGO_BIN_EXE_burxt` is absolute. **A relative path is a different path the moment anything
@@ -1020,18 +1020,24 @@ function everything_is_tracked(work: String) -> String touches files, commands {
 // page — so the generator is re-run in check mode and the page is read for the word it writes when
 // a panel was accepted.
 //
-// `python3 scripts/refused.py --check` is the generator, and it is the Rust twin's dependency too.
+// `burxt run scripts/refused.bx -- --check` is the generator, and it is the Rust twin's dependency too.
 // Burxt cannot regenerate the page itself; that would mean porting the generator, which is a
 // different task from moving this invariant.
 function refusals_page_is_current(compiler: String, work: String) -> String
     touches files, commands
 {
-    if !readable("scripts/refused.py") {
-        return "scripts/refused.py is missing, and it is what keeps the page honest";
+    if !readable("scripts/refused.bx") {
+        return "scripts/refused.bx is missing, and it is what keeps the page honest";
     }
     let log: String = work + "/refused";
-    let status: Int = run_capturing("BURXT=" + absolute_path(compiler, work)
-                                   + " python3 scripts/refused.py --check", log);
+    // **The compiler under test, not whatever `burxt` is on PATH.** While the generator was Python
+    // this did not matter; the moment it became Burxt, a bare `burxt` reached the INSTALLED release —
+    // which does not have `--` forwarding, because that landed after 1.5.0 and is not in any tarball.
+    // So the invariant failed with `cc: unrecognized command-line option '--'` and blamed the page.
+    // A harness that runs an arbitrary installed compiler is not testing the one it was handed.
+    let bin: String = absolute_path(compiler, work);
+    let status: Int = run_capturing("BURXT=" + bin + " " + bin
+                                   + " run scripts/refused.bx -- --check", log);
     if status != 0 {
         return "the refusals page is stale: " + trimmed(read_file(log));
     }

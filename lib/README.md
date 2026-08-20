@@ -1,5 +1,13 @@
 # The Burxt standard library
 
+
+> **Some names you will look for are not here, and that is not a missing dependency.** `print`,
+> `print_error`, `push`, `len`, `substring`, `to_string`, `write_bytes`, `bit_and`, `shift_left` and
+> the rest of the [builtins](../docs/reference/builtins.md) are the COMPILER's, not this directory's
+> — so `git grep "function print(" -- lib` finds nothing and reads exactly like an absence. It was
+> reported as one. When checking whether a symbol is in a release, check the builtins page as well as
+> `lib/`, because a builtin is in every release by construction.
+
 ```burxt
 use "lib/string.bx";
 use "lib/files.bx";
