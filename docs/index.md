@@ -262,7 +262,16 @@ The work you stop doing is checking for the mistakes on this page.
 </div>
 
 <p style="font-size:14px; margin-top:2.5rem;">
-<strong>Burxt 1.6.0 is released.</strong> Every tool in this repository is written in Burxt now —
+<strong>Burxt 1.7.0 is released.</strong> <code>print_exact</code> writes a String to standard
+output with nothing appended — what a program needs to declare a byte count and then write exactly
+that many bytes, which is how LSP, CGI and every framed protocol work. And two library fixes:
+<code>json_render</code> escapes all thirty-two control bytes rather than seven, so it produces JSON
+a stranger's parser accepts, and <code>html_escape</code> now spells <code>'</code> the way every
+other escaper does.
+</p>
+
+<p style="font-size:14px;">
+<strong>1.6.0.</strong> Every tool in this repository is written in Burxt —
 the site generators, the reference, the packer, the icon deriver and the release script.
 <strong>2,131 lines of Python became 130</strong>, and those 130 are a point-of-sale program written
 in Python <em>on purpose</em>, beside the Burxt one, so a reader can compare them.
