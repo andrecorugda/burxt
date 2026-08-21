@@ -2776,6 +2776,176 @@ fn the_repository_root_holds_only_what_belongs_there() {
 /// source, stage-1 names the token. Asserting they produce identical BYTES here would be asserting
 /// they render diagnostics the same way, which they do not and need not. What has to match is which
 /// token they blame.
+/// **Both compilers blame the same token for a SYNTAX error — across the grammar, not one program.**
+///
+/// `both_compilers_blame_the_same_token_for_a_boundary_type` below fixed this class for exactly one
+/// form, and its own note says *"it hid because nothing looked"*. Nothing looked at the other
+/// thirty-three either: measured 2026-08-21, **13 of 14 malformed programs got a different caret from
+/// the two compilers, and stage-1 was right in every one.**
+///
+/// The cause was one shape, not thirty-four bugs. `Parser::span()` answers the token the parser is
+/// LOOKING AT, and its note says a parse error is always "this token is not what I needed, so this is
+/// where the caret belongs" — which is true of `expect`, and false of every `match self.bump()` arm,
+/// because `bump` has already moved past the token the message names. So `let x: 99 = 1;` drew its
+/// caret under the `=`. `Parser::unexpected` steps back one token and changes not one word of any
+/// message; the arms now route through it.
+///
+/// **Widening the table is what found the last two.** Fourteen cases had 13 divergences; going to
+/// thirty-four found two MORE that the narrow set could not see — the same lesson as a conformance
+/// corpus that contains no control byte and no apostrophe. So this walks a table, and a new grammar
+/// form belongs in it.
+///
+/// Two known divergences are NOT in this table, because they are not syntax errors and this test
+/// would be asserting something it does not name. Both measured 2026-08-21:
+///
+///   - `let x: Int = 1; x.9 = 2;` — the two report DIFFERENT errors. Stage-0 blames mutability
+///     (`cannot assign to x.9: x was declared immutable`), stage-1 blames the field (`Int has no
+///     such field`). Stage-1's is the better diagnosis; which one wins is decided by check order.
+///   - `for x in 9..3 { }` — same message, and BOTH spans are wrong: stage-0 underlines the whole
+///     statement, stage-1 underlines `x`, and the offending thing is `9..3`.
+///
+/// The comparison is each compiler's own rendering reduced to a COLUMN, not to bytes: stage-0 draws a
+/// caret under the source and stage-1 names the token, and requiring identical text would be
+/// asserting they render diagnostics the same way, which they need not.
+#[test]
+fn both_compilers_blame_the_same_token_for_every_syntax_error() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("caret-agreement");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let stage1 = scratch.join("stage1");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt build");
+    assert!(
+        built.status.success(),
+        "stage-1 did not compile:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    // One malformed program per grammar form that has a `match self.bump()` arm behind it. A new
+    // form belongs here the day it is added — a table is a boundary, and the front-end coverage test
+    // records what a hand-written list of seven cost when `?` landed.
+    let programs: &[&str] = &[
+        "let x: 99 = 1;",
+        "while { }",
+        "function 7() -> Int { return 1; }",
+        "let print_exact: Int = 1;",
+        "let 5x: Int = 1;",
+        "class 9 { }",
+        "enum 4 { A }",
+        "let x: Int = ;",
+        "function f(9: Int) -> Int { return 1; }",
+        "region 7 { }",
+        "for 8 in 0..3 { }",
+        "match 9 { }",
+        "interface 3 { }",
+        "let x: Int = 1 +;",
+        "class C { 7: Int }",
+        "enum E { 9 }",
+        "interface I { 8 }",
+        "implement 9 for C { }",
+        "function f(n: Int) -> 9 { return 1; }",
+        "let x: [9] = [];",
+        "let x: Decimal<9x> = 1.0;",
+        "function f(n: Decimal<2> as 9) -> Int { return 1; }",
+        "let d: dynamic 9 = 1;",
+        "let x: Int = a.9;",
+        "function f<9>(n: Int) -> Int { return 1; }",
+        "let x: Int = if 9 { 1 } else { 2 };",
+        "match 1 { 9 => { } }",
+        "external function 9() -> Int;",
+        "let x: Int = (;",
+        "print(;",
+        "let x: Int = [1, 2,;",
+    ];
+
+    // The caret column of the first `| ^` line, or None. Both compilers render a gutter of the same
+    // width, so the rendered column is comparable — and it is read out of the OUTPUT rather than
+    // computed from the source, because the claim is about what each compiler says.
+    fn caret_column(rendered: &str) -> Option<usize> {
+        rendered
+            .lines()
+            .find(|l| l.trim_start().starts_with('|') && l.contains('^'))
+            .and_then(|l| l.find('^'))
+    }
+
+    let mut failures = Vec::new();
+    for (i, source) in programs.iter().enumerate() {
+        let file = scratch.join(format!("case{}.bx", i));
+        fs::write(&file, format!("{}\n", source)).unwrap();
+
+        let zero = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("check")
+            .arg(&file)
+            .current_dir(&scratch)
+            .output()
+            .expect("stage-0 check");
+        let one = Command::new(&stage1)
+            .arg("check")
+            .arg(&file)
+            .current_dir(&scratch)
+            .output()
+            .expect("stage-1 check");
+
+        let zero_said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&zero.stdout),
+            String::from_utf8_lossy(&zero.stderr)
+        );
+        let one_said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&one.stdout),
+            String::from_utf8_lossy(&one.stderr)
+        );
+
+        // **A program that compiles is a broken case, not a passing one.** Without this, a case that
+        // stopped being a syntax error would go quietly green and the row would guard nothing.
+        if zero.status.success() || one.status.success() {
+            failures.push(format!(
+                "{:?}: expected BOTH compilers to refuse it, but stage-0 {} and stage-1 {}. \
+                 A case that compiles is testing nothing — fix the case.",
+                source,
+                if zero.status.success() { "accepted it" } else { "refused it" },
+                if one.status.success() { "accepted it" } else { "refused it" },
+            ));
+            continue;
+        }
+
+        match (caret_column(&zero_said), caret_column(&one_said)) {
+            (Some(a), Some(b)) if a == b => {}
+            (Some(a), Some(b)) => failures.push(format!(
+                "{:?}: stage-0 points at column {}, stage-1 at column {}\n  stage-0: {}\n  stage-1: {}",
+                source,
+                a,
+                b,
+                zero_said.trim(),
+                one_said.trim()
+            )),
+            (a, b) => failures.push(format!(
+                "{:?}: a compiler drew no caret at all (stage-0 {:?}, stage-1 {:?}). A refusal \
+                 with no position is the shape this test exists to catch — the span is what a \
+                 language server returns.\n  stage-0: {}\n  stage-1: {}",
+                source, a, b, zero_said.trim(), one_said.trim()
+            )),
+        }
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        failures.is_empty(),
+        "{} of {} syntax errors are blamed on different tokens by the two compilers:\n{}",
+        failures.len(),
+        programs.len(),
+        failures.join("\n")
+    );
+}
+
 #[test]
 fn both_compilers_blame_the_same_token_for_a_boundary_type() {
     let scratch = scratch_dir("b17-span");

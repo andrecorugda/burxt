@@ -263,6 +263,28 @@ impl Parser {
         t
     }
 
+    /// **The token just CONSUMED was not what was needed — blame it, not the one after it.**
+    ///
+    /// `span()` answers the token the parser is looking AT, and the note on it says a parse error is
+    /// always "this token is not what I needed, so this is where the caret belongs". That is true of
+    /// `expect`, which does not consume on failure. It is false of every `match self.bump()` arm,
+    /// which has already moved past the token the message names — so the caret landed on the token
+    /// AFTER the offending one. `let x: 99 = 1;` drew it under the `=`.
+    ///
+    /// **Measured 2026-08-21: 13 of 14 malformed programs, and stage-1 was right in every one.**
+    /// That is the same class B17 fixed for boundary types — see
+    /// `both_compilers_blame_the_same_token_for_a_boundary_type`, whose own note says *it hid because
+    /// nothing looked*. It fixed one form; the other thirteen were never asked about. The span is not
+    /// decoration: it is the range the language server returns and where an editor draws the squiggle.
+    ///
+    /// The message is passed in already formatted, so not one word of any refusal changes — only
+    /// where it points. Steps back one token, which is exactly the token the message describes.
+    fn unexpected<T>(&mut self, message: String) -> Result<T, String> {
+        if self.pos > 0 {
+            self.pos -= 1;
+        }
+        Err(message)
+    }
     fn expect(&mut self, t: &Token) -> Result<(), String> {
         if self.at(t) {
             self.bump();
@@ -279,7 +301,7 @@ impl Parser {
         self.expect(&Token::Class)?;
         let name = match self.bump() {
             Token::Ident(s) => s,
-            other => return Err(format!("expected a class name after 'class', found {}", other.describe())),
+            other => return self.unexpected(format!("expected a class name after 'class', found {}", other.describe())),
         };
         let type_parameters = self.parse_type_params(&name)?;
         self.type_parameters = type_parameters.iter().map(|p| p.name.clone()).collect();
@@ -312,7 +334,7 @@ impl Parser {
                         implements.push((s, arguments));
                     }
                     other => {
-                        return Err(format!(
+                        return self.unexpected(format!(
                             "expected an interface name after `implements`, found {}",
                             other.describe()
                         ))
@@ -367,7 +389,7 @@ impl Parser {
             let fname = match self.bump() {
                 Token::Ident(s) => s,
                 other => {
-                    return Err(format!(
+                    return self.unexpected(format!(
                         "expected a field name or a `function` in class {}, found {}",
                         name,
                         other.describe()
@@ -426,7 +448,7 @@ impl Parser {
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => {
-                return Err(format!(
+                return self.unexpected(format!(
                     "expected an enum name after 'enum', found {}",
                     other.describe()
                 ))
@@ -443,7 +465,7 @@ impl Parser {
             let vname = match self.bump() {
                 Token::Ident(s) => s,
                 other => {
-                    return Err(format!(
+                    return self.unexpected(format!(
                         "expected a variant name in enum `{}`, found {}",
                         name,
                         other.describe()
@@ -483,7 +505,7 @@ impl Parser {
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => {
-                return Err(format!(
+                return self.unexpected(format!(
                     "expected an interface name after 'interface', found {}",
                     other.describe()
                 ))
@@ -552,7 +574,7 @@ impl Parser {
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => {
-                return Err(format!(
+                return self.unexpected(format!(
                     "expected a method name in interface `{}`, found {}",
                     interface_name,
                     other.describe()
@@ -588,7 +610,7 @@ impl Parser {
             let pname = match self.bump() {
                 Token::Ident(s) => s,
                 other => {
-                    return Err(format!("expected a parameter name, found {}", other.describe()))
+                    return self.unexpected(format!("expected a parameter name, found {}", other.describe()))
                 }
             };
             self.expect(&Token::Colon)?;
@@ -619,7 +641,7 @@ impl Parser {
         let interface_name = match self.bump() {
             Token::Ident(s) => s,
             other => {
-                return Err(format!(
+                return self.unexpected(format!(
                     "expected an interface name after 'implement', found {}",
                     other.describe()
                 ))
@@ -651,7 +673,7 @@ impl Parser {
         let type_name = match self.bump() {
             Token::Ident(s) => s,
             other => {
-                return Err(format!(
+                return self.unexpected(format!(
                     "expected a type name in `implement {} for ...`, found {}",
                     interface_name,
                     other.describe()
@@ -955,7 +977,7 @@ impl Parser {
             match self.bump() {
                 Token::Ident(s) => s,
                 other => {
-                    return Err(format!(
+                    return self.unexpected(format!(
                         "expected a class name after `self:`, found {}",
                         other.describe()
                     ))
@@ -971,7 +993,7 @@ impl Parser {
                 match self.bump() {
                     Token::Ident(a) => receiver_arguments.push(a),
                     other => {
-                        return Err(format!(
+                        return self.unexpected(format!(
                             "`self: {}<...>` names the class's type parameters, so each one \
                              must be a name; found {}",
                             receiver,
@@ -1039,7 +1061,7 @@ impl Parser {
         self.bump();
         match self.bump() {
             Token::Ident(word) if word == "scaled" => Ok(Some(Marshal::Scaled)),
-            other => Err(format!(
+            other => self.unexpected(format!(
                 "unknown boundary marshaller {} — the only one is `scaled`, as in \
                  `amount: Decimal<2> as scaled`, which passes the exact unscaled \
                  integer.",
@@ -1086,7 +1108,7 @@ impl Parser {
                         match self.bump() {
                             Token::Ident(b) => Some(b),
                             other => {
-                                return Err(format!(
+                                return self.unexpected(format!(
                                     "expected an interface name after `{}:`, found {} — a \
                                      bound is `Ordered`, `Equatable`, or an interface this \
                                      program declares.",
@@ -1101,7 +1123,7 @@ impl Parser {
                     names.push(TypeParam { name: s, bound });
                 }
                 other => {
-                    return Err(format!(
+                    return self.unexpected(format!(
                         "expected a type parameter name in `{}<...>`, found {}",
                         owner,
                         other.describe()
@@ -1128,7 +1150,7 @@ impl Parser {
     ) -> Result<(String, Vec<TypeParam>, Vec<Param>, Type, Vec<Contract>, Vec<Contract>), String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
-            other => return Err(format!("expected a function name after 'function', found {}", other.describe())),
+            other => return self.unexpected(format!("expected a function name after 'function', found {}", other.describe())),
         };
         // `fn name<T, U>(...)`. Recorded on the parser so `parse_type` can tell a type
         // parameter from a struct name — which is the only place that distinction is
@@ -1156,7 +1178,7 @@ impl Parser {
                 };
                 let pname = match self.bump() {
                     Token::Ident(s) => s,
-                    other => return Err(format!("expected a parameter name, found {}", other.describe())),
+                    other => return self.unexpected(format!("expected a parameter name, found {}", other.describe())),
                 };
                 self.expect(&Token::Colon)?;
                 let ty_start = self.span().start;
@@ -1221,7 +1243,7 @@ impl Parser {
             let word = match self.bump() {
                 Token::Ident(s) => s,
                 other => {
-                    return Err(format!(
+                    return self.unexpected(format!(
                         "expected an effect name after `touches`, found {}. The effects are: {}.",
                         other.describe(),
                         Effect::all()
@@ -1372,7 +1394,7 @@ impl Parser {
         let name = match self.bump() {
             Token::Ident(s) => s,
             Token::SelfKw => "self".to_string(),
-            other => return Err(format!("expected identifier, found {}", other.describe())),
+            other => return self.unexpected(format!("expected identifier, found {}", other.describe())),
         };
 
         if self.at(&Token::LParen) {
@@ -1413,7 +1435,7 @@ impl Parser {
                 // carries the path as strings and resolves it through `resolve_field`,
                 // which is where "0" is already a field name.
                 Token::Int(n) if n >= 0 => n.to_string(),
-                other => return Err(format!("expected a field name after '.', found {}", other.describe())),
+                other => return self.unexpected(format!("expected a field name after '.', found {}", other.describe())),
             };
             if self.at(&Token::LParen) {
                 let arguments = self.parse_call_args()?;
@@ -1533,7 +1555,7 @@ impl Parser {
                     "false".to_string()
                 }
                 other => {
-                    return Err(format!(
+                    return self.unexpected(format!(
                         "expected a variant name or a literal to match on, found {}",
                         other.describe()
                     ))
@@ -1546,7 +1568,7 @@ impl Parser {
                     match self.bump() {
                         Token::Ident(b) => bindings.push(b),
                         other => {
-                            return Err(format!(
+                            return self.unexpected(format!(
                                 "expected a name for `{}`'s payload, found {}",
                                 variant,
                                 other.describe()
@@ -1583,7 +1605,7 @@ impl Parser {
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => {
-                return Err(format!(
+                return self.unexpected(format!(
                     "expected a name for the region, as in `region tx {{ ... }}`, \
                      found {}",
                     other.describe()
@@ -1601,7 +1623,7 @@ impl Parser {
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => {
-                return Err(format!(
+                return self.unexpected(format!(
                     "expected a name after `for`, found {} — `for x in xs {{ ... }}`",
                     other.describe()
                 ))
@@ -1735,7 +1757,7 @@ impl Parser {
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => {
-                return Err(format!(
+                return self.unexpected(format!(
                     "expected a name after `const`, found {}",
                     other.describe()
                 ))
@@ -1774,7 +1796,7 @@ impl Parser {
         };
         let name = match self.bump() {
             Token::Ident(s) => s,
-            other => return Err(format!("expected identifier after 'let', found {}", other.describe())),
+            other => return self.unexpected(format!("expected identifier after 'let', found {}", other.describe())),
         };
         // The annotation is optional. `let count = 0;` takes its type from the value —
         // and only here: a signature still says what it takes and what it answers with.
@@ -1847,7 +1869,7 @@ impl Parser {
                             n
                         ))
                     }
-                    other => return Err(format!("expected non-negative scale in Decimal<..>, found {}", other.describe())),
+                    other => return self.unexpected(format!("expected non-negative scale in Decimal<..>, found {}", other.describe())),
                 };
                 // Optional rounding contract: Decimal<2, RoundHalfEven>.
                 let rounding = if self.at(&Token::Comma) {
@@ -1856,7 +1878,7 @@ impl Parser {
                         Token::RoundHalfEven => Some(Rounding::HalfEven),
                         Token::RoundHalfUp => Some(Rounding::HalfUp),
                         other => {
-                            return Err(format!(
+                            return self.unexpected(format!(
                                 "expected a rounding mode (RoundHalfEven or RoundHalfUp) \
                                  after the comma in Decimal<..>, found {}",
                                 other.describe()
@@ -1930,7 +1952,7 @@ impl Parser {
                     }
                     Ok(Type::Dyn(name))
                 }
-                other => Err(format!(
+                other => self.unexpected(format!(
                     "expected an interface name after `dynamic`, found {}",
                     other.describe()
                 )),
@@ -1957,7 +1979,7 @@ impl Parser {
                         ))
                     }
                     other => {
-                        return Err(format!(
+                        return self.unexpected(format!(
                             "expected the array length after `;` in [T; N], found {}",
                             other.describe()
                         ))
@@ -2000,7 +2022,7 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 Ok(Type::Tuple(elements))
             }
-            other => Err(format!("expected a type, found {}", other.describe())),
+            other => self.unexpected(format!("expected a type, found {}", other.describe())),
         }
     }
 
@@ -2186,7 +2208,7 @@ impl Parser {
                         unscaled % ten
                     ));
                 }
-                other => return Err(format!("expected a field or method name after '.', found {}", other.describe())),
+                other => return self.unexpected(format!("expected a field or method name after '.', found {}", other.describe())),
             };
             if self.at(&Token::LParen) {
                 self.bump();
@@ -2324,7 +2346,7 @@ impl Parser {
                         let fname = match self.bump() {
                             Token::Ident(f) => f,
                             other => {
-                                return Err(format!(
+                                return self.unexpected(format!(
                                     "expected a field name in `{} {{ ... }}`, found {}",
                                     s, other.describe()
                                 ))
@@ -2379,7 +2401,7 @@ impl Parser {
                 self.expect(&Token::RBracket)?;
                 Ok(ExprKind::ArrayLit(elems))
             }
-            other => Err(format!("expected an expression, found {}", other.describe())),
+            other => self.unexpected(format!("expected an expression, found {}", other.describe())),
         }
     }
 }
