@@ -23,7 +23,13 @@ use "lib/time.bx";
 
 So `time_format_iso` always ends in `Z`, and `time_parse_iso` **refuses an offset**: `"+05:00"` is not read as UTC, it is answered with `None`. Reading it as UTC would be wrong by five hours while looking like it worked, and converting it would need the timezone arithmetic that is not here.
 
-**2. WHOLE SECONDS.** No milliseconds, no monotonic clock. Both need `clock_gettime`, which fills a struct through a pointer, which needs **A7 integer widths** — not done. So there is nothing here that pretends to sub-second precision, rather than something that rounds and hopes. A benchmark or a timeout wanting better than a second is blocked on A7 and should say so rather than use this.
+**2. WHOLE SECONDS FROM `os_now`, MICROSECONDS FROM `time_wall_micros`, AND NO MONOTONIC CLOCK.**
+
+**This paragraph said "no milliseconds, no monotonic clock … blocked on A7" and shipped that way in 1.6.0 and 1.7.0, five hundred lines above `time_wall_micros`, which answers microseconds.** A7 integer widths turned out not to be needed: `c_bytes_at` hands over the sixteen bytes of a `struct timespec` and `time_i64_at` reassembles them. Found 2026-08-21 when the comet session asked for a sub-second clock and reported measuring elapsed time with `date +%s%3N` **from a Burxt program** — they read this paragraph, believed it, and reached for the shell. The capability was in the tarball they already had.
+
+That is the most expensive stale claim this repository has produced: a present-tense sentence in SHIPPED documentation, contradicted by code in the same file, that talked a consumer out of the language. The reference page carried both halves and a reader who starts at the top stops here.
+
+**What is still true is the monotonic half, and the reason has not changed.** `CLOCK_MONOTONIC` is **1 on Linux and 6 on macOS**, Burxt has no conditional compilation — a recorded decision, not a gap — so no single program can name both. `CLOCK_REALTIME` is 0 on both, which is why `time_wall_micros` is a WALL clock and says so: it can step backwards when the machine's time is corrected, so a duration measured across an NTP correction can be negative. Fine for timing a compile or a request. Not fine for a timeout that must never go backwards.
 
 **3. NO LEAP SECONDS**, because Unix time has none. **A day here is always exactly 86400 seconds.** That is not an approximation this file chose, it is the definition of the scale `time()` answers on: 2016-12-31T23:59:60Z, a real UTC second, has no unix representation at all. Modelling leap seconds would mean shipping a table that expires — the IERS announces them six months ahead — and a date library whose answers change when you update a table is not what a reproducible language should hand you. Durations here are counts of 86400-second days, and the two places that matters are stated where they arise.
 
@@ -92,7 +98,7 @@ A date and a time of day, in UTC. Six Ints and nothing else — no timezone fiel
 
 The fields are public and a program may build one directly. Whether the result is a real date is a separate question, answered by `time_is_valid` and demanded by `time_to_unix`'s contract, which is the split this language usually makes: construction is cheap, and the promise is checked where it is relied on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L106)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L122)
 
 ### `Duration`
 {: #duration}
@@ -125,7 +131,7 @@ The constructors below are what makes that trade pay: `duration_hours(3)` says i
 
 **A duration may be negative**, which is what `time_between` answers when its arguments are in the other order. That is a real answer, not an error: "three hours earlier" is a duration.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L133)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L149)
 
 ## Functions
 {: #functions}
@@ -137,7 +143,7 @@ The constructors below are what makes that trade pay: `duration_hours(3)` says i
 pure function duration_seconds(count: Int) -> Duration
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L142)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L158)
 
 ### `duration_minutes`
 {: #duration-minutes}
@@ -146,7 +152,7 @@ pure function duration_seconds(count: Int) -> Duration
 pure function duration_minutes(count: Int) -> Duration
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L146)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L162)
 
 ### `duration_hours`
 {: #duration-hours}
@@ -155,7 +161,7 @@ pure function duration_minutes(count: Int) -> Duration
 pure function duration_hours(count: Int) -> Duration
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L152)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L168)
 
 ### `duration_days`
 {: #duration-days}
@@ -166,7 +172,7 @@ pure function duration_days(count: Int) -> Duration
 
 A day is 86400 seconds here, always — see limit 3. For calendar-day arithmetic across a date that a human would call "the same time tomorrow", that is the same thing, because UTC has no daylight saving. It is only different from a civil day in a timezone that shifts, and there are none here.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L161)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L177)
 
 ### `duration_total_seconds`
 {: #duration-total-seconds}
@@ -175,7 +181,7 @@ A day is 86400 seconds here, always — see limit 3. For calendar-day arithmetic
 pure function duration_total_seconds(span: Duration) -> Int
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L167)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L183)
 
 ### `duration_total_minutes`
 {: #duration-total-minutes}
@@ -186,7 +192,7 @@ pure function duration_total_minutes(span: Duration) -> Int
 
 The whole units contained, rounded toward NEGATIVE INFINITY rather than toward zero — because `divide_floor` is the operation whose answer is monotonic, so a duration one second longer never answers fewer minutes. `divide_toward_zero` would break that across zero: -90 seconds is -2 minutes here and would be -1 there, sitting between -60 and -120 which both answer differently. The same reason `array_sort` is stable: the surprising case is the one that has to behave.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L176)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L192)
 
 ### `duration_total_hours`
 {: #duration-total-hours}
@@ -195,7 +201,7 @@ The whole units contained, rounded toward NEGATIVE INFINITY rather than toward z
 pure function duration_total_hours(span: Duration) -> Int
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L180)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L196)
 
 ### `duration_total_days`
 {: #duration-total-days}
@@ -204,7 +210,7 @@ pure function duration_total_hours(span: Duration) -> Int
 pure function duration_total_days(span: Duration) -> Int
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L184)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L200)
 
 ### `time_add`
 {: #time-add}
@@ -215,7 +221,7 @@ pure function time_add(unix_seconds: Int, span: Duration) -> Int
 
 A unix timestamp `span` later. Refuses rather than wraps: a date library that answered the year -292277022657 for "a century after now" would be worse than one that stopped.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L192)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L208)
 
 ### `time_between`
 {: #time-between}
@@ -226,7 +232,7 @@ pure function time_between(from_unix: Int, to_unix: Int) -> Duration
 
 How long from `from_unix` to `to_unix`. **Negative when the second is earlier**, which is the honest answer rather than an absolute value: the caller asked a directed question.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L200)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L216)
 
 ### `time_floor_mod`
 {: #time-floor-mod}
@@ -241,7 +247,7 @@ Floor modulo — the remainder with the sign of the DIVISOR, so it is never nega
 
 This form cannot overflow anywhere: `remainder` is bounded by `by` in magnitude, and adding `by` to a value in `(-by, 0]` lands in `(0, by]`. Total for every `Int`, which is what the two callers below promise.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L222)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L238)
 
 ### `time_is_leap_year`
 {: #time-is-leap-year}
@@ -252,7 +258,7 @@ pure function time_is_leap_year(year: Int) -> Bool
 
 Proleptic Gregorian: divisible by 4, except centuries, except every fourth century. Correct for negative years too, because `time_floor_mod` never answers negative — year -4 is a leap year and year -1 is not, which a truncating remainder would get backwards.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L235)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L251)
 
 ### `time_days_in_month`
 {: #time-days-in-month}
@@ -263,7 +269,7 @@ pure function time_days_in_month(year: Int, month: Int) -> Int
 
 28, 29, 30 or 31. A table would be four lines shorter and would need `from_bytes` to be indexed by anything but a chain of comparisons, so the comparisons are written out.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L247)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L263)
 
 ### `time_days_from_civil`
 {: #time-days-from-civil}
@@ -278,7 +284,7 @@ Every division here is `divide_floor`, and only the first one needs to be: `yoe`
 
 The March shift is the whole trick — see the file header. `m <= 2` borrows a year so that February is last, which puts the leap day at the end where it disturbs nothing.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L271)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L287)
 
 ### `time_civil_from_days`
 {: #time-civil-from-days}
@@ -291,7 +297,7 @@ The inverse, as a DateTime at midnight. Hinnant's `civil_from_days`.
 
 146097 is the days in a 400-year era, which is exact — the Gregorian cycle repeats every 400 years with no remainder, and that is the fact the whole closed form rests on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L298)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L314)
 
 ### `time_from_unix`
 {: #time-from-unix}
@@ -304,7 +310,7 @@ The civil instant at that many seconds since 1970. **Total** — every `Int` is 
 
 `divide_floor` and `time_floor_mod` rather than truncation, and this is exactly the bug that makes a naive implementation wrong for one day in every negative timestamp: -1 second is 1969-12-31T23:59:59Z, so the day index is -1 and the second-of-day is 86399. Truncating division answers day 0 and -1 seconds, which is 1970-01-01 at minus one second — the wrong date and an impossible time.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L329)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L345)
 
 ### `time_is_valid`
 {: #time-is-valid}
@@ -317,7 +323,7 @@ Is this a real instant? Every field in range, and the day within the month's act
 
 `pure`, so `time_to_unix`'s contract can be one clause that says the whole thing instead of nine that say it piecewise. The year bound is what keeps the multiplication below from overflowing.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L348)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L364)
 
 ### `time_to_unix`
 {: #time-to-unix}
@@ -328,7 +334,7 @@ pure function time_to_unix(when: DateTime) -> Int
 
 Seconds since 1970. A `requires` rather than an `Option`, because an invalid DateTime is a program that built a date wrong, not input that happened to be bad — and `time_parse_iso` is the one that takes input and it answers `Option`. Same split `char_at` and `string_parse_int` make.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L371)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L387)
 
 ### `time_weekday`
 {: #time-weekday}
@@ -343,7 +349,7 @@ ISO's numbering rather than C's `tm_wday` (Sunday 0), because this module format
 
 `time_floor_mod` and not `remainder`: for any date before 1970 the day index is negative, and a remainder that kept that sign would answer a weekday of -2.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L390)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L406)
 
 ### `time_day_of_year`
 {: #time-day-of-year}
@@ -354,7 +360,7 @@ pure function time_day_of_year(when: DateTime) -> Int
 
 Day of the year, 1..366. 1 January is 1.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L398)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L414)
 
 ### `time_pad`
 {: #time-pad}
@@ -365,7 +371,7 @@ pure function time_pad(value: Int, width: Int) -> String allocates
 
 Zero-padded to `width`. Longer values are NOT truncated — a year of 12345 formats as five digits rather than silently becoming 2345, because dropping a digit from a date is the kind of quiet corruption this file is written to avoid. `time_format_iso`'s contract is what keeps that from arising there.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L411)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L427)
 
 ### `time_format_iso`
 {: #time-format-iso}
@@ -380,7 +386,7 @@ Always `Z`, never an offset, because there is one timezone here. See limit 1.
 
 **`requires` a year in 0..9999**, and that is the FORMAT's limit rather than this library's: the four-digit field cannot hold a year outside it, and ISO-8601's expanded form (`+0012026-…`) requires the sender and receiver to have agreed on how many digits, which is a negotiation and not a default. `time_to_unix` and `time_from_unix` have the full range; only the text form is narrow, and the contract says where the narrowing is.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L431)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L447)
 
 ### `time_format_date`
 {: #time-format-date}
@@ -391,7 +397,7 @@ pure function time_format_date(when: DateTime) -> String allocates
 
 Just the date: `2026-08-01`. The other ISO-8601 form a program is handed, and the one a CSV column usually holds.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L443)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L459)
 
 ### `time_parse_field`
 {: #time-parse-field}
@@ -404,7 +410,7 @@ A fixed-width run of digits as a number, or None. The building block the parser 
 
 `all_digits` from `lib/string.bx` is what makes this two lines — every byte a digit, then the ordinary parse. Written after that function existed rather than around its absence.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L457)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L473)
 
 ### `time_parse_iso`
 {: #time-parse-iso}
@@ -450,7 +456,7 @@ pure function time_parse_iso(text: String) -> Option<DateTime>
 
 A leading `+` or `-` for an expanded year is also refused, which is the same negotiation `time_format_iso` declines to guess at.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L491)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L507)
 
 ### `time_parse_unix`
 {: #time-parse-unix}
@@ -461,7 +467,7 @@ pure function time_parse_unix(text: String) -> Option<Int>
 
 Seconds since 1970 straight from ISO-8601 text, or None. The composition a caller reaching for this module usually wants, and the reason `time_parse_iso` returns the DateTime rather than the seconds: one of the two is derivable and the other is not.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L531)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L547)
 
 ### `time_i64_at`
 {: #time-i64-at}
@@ -474,7 +480,7 @@ One little-endian i64 out of a byte array, starting at `from`.
 
 Eight bytes reassembled by hand because Burxt reads a C buffer as bytes and has no way to say "the i64 at this offset" — the pointer wall hands over bytes and nothing else, which is what makes it a wall.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L568)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L584)
 
 ### `time_wall_micros`
 {: #time-wall-micros}
@@ -487,7 +493,7 @@ The wall clock in microseconds since the epoch, or `None` if the clock could not
 
 `None` rather than 0: a clock that failed and a clock reading zero are different facts, and zero is a real instant (1970) that a duration calculation would silently accept.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L585)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L601)
 
 ### `time_since_micros`
 {: #time-since-micros}
@@ -498,7 +504,7 @@ function time_since_micros(started: Int) -> Option<Int> touches clock
 
 Microseconds between two readings. Answers `None` when either reading failed, and the caller is expected to notice — a duration is exactly the place a missing measurement must not become zero.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L604)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L620)
 
 
 {% endraw %}

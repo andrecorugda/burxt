@@ -19,10 +19,26 @@
 // not read as UTC, it is answered with `None`. Reading it as UTC would be wrong by five hours while
 // looking like it worked, and converting it would need the timezone arithmetic that is not here.
 //
-// **2. WHOLE SECONDS.** No milliseconds, no monotonic clock. Both need `clock_gettime`, which fills
-// a struct through a pointer, which needs **A7 integer widths** — not done. So there is nothing here
-// that pretends to sub-second precision, rather than something that rounds and hopes. A benchmark or
-// a timeout wanting better than a second is blocked on A7 and should say so rather than use this.
+// **2. WHOLE SECONDS FROM `os_now`, MICROSECONDS FROM `time_wall_micros`, AND NO MONOTONIC CLOCK.**
+//
+// **This paragraph said "no milliseconds, no monotonic clock … blocked on A7" and shipped that way
+// in 1.6.0 and 1.7.0, five hundred lines above `time_wall_micros`, which answers microseconds.**
+// A7 integer widths turned out not to be needed: `c_bytes_at` hands over the sixteen bytes of a
+// `struct timespec` and `time_i64_at` reassembles them. Found 2026-08-21 when the comet session
+// asked for a sub-second clock and reported measuring elapsed time with `date +%s%3N` **from a
+// Burxt program** — they read this paragraph, believed it, and reached for the shell. The
+// capability was in the tarball they already had.
+//
+// That is the most expensive stale claim this repository has produced: a present-tense sentence in
+// SHIPPED documentation, contradicted by code in the same file, that talked a consumer out of the
+// language. The reference page carried both halves and a reader who starts at the top stops here.
+//
+// **What is still true is the monotonic half, and the reason has not changed.** `CLOCK_MONOTONIC`
+// is **1 on Linux and 6 on macOS**, Burxt has no conditional compilation — a recorded decision, not
+// a gap — so no single program can name both. `CLOCK_REALTIME` is 0 on both, which is why
+// `time_wall_micros` is a WALL clock and says so: it can step backwards when the machine's time is
+// corrected, so a duration measured across an NTP correction can be negative. Fine for timing a
+// compile or a request. Not fine for a timeout that must never go backwards.
 //
 // **3. NO LEAP SECONDS**, because Unix time has none. **A day here is always exactly 86400 seconds.**
 // That is not an approximation this file chose, it is the definition of the scale `time()` answers
