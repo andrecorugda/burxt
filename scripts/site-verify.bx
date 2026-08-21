@@ -1,0 +1,278 @@
+// ============================================================================
+// scripts/site-verify.bx — ask the SITE what it says, not the deploy job.
+//
+//     burxt run scripts/site-verify.bx
+//
+// **Why this exists.** A green deploy workflow is evidence that a job ran. It is not evidence that
+// a reader can see a sentence. On 2026-08-21 `origin/main` sat three commits behind `develop` with
+// an entire new reference page unpublished, while every workflow was green and every local suite
+// passed — the three sets are what the repository contains, what a release contains, and **what a
+// consumer has**, and only the third one is a person's experience of the language.
+//
+// So this fetches the pages and looks for phrases. It cannot be a `cargo test`: **a build here never
+// touches the network**, which is a rule worth more than this tool. It is a hand check, and the
+// point of it being a program rather than a command is that a program can carry its own controls.
+//
+// ---- the two halves, and the second is the one that took three tries -----------------------------
+//
+// Half one: phrases that must be PRESENT. Half two: phrases that must be ABSENT. Nine and four.
+//
+// **A batch is an instrument test in a way a single check is not.** Eight of nine passing is what
+// revealed that this tool was lying about the ninth — the disagreement between claims is the signal,
+// and the smallest configuration that can produce it is not one claim, it is several. A tool that
+// checked only the phrase somebody doubted would have said either "the site is fine" or "that
+// sentence did not deploy", and both were wrong.
+//
+// **Three ways prose defeats a checker, all found in this file's own history:**
+//
+//   1. A phrase WRAPS across a line in the source. A line-oriented match reports absent for text
+//      that renders perfectly. So the whole page is collapsed to single spaces before matching.
+//   2. Decoding entities DESTROYS a claim whose subject is an entity. `&#x27;` is stored as
+//      `&amp;#x27;`, and decoding `&amp;` first and the numeric form second collapses it to an
+//      apostrophe — so a claim about `&#x27;` can never match. **No numeric entity is decoded here
+//      and `&amp;` is decoded LAST.**
+//   3. A control on a TOKEN is not a control on a CLAIM. The first version of the `&#39;` control
+//      asserted that spelling was absent, and it fired: the page names the old spelling to contrast
+//      with the new one — *"Hex `&#x27;` rather than decimal `&#39;`"*. What was removed is the
+//      SENTENCE asserting it as the library's behaviour, so that is what must be absent.
+//
+// Every one of those reports the OPPOSITE of the truth rather than nothing, which is why they
+// survive review: a check that returns nothing gets investigated, and a check that returns the wrong
+// thing confidently gets believed.
+//
+// ---- and the reason there is no DNS here --------------------------------------------------------
+//
+// `tests/limitations/no-dns-pointer-read.bx` records it: `getaddrinfo` returns 0 from a Burxt
+// program and the `addrinfo` chain cannot be walked, because there is no way to read a POINTER back
+// out of C memory. So the addresses are written down. They are GitHub Pages' four published
+// addresses, and any one answering is enough — if all four fail, that is the message this prints,
+// with what to do about it. **Plain HTTP, port 80**, measured 2026-08-21 as serving 200 directly
+// rather than redirecting, which is how this avoids needing TLS as well.
+// ============================================================================
+
+use "../lib/http.bx";
+use "../lib/string.bx";
+use "../lib/array.bx";
+
+const SITE_HOST: String = "burxt-lang.org";
+
+// A phrase the site must, or must not, carry.
+class Claim {
+    path: String,
+    phrase: String,
+    // true: this must be on the page. false: this is a control and must NOT be.
+    wanted: Bool,
+}
+
+function claim(mutable out: [Claim], path: String, phrase: String) -> Int {
+    return push(out, Claim { path: path, phrase: phrase, wanted: true });
+}
+
+function control(mutable out: [Claim], path: String, phrase: String) -> Int {
+    return push(out, Claim { path: path, phrase: phrase, wanted: false });
+}
+
+// What the site is claimed to say. A phrase belongs here when a person's understanding of the
+// language depends on being able to read it — not for every sentence, which would make this a
+// second copy of the pages.
+function claims(mutable out: [Claim]) -> Int {
+    // The reference page for a module extracted on 2026-08-21, which was 404 for an hour after
+    // its commit was green because `main` had not moved.
+    let c1: Int = claim(out, "/reference/png.html", "png_encode_filtered");
+    let c2: Int = claim(out, "/reference/png.html", "PNG decode and encode, in Burxt");
+    // The limit a caller has to know about before framing output.
+    let c3: Int = claim(out, "/limitations.html", "Printing a String stops at a zero byte");
+    let c4: Int = claim(out, "/limitations.html", "serve and store binary freely; do not print it");
+    let c5: Int = claim(out, "/limitations.html", "11,214 zero bytes");
+    // The statement that exists because nothing else in the language can write a framed protocol.
+    let c6: Int = claim(out, "/reference/builtins.html", "print_exact");
+    // Two library defects a consumer's output may depend on.
+    let c7: Int = claim(out, "/reference/json.html", "every escape JSON requires");
+    let c8: Int = claim(out, "/reference/html.html", "&#x27;");
+    let c9: Int = claim(out, "/reference/cgi.html", "declares len(body)");
+
+    // Controls: near-misses of real claims, because a control that could never appear on any page
+    // tests nothing about the matching.
+    let n1: Int = control(out, "/reference/png.html", "png_encode_unfiltered");
+    let n2: Int = control(out, "/limitations.html", "print a String stops at a zero");
+    let n3: Int = control(out, "/reference/html.html", "renders &#39; and not &apos;");
+    let n4: Int = control(out, "/reference/cgi.html", "declares len(body) + 1");
+    return len(out);
+}
+
+// ---- reading a page the way a reader reads it ---------------------------------------------------
+
+// Everything between `<` and `>` removed, and the contents of `<script>` and `<style>` with it —
+// those hold text no reader sees, and a phrase found inside one is not a phrase on the page.
+pure function strip_markup(html: String) -> String {
+    let mutable out: String = "";
+    let size: Int = len(html);
+    let mutable i: Int = 0;
+    while i < size {
+        if byte_at(html, i) == 60 {                       // `<`
+            // A tag. Find its end, and if it opened a script or a style, skip to the closing tag.
+            let mutable j: Int = i + 1;
+            while j < size && byte_at(html, j) != 62 {     // `>`
+                j += 1;
+            }
+            let tag: String = string_to_lower_ascii(substring(html, i, j - i + 1));
+            if string_find(tag, "<script") == 0 || string_find(tag, "<style") == 0 {
+                let closing: String = "</" + substring(tag, 1, 6);
+                let end: Int = string_find_from(string_to_lower_ascii(html), closing, j);
+                if end < 0 {
+                    return out;
+                }
+                i = end;
+            } else {
+                i = j + 1;
+                out = out + " ";
+            }
+        } else {
+            out = out + byte_as_string(byte_at(html, i));
+            i += 1;
+        }
+    }
+    return out;
+}
+
+// Every run of whitespace becomes one space. **This is what makes a wrapped phrase findable** — the
+// file stores a line break where a reader sees a space.
+pure function collapse_spaces(text: String) -> String {
+    let mutable out: String = "";
+    let mutable last_was_space: Bool = false;
+    let size: Int = len(text);
+    let mutable i: Int = 0;
+    while i < size {
+        let b: Int = byte_at(text, i);
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            if !last_was_space {
+                out = out + " ";
+            }
+            last_was_space = true;
+        } else {
+            out = out + byte_as_string(b);
+            last_was_space = false;
+        }
+        i += 1;
+    }
+    return out;
+}
+
+// The four named entities, and **`&amp;` last**. No numeric entity is decoded at all: `&#x27;` on
+// the page is stored `&amp;#x27;`, so decoding `&amp;` first and `&#x27;` second would leave an
+// apostrophe and a claim about the entity could never match. Order is the whole of this function.
+pure function decode_named_entities(text: String) -> String {
+    let a: String = string_replace(text, "&lt;", "<");
+    let b: String = string_replace(a, "&gt;", ">");
+    let c: String = string_replace(b, "&quot;", "\"");
+    return string_replace(c, "&amp;", "&");
+}
+
+// ---- fetching ----------------------------------------------------------------------------------
+
+// GitHub Pages' four published addresses. Written down because Burxt has no DNS — see the header.
+function pages_addresses(mutable out: [Int]) -> Int {
+    let a: Int = push(out, 185199108153);
+    let b: Int = push(out, 185199109153);
+    let c: Int = push(out, 185199110153);
+    let d: Int = push(out, 185199111153);
+    return len(out);
+}
+
+// One page, from whichever address answers first. `Error` carries what to do about it.
+function fetch(path: String) -> Result<String, String>
+        allocates touches network, input
+{
+    let mutable packed: [Int] = [];
+    let count: Int = pages_addresses(packed);
+    let mutable last: String = "no address was tried";
+    for i in 0..count {
+        let one: Int = packed[i];
+        let a: Int = divide_floor(one, 1000000000);
+        let b: Int = remainder(divide_floor(one, 1000000), 1000);
+        let c: Int = remainder(divide_floor(one, 1000), 1000);
+        let d: Int = remainder(one, 1000);
+        match http_get(a, b, c, d, 80, SITE_HOST, path) {
+            Ok(response) => {
+                if response.status == 200 {
+                    return Result.Ok(response.body);
+                }
+                last = "answered " + to_string(response.status);
+            }
+            Error(why) => {
+                last = why;
+            }
+        }
+    }
+    return Result.Error(last);
+}
+
+// ---- the run -----------------------------------------------------------------------------------
+
+region main {
+    let mutable all: [Claim] = [];
+    let total: Int = claims(all);
+
+    // One fetch per distinct path, so a page with four claims is asked for once.
+    let mutable paths: [String] = [];
+    for i in 0..total {
+        if !array_contains(paths, all[i].path) {
+            let added: Int = push(paths, all[i].path);
+        }
+    }
+
+    let mutable bodies: [String] = [];
+    let mutable unreachable: Int = 0;
+    for i in 0..len(paths) {
+        match fetch(paths[i]) {
+            Ok(body) => {
+                let kept: Int = push(bodies, collapse_spaces(decode_named_entities(strip_markup(body))));
+            }
+            Error(why) => {
+                print_error("could not fetch https://" + SITE_HOST + paths[i] + ": " + why);
+                let kept: Int = push(bodies, "");
+                unreachable += 1;
+            }
+        }
+    }
+    if unreachable == len(paths) {
+        print_error("");
+        print_error("No page was reachable at any of GitHub Pages' four addresses. Burxt has no DNS");
+        print_error("(tests/limitations/no-dns-pointer-read.bx), so they are written down in this");
+        print_error("file. If Pages has moved, `getent hosts " + SITE_HOST + "` names the new ones.");
+        exit(2);
+    }
+
+    let mutable wrong: Int = 0;
+    for i in 0..total {
+        let it: Claim = all[i];
+        let mutable page: String = "";
+        for j in 0..len(paths) {
+            if paths[j] == it.path {
+                page = bodies[j];
+            }
+        }
+        let found: Bool = string_contains(page, it.phrase);
+        if found == it.wanted {
+            if it.wanted {
+                print("ok       " + it.path + "  " + it.phrase);
+            } else {
+                print("absent   " + it.path + "  " + it.phrase);
+            }
+        } else {
+            wrong += 1;
+            if it.wanted {
+                print("MISSING  " + it.path + "  " + it.phrase);
+            } else {
+                print("CONTROL FAILED — present when it must not be: " + it.path + "  " + it.phrase);
+            }
+        }
+    }
+
+    print("");
+    print(to_string(total) + " claims against the live site, " + to_string(wrong) + " wrong");
+    if wrong > 0 {
+        print_error("the site does not say what this file claims it says");
+        exit(1);
+    }
+}
