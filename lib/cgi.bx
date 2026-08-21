@@ -31,11 +31,19 @@
 //
 // ---- One limit, stated rather than discovered ---------------------------------------------
 //
-// **A response body is TEXT, and it always ends with a newline.** `print` is the only way out
-// of a Burxt program and it appends one, so `cgi_respond` counts that byte in Content-Length
-// rather than pretending it is not there. For HTML, JSON and CSV that trailing newline is
-// invisible. For a PNG it is corruption — so do not serve binary through this file until there
-// is a way to write bytes without a newline, and that is a compiler gap, not a library one.
+// **This said a response body always ends with a newline, and that limit is gone as of 1.7.0.**
+// It read: *"`print` is the only way out of a Burxt program and it appends one ... do not serve
+// binary through this file until there is a way to write bytes without a newline, and that is a
+// compiler gap, not a library one."* It was a compiler gap, it was reported as one with this file
+// named as a caller, and `print_exact` is the answer. `cgi_respond` now declares `len(body)` and
+// writes exactly that many bytes.
+//
+// **One limit survives, and it is narrower.** A String may hold a zero byte — `len` counts it,
+// `+` and `substring` preserve it — but every print path stops there, so a body containing one is
+// truncated and the Content-Length becomes a lie. A PNG is now servable through this file if it
+// holds no zero byte, which most do; so the honest rule is unchanged in practice for binary and
+// fixed for text. See `tests/limitations/no-nul-inside-printed-text.bx` for what closing that
+// would cost, and use a byte-level writer when the bytes are arbitrary.
 // ============================================================================
 
 use "option.bx";
@@ -219,16 +227,21 @@ pure function cgi_status_text(status: Int) -> String {
 function cgi_respond(status: Int, content_type: String, body: String) -> Int {
     print("Status: " + cgi_status_text(status));
     print("Content-Type: " + content_type);
-    // **`len(body) + 1`, and the `+ 1` is the whole reason this line has a comment.** `print`
-    // and `print_error` are the only ways out of a Burxt program and both append a newline, so
-    // the body on the wire is always one byte longer than the String. Declaring `len(body)`
-    // would be off by one on every response — a client reading exactly Content-Length bytes
-    // truncates the last character, and a keep-alive connection then starts the next response
-    // one byte out of step. It measured wrong before it was written down.
-    print("Content-Length: " + to_string(len(body) + 1));
+    // **`len(body)`, exactly, and this line carried a `+ 1` until 1.7.0.** `print` appends a
+    // newline, so the body on the wire used to be one byte longer than the String and this
+    // declared that — correct, and it meant no response could be byte-exact and no binary body
+    // could be served at all. `print_exact` writes the String and appends nothing, so the
+    // declaration and the bytes now agree.
+    //
+    // The old `+ 1` is worth remembering rather than deleting: a client reading exactly
+    // Content-Length bytes truncates the last character when the count is short, and a
+    // keep-alive connection then starts the next response one byte out of step. That measured
+    // wrong before it was written down, and it is the same failure in the other direction if
+    // this ever goes back to `print`.
+    print("Content-Length: " + to_string(len(body)));
     print("");
-    print(body);
-    return len(body) + 1;
+    print_exact(body);
+    return len(body);
 }
 
 // The pairing this file exists for: a typed tree goes out as a page, and the escaping happened

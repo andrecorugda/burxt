@@ -28,7 +28,18 @@
 //      now `\u00XX`, checked against Python's `json`), which is what makes this limit narrow
 //      rather than merely documented: the cheap half was in `lib/`, not in a libc symbol.
 //      What still reaches it is text built from arbitrary bytes and printed directly, such as
-//      rendering a document into a page. `write_bytes` is faithful and is the answer there.
+//      rendering a document into a page.
+//
+//      **The byte paths are faithful, and that is measured rather than assumed** — it is the
+//      answer a reader needs and it was advice until 2026-08-21. `write_bytes` wrote 64 bytes
+//      holding 16 zeros and `read_file` returned all 64 exactly. The star-burxt session measured
+//      the two paths that carry real binary: `file_write` restored a `.vsix` (685 zero bytes)
+//      byte-for-byte with a matching digest, and `net_write`/`http_serve` served an 83,629-byte
+//      wasm module (11,214 zero bytes) and fetched it back with a matching digest, across the
+//      partial-write path. The reason is the whole distinction: those take an explicit LENGTH,
+//      and a print is null-terminated by the format string it passes through.
+//
+//      **So: serve and store binary freely; do not `print` it.**
 use "../../lib/string.bx";
 
 region r {

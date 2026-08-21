@@ -17,7 +17,6 @@ Tom & Jerry
 599
 Status: 200 OK
 Content-Type: text/html; charset=utf-8
-Content-Length: 47
+Content-Length: 46
 
-<!DOCTYPE html><p>Rice &amp; &lt;beans&gt;</p>
-47
+<!DOCTYPE html><p>Rice &amp; &lt;beans&gt;</p>46

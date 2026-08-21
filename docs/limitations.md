@@ -147,8 +147,15 @@ it is fixed: every byte below 0x20 is now `\u00XX`, checked against Python's `js
 thirty-two. What remains is text built from arbitrary bytes and printed directly — rendering a
 document into a page, rather than serialising it.
 
-Reported by the BMX session against published 1.6.0, measured 2026-08-21. `write_bytes` writes a
-byte buffer faithfully and is the answer when the bytes are arbitrary.
+**The byte paths are faithful, and it is measured.** `write_bytes` wrote 64 bytes holding 16 zeros
+and `read_file` returned all 64 exactly; a `.vsix` with 685 zero bytes round-tripped through
+`file_write` byte-for-byte, and an 83,629-byte wasm module with 11,214 zero bytes was served and
+fetched back through `net_write`/`http_serve` with a matching digest. Those take an explicit length,
+where a print is null-terminated by the format string it passes through. **So: serve and store
+binary freely; do not `print` it.**
+
+Reported by the BMX session against published 1.6.0 and measured with the star-burxt session,
+2026-08-21.
 
 ### No threads. Processes, yes
 

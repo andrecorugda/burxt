@@ -33,7 +33,9 @@ It owns percent-decoding, `&`/`=` splitting, and the shape of a response. It doe
 
 ---- One limit, stated rather than discovered ---------------------------------------------
 
-**A response body is TEXT, and it always ends with a newline.** `print` is the only way out of a Burxt program and it appends one, so `cgi_respond` counts that byte in Content-Length rather than pretending it is not there. For HTML, JSON and CSV that trailing newline is invisible. For a PNG it is corruption — so do not serve binary through this file until there is a way to write bytes without a newline, and that is a compiler gap, not a library one.
+**This said a response body always ends with a newline, and that limit is gone as of 1.7.0.** It read: *"`print` is the only way out of a Burxt program and it appends one ... do not serve binary through this file until there is a way to write bytes without a newline, and that is a compiler gap, not a library one."* It was a compiler gap, it was reported as one with this file named as a caller, and `print_exact` is the answer. `cgi_respond` now declares `len(body)` and writes exactly that many bytes.
+
+**One limit survives, and it is narrower.** A String may hold a zero byte — `len` counts it, `+` and `substring` preserve it — but every print path stops there, so a body containing one is truncated and the Content-Length becomes a lie. A PNG is now servable through this file if it holds no zero byte, which most do; so the honest rule is unchanged in practice for binary and fixed for text. See `tests/limitations/no-nul-inside-printed-text.bx` for what closing that would cost, and use a byte-level writer when the bytes are arbitrary.
 
 ## What is in it
 {: #what-is-in-it}
@@ -65,7 +67,7 @@ class Request
 
 What the server told us, and nothing inferred. `body` is read eagerly because a CGI program that does not drain stdin can wedge the server that spawned it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L50)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L58)
 
 ### `Param`
 {: #param}
@@ -76,7 +78,7 @@ class Param { name: String, value: String }
 
 One decoded parameter. A class rather than a tuple, for the reason `Field` is one at lib/json.bx:49 — a name and a value travelling together is a thing worth naming.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L59)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L67)
 
 ## Functions
 {: #functions}
@@ -92,7 +94,7 @@ The request, read from the environment the server set up.
 
 A missing variable becomes `""` rather than `None`: CGI guarantees `REQUEST_METHOD`, and for the rest an absent `QUERY_STRING` and an empty one mean the same thing to every caller. That is the opposite call from `os_env`, and it is made here because the two facts are genuinely not different at this layer.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L67)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L75)
 
 ### `cgi_hex_value`
 {: #cgi-hex-value}
@@ -103,7 +105,7 @@ pure function cgi_hex_value(b: Int) -> Int
 
 One hex digit's value, or -1. Upper and lower case both, because clients send both.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L83)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L91)
 
 ### `cgi_decode`
 {: #cgi-decode}
@@ -116,7 +118,7 @@ Percent-decoding, in RUNS rather than a byte at a time — the shape recorded at
 
 `plus_is_space` is a parameter and not two functions because the two callers below name which they meant, and the rule itself is one line different.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L95)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L103)
 
 ### `cgi_decode_path`
 {: #cgi-decode-path}
@@ -127,7 +129,7 @@ pure function cgi_decode_path(text: String) -> Option<String>
 
 A path segment. `+` is an ordinary character in a path — only a form encoding gives it a second meaning, and reading it as a space here would silently rename a file.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L126)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L134)
 
 ### `cgi_decode_form`
 {: #cgi-decode-form}
@@ -138,7 +140,7 @@ pure function cgi_decode_form(text: String) -> Option<String>
 
 A query or form value, where `+` means space per application/x-www-form-urlencoded.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L131)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L139)
 
 ### `cgi_params`
 {: #cgi-params}
@@ -151,7 +153,7 @@ pure function cgi_params(encoded: String) -> Option<[Param]>
 
 An empty input is an empty list, not a refusal — see the header. A trailing or doubled `&` yields an empty piece, which is skipped for the same reason: `a=1&` is what a form with one field actually sends.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L142)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L150)
 
 ### `cgi_param`
 {: #cgi-param}
@@ -164,7 +166,7 @@ The FIRST parameter of that name, or `None`.
 
 First, not last, and not a list: a repeated name is how the classic parameter-pollution bug works, where the server reads one and a proxy reads the other. First is the rule stated out loud so both sides can agree on it. A caller that genuinely wants every value walks the list `cgi_params` already handed it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L177)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L185)
 
 ### `cgi_status_text`
 {: #cgi-status-text}
@@ -175,7 +177,7 @@ pure function cgi_status_text(status: Int) -> String
 
 The reason phrase for a status, so a caller writes `200` and not `"200 OK"`.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L191)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L199)
 
 ### `cgi_respond`
 {: #cgi-respond}
@@ -190,7 +192,7 @@ The blank line between headers and body is the whole protocol. It is written her
 
 Answers the number of body bytes sent. `print` carries no effect — there is no `output` in the effect vocabulary, because a program that writes to stdout is what a program IS — so the return value is the only fact worth handing back, and a Bool that is always `true` would not have been one.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L219)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L227)
 
 ### `cgi_respond_html`
 {: #cgi-respond-html}
@@ -201,7 +203,7 @@ function cgi_respond_html(status: Int, page: Html) -> Int
 
 The pairing this file exists for: a typed tree goes out as a page, and the escaping happened where `lib/html.bx` says it happens. There is no overload taking a String, on purpose — a String reaching this function would be a page nobody escaped.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L237)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L250)
 
 
 {% endraw %}

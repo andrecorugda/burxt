@@ -524,6 +524,88 @@ fn html_escape_agrees_with_pythons_reference_escaper() {
     );
 }
 
+/// **A CGI response's `Content-Length` equals the bytes that follow it.**
+///
+/// `tests/pass/cgi_library.bx` pins the literal bytes, which catches a change and cannot say what
+/// was wrong with it. This asserts the RELATIONSHIP, so it survives the document changing and fails
+/// with the actual diagnosis: the header and the body disagree by N.
+///
+/// It is the reverse direction of a claim the library used to make the other way round. Until 1.7.0
+/// `cgi_respond` declared `len(body) + 1`, because `print` appends a newline and that byte was on
+/// the wire — correct, and the comment recorded what happens when the count is short: *a client
+/// reading exactly Content-Length bytes truncates the last character, and a keep-alive connection
+/// then starts the next response one byte out of step.* `print_exact` made the count exact, and this
+/// is what would catch it going back — in either direction, since a stray `+ 1` now overstates.
+#[test]
+fn a_cgi_response_declares_exactly_the_bytes_it_writes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("cgi-content-length");
+    fs::create_dir_all(&scratch).unwrap();
+    let source = scratch.join("serve.bx");
+    // Three bodies, because an off-by-one is invisible when the body is one character and a
+    // multi-byte escape is where a length and a character count part company.
+    fs::write(
+        &source,
+        "use \"std/cgi.bx\";\n\
+         \n\
+         region r {\n\
+         \x20   let n: Int = cgi_respond(200, \"text/plain\", \"Rice & beans\");\n\
+         }\n",
+    )
+    .unwrap();
+
+    // `std/cgi.bx` with `BURXT_LIB`, the way a consumer reaches the library — a relative `use`
+    // resolves against the SOURCE file, which lives in a scratch directory that has no `lib/`.
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(&source)
+        .env("BURXT_LIB", root.join("lib"))
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt run");
+    assert!(
+        out.status.success(),
+        "the CGI program did not run: {}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = fs::remove_dir_all(&scratch);
+    let response = out.stdout;
+
+    // Headers end at the first blank line, exactly as a client finds them.
+    let split = response
+        .windows(2)
+        .position(|w| w == b"\n\n")
+        .expect("a blank line between headers and body");
+    let headers = String::from_utf8_lossy(&response[..split]).to_string();
+    let body = &response[split + 2..];
+
+    let declared: usize = headers
+        .lines()
+        .find_map(|l| l.strip_prefix("Content-Length: "))
+        .expect("a Content-Length header")
+        .trim()
+        .parse()
+        .expect("Content-Length is a number");
+
+    assert_eq!(
+        declared,
+        body.len(),
+        "Content-Length says {} and {} bytes follow it. A short count truncates the last \
+         character for a client reading exactly Content-Length; a long one leaves it waiting for \
+         bytes that never come, and on a keep-alive connection either desynchronises every \
+         response after it. Body was {:?}",
+        declared,
+        body.len(),
+        String::from_utf8_lossy(body)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(body),
+        "Rice & beans",
+        "the body must be the String that was passed, with nothing appended"
+    );
+}
+
 #[test]
 fn panic_programs_die_cleanly_at_runtime() {
     let scratch = scratch_dir("panic");

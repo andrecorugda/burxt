@@ -73,8 +73,11 @@ match cgi_params("flag") {
 print(cgi_status_text(404));
 print(cgi_status_text(599));
 
-// 9. The response, whole. **Content-Length is `len(body) + 1`** because `print` appends a
-//    newline and that byte is on the wire — a client reading exactly Content-Length bytes
-//    would otherwise truncate the last character of every page.
+// 9. The response, whole, and **Content-Length is now exactly `len(body)`**. It was
+//    `len(body) + 1` until 1.7.0 because `print` appends a newline and that byte was on the
+//    wire; `cgi_respond` writes the body with `print_exact` now, so the declaration and the
+//    bytes agree and the response ends where it says it ends. The `47` below was 48's worth of
+//    wire for a 46-byte document — that is the off-by-one this closes, and the fixture is what
+//    would catch it coming back.
 let sent: Int = cgi_respond_html(200, html_element("p", [], [html_text("Rice & <beans>")]));
 print(sent);
