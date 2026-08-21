@@ -301,7 +301,7 @@ pure function path_stem(path: String) -> String allocates {
 // actually occurs — a trusted base directory joined to a name that came from outside the program.
 // `path_join(uploads, name)` with `name` of `"/etc/passwd"` answers `/etc/passwd` under Python's
 // rule, having silently thrown away the sandbox it was given. Burxt exists to not have that
-// shape of bug (`spec/DESIGN.md`: strict enough that an agent cannot err), so the surprising
+// shape of bug (`DESIGN.md`: strict enough that an agent cannot err), so the surprising
 // behaviour is the one this does not have.
 //
 // A caller who WANTS the reset writes it, in one line a reviewer can see:

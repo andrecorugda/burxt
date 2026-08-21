@@ -7055,7 +7055,7 @@ function (mutable self: Unit) may_be_region_storage(src: String, written: Type) 
     // not 46 — so without this a `(Int, String)` matched out of a `region` would have been
     // "one i64 cell, copied", the taint would never have been applied, and the program would
     // have run and printed the next region's bytes. Proven by mutation in both compilers:
-    // break this arm and `tests/fail/a_tuple_holding_a_string_escapes_its_region.bx` is
+    // break this arm and `tests/fail/a_tuple_holding_a_string_escapes_a_region.bx` is
     // ACCEPTED and runs.
     if t.kind == 53 {
         let mutable e: Int = 0;
