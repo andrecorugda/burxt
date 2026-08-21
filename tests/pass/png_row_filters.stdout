@@ -1,0 +1,8 @@
+raster: 6x5
+None round-trips: true
+Sub round-trips: true
+Up round-trips: true
+Average round-trips: true
+Paeth round-trips: true
+half a file is refused: a chunk header claims more bytes than the file holds
+not a PNG is refused: the eight-byte PNG signature does not match

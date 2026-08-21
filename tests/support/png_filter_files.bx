@@ -1,0 +1,40 @@
+// Writes one PNG per row filter, for `png_filters_match_an_independent_unfilterer` to check.
+//
+// A separate program rather than part of `tests/pass/png_row_filters.bx` because that fixture's job
+// is a round trip inside Burxt and this one's is to hand bytes to a stranger. The two exist together
+// deliberately: a control proved the round trip CANNOT see a bug shared by the encoder and the
+// decoder — breaking `divide_floor(left + above, 2)` in both left the fixture reporting
+// `Average round-trips: true`. So the round trip proves they are inverses and this proves they are
+// right.
+//
+// Takes the output directory as an argument, so it writes nowhere near the repository.
+use "../../lib/png.bx";
+use "../../lib/files.bx";
+
+function varied(w: Int, h: Int) -> Image {
+    let mutable px: [Int] = [];
+    for y in 0..h {
+        for x in 0..w {
+            let r: Int = push(px, bit_and(x * 37 + y * 11, 255));
+            let g: Int = push(px, bit_and(x * 5 + y * 61 + 7, 255));
+            let b: Int = push(px, bit_and(x * 91 + y * 3 + 19, 255));
+            let a: Int = push(px, bit_and(255 - x * 13 - y * 29, 255));
+        }
+    }
+    return Image { w: w, h: h, px: px };
+}
+
+region r {
+    if argument_count() < 2 {
+        print_error("usage: png_filter_files.bx <directory>");
+        exit(2);
+    }
+    let into: String = argument(1);
+    let original: Image = varied(6, 5);
+    for filtering in 0..5 {
+        let bytes: [Int] = png_encode_filtered(original, filtering);
+        let path: String = into + "/filter" + to_string(filtering) + ".png";
+        let wrote: Int = write_bytes(path, bytes);
+        print(to_string(filtering) + " " + to_string(wrote));
+    }
+}

@@ -1,0 +1,433 @@
+// ============================================================================
+// lib/png.bx — PNG decode and encode, in Burxt.
+//
+// **Extracted from `scripts/editor-icons.bx` on 2026-08-21, and the reason is a test that could not
+// be written.** The decoder implements all five row filters that RFC 2083 defines, and the icon
+// deriver's ten source images between them use four: None 392 rows, Sub 200, Up 1148, Paeth 324,
+// **Average 0**. So one predictor's reconstruction had never executed, in a decoder that reads every
+// PNG this project ships — and no fixture could reach it, because the code lived in a script rather
+// than a module.
+//
+// The star-burxt session measured the same ratio across twenty-nine real PNGs: **2 Average rows out
+// of 12,913**. That is worse than zero, because it passes and reads as coverage. Neither number can
+// be fixed by finding better artwork, which is the whole argument for `tests/pass/png_row_filters.bx`
+// building its own inputs — one predictor per image, so each filter's path is the entire thing under
+// test.
+//
+// `Image` lives here rather than in the script because the decoder answers one and the encoder takes
+// one; a caller that wants pixels wants this type.
+// ============================================================================
+
+use "result.bx";
+use "hash.bx";
+use "inflate.bx";
+use "deflate.bx";
+use "string.bx";
+// `math_abs` for Paeth's three distances. The script this came from had its own `abs_of`, used
+// twenty times there; a library module reaches for the library rather than carrying a second copy.
+use "math.bx";
+
+// thing the Python compared.
+class Image {
+    w: Int,
+    h: Int,
+    px: [Int],
+}
+
+
+// ============================================================================
+// PNG
+// ============================================================================
+
+pure function png_be32(bytes: [Int], at: Int) -> Int
+        requires at >= 0
+        requires at + 4 <= len(bytes)
+        {
+    return bytes[at] * 16777216 + bytes[at + 1] * 65536 + bytes[at + 2] * 256 + bytes[at + 3];
+}
+
+function png_push_be32(mutable out: [Int], value: Int) -> Int
+        requires value >= 0
+        {
+    let a: Int = push(out, bit_and(shift_right_zeros(value, 24), 255));
+    let b: Int = push(out, bit_and(shift_right_zeros(value, 16), 255));
+    let c: Int = push(out, bit_and(shift_right_zeros(value, 8), 255));
+    return push(out, bit_and(value, 255));
+}
+
+pure function png_chunk_is(bytes: [Int], at: Int, a: Int, b: Int, c: Int, d: Int) -> Bool
+        requires at >= 0
+        requires at + 4 <= len(bytes)
+        {
+    return bytes[at] == a && bytes[at + 1] == b && bytes[at + 2] == c && bytes[at + 3] == d;
+}
+
+// A chunk's four type bytes, for a diagnostic. Anything outside printable ASCII becomes `?`,
+// because the one file that needs this message is a corrupt one and its type bytes may be any
+// value at all — including a NUL, which a Burxt String cannot carry through to the reader.
+pure function png_chunk_name(bytes: [Int], at: Int) -> String
+        requires at >= 0
+        requires at + 4 <= len(bytes)
+        {
+    let mutable name: String = "";
+    for i in 0..4 {
+        let b: Int = bytes[at + i];
+        if b >= 32 && b < 127 {
+            name = name + byte_as_string(b);
+        } else {
+            name = name + "?";
+        }
+    }
+    return name;
+}
+
+// How many samples a colour type carries per pixel, or 0 for one this file will not read. Colour
+// type 3 is a palette and 0 is what says so — the caller turns that into the refusal, because the
+// message belongs where the file name is known and this function does not have it.
+pure function png_channels_for(colour: Int) -> Int {
+    if colour == 0 {
+        return 1;                                          // grey
+    }
+    if colour == 2 {
+        return 3;                                          // RGB
+    }
+    if colour == 4 {
+        return 2;                                          // grey + alpha
+    }
+    if colour == 6 {
+        return 4;                                          // RGBA
+    }
+    return 0;
+}
+
+// PNG's fifth filter, from RFC 2083 §6.6. The predictor is whichever of left, above and corner is
+// nearest to `left + above - corner`, with the ties resolved in that order — the order is part of the
+// specification, so a `<` where a `<=` belongs decodes most images and corrupts some.
+pure function png_paeth(left: Int, above: Int, corner: Int) -> Int {
+    let estimate: Int = left + above - corner;
+    let d_left: Int = math_abs(estimate - left);
+    let d_above: Int = math_abs(estimate - above);
+    let d_corner: Int = math_abs(estimate - corner);
+    if d_left <= d_above && d_left <= d_corner {
+        return left;
+    }
+    if d_above <= d_corner {
+        return above;
+    }
+    return corner;
+}
+
+// Every IDAT payload, inflated once, unfiltered, and widened to RGBA.
+//
+// **The payloads are concatenated before anything inflates.** A PNG may split IDAT anywhere,
+// including mid-symbol, so inflating chunk by chunk reports a truncated stream on a file that is
+// perfectly valid. Nine of the nine PNGs in this repository happen to carry a single IDAT, which is
+// precisely why this is written down rather than discovered later.
+function png_decode(bytes: [Int]) -> Result<Image, String> {
+    if len(bytes) < 8 {
+        return Result.Error("shorter than a PNG signature");
+    }
+    if !png_chunk_is(bytes, 0, 137, 80, 78, 71) || !png_chunk_is(bytes, 4, 13, 10, 26, 10) {
+        return Result.Error("the eight-byte PNG signature does not match");
+    }
+
+    let mutable width: Int = 0;
+    let mutable height: Int = 0;
+    let mutable channels: Int = 0;
+    let mutable seen_header: Bool = false;
+    let mutable payload: [Int] = [];
+    let mutable at: Int = 8;
+
+    while at + 8 <= len(bytes) {
+        let length: Int = png_be32(bytes, at);
+        if length < 0 || at + 12 + length > len(bytes) {
+            return Result.Error("a chunk header claims more bytes than the file holds");
+        }
+        let body: Int = at + 8;
+        // **The chunk's own CRC-32, checked rather than skipped — and this is the one place this
+        // file is deliberately STRICTER than the Python it replaces.** Pillow does not verify chunk
+        // CRCs, so `editor-icons.py` would happily crop a file with a flipped bit in IHDR. Writing
+        // a CRC and then ignoring it on the way back in is the defect `lib/inflate.bx` names about
+        // reading one copy of duplicated metadata; and the cost of leniency lands on a reader, not
+        // here — one wrong bit in `height` surfaces as "the inflated IDAT is N bytes where M
+        // filtered rows were expected", which sends them to look at the compression when the header
+        // is what broke. A corrupt brand asset should be named as corrupt.
+        let mutable covered: [Int] = [];
+        for i in 0..(length + 4) {
+            let grew: Int = push(covered, bytes[at + 4 + i]);
+        }
+        if crc32(covered) != png_be32(bytes, body + length) {
+            return Result.Error("the " + png_chunk_name(bytes, at + 4) + " chunk at byte "
+                    + to_string(at) + " fails its own CRC-32 — the file is corrupt");
+        }
+        if png_chunk_is(bytes, at + 4, 73, 72, 68, 82) {
+            if length != 13 {
+                return Result.Error("IHDR is not 13 bytes");
+            }
+            width = png_be32(bytes, body);
+            height = png_be32(bytes, body + 4);
+            let depth: Int = bytes[body + 8];
+            let colour: Int = bytes[body + 9];
+            let compression: Int = bytes[body + 10];
+            let filtering: Int = bytes[body + 11];
+            let interlace: Int = bytes[body + 12];
+            if width <= 0 || height <= 0 {
+                return Result.Error("IHDR gives a zero dimension");
+            }
+            if depth != 8 {
+                return Result.Error("bit depth " + to_string(depth)
+                        + " is not supported here — this reads 8 bits per channel");
+            }
+            if interlace != 0 {
+                return Result.Error("an interlaced PNG is not supported here — re-export "
+                        + "without Adam7 interlacing");
+            }
+            if compression != 0 || filtering != 0 {
+                return Result.Error("an unknown compression or filter method in IHDR");
+            }
+            channels = png_channels_for(colour);
+            if channels == 0 {
+                return Result.Error("colour type " + to_string(colour)
+                            + " is not supported here — this reads grey, grey+alpha, RGB and RGBA, "
+                        + "but not a palette");
+            }
+            seen_header = true;
+        } else {
+            if png_chunk_is(bytes, at + 4, 73, 68, 65, 84) {
+                for i in 0..length {
+                    let grew: Int = push(payload, bytes[body + i]);
+                }
+            } else {
+                if png_chunk_is(bytes, at + 4, 73, 69, 78, 68) {
+                    at = len(bytes);
+                }
+            }
+        }
+        if at < len(bytes) {
+            at = at + 12 + length;
+        }
+    }
+
+    if !seen_header {
+        return Result.Error("no IHDR chunk");
+    }
+    if len(payload) == 0 {
+        return Result.Error("no IDAT data");
+    }
+
+    let mutable raw: [Int] = [];
+    let written: Int = zlib_into(raw, payload);
+    if written < 0 {
+        return Result.Error("the IDAT zlib stream did not inflate");
+    }
+    let stride: Int = width * channels;
+    let expected: Int = height * (stride + 1);
+    if len(raw) != expected {
+        return Result.Error("the inflated IDAT is " + to_string(len(raw))
+                + " bytes where " + to_string(expected) + " filtered rows were expected");
+    }
+
+    let mutable flat: [Int] = [];
+    for i in 0..(height * stride) {
+        let grew: Int = push(flat, 0);
+    }
+    for y in 0..height {
+        let row: Int = y * (stride + 1);
+        let filtering: Int = raw[row];
+        if filtering > 4 {
+            return Result.Error("row filter " + to_string(filtering) + " is not one of the five");
+        }
+        let out: Int = y * stride;
+        let up: Int = out - stride;
+        for x in 0..stride {
+            let mutable left: Int = 0;
+            if x >= channels {
+                left = flat[out + x - channels];
+            }
+            let mutable above: Int = 0;
+            if y > 0 {
+                above = flat[up + x];
+            }
+            let mutable corner: Int = 0;
+            if y > 0 && x >= channels {
+                corner = flat[up + x - channels];
+            }
+            let mutable value: Int = raw[row + 1 + x];
+            if filtering == 1 {
+                value = value + left;
+            }
+            if filtering == 2 {
+                value = value + above;
+            }
+            if filtering == 3 {
+                value = value + divide_floor(left + above, 2);
+            }
+            if filtering == 4 {
+                value = value + png_paeth(left, above, corner);
+            }
+            flat[out + x] = bit_and(value, 255);
+        }
+    }
+
+    let mutable px: [Int] = [];
+    let pixels: Int = width * height;
+    for i in 0..pixels {
+        let source: Int = i * channels;
+        if channels == 1 {
+            let r: Int = push(px, flat[source]);
+            let g: Int = push(px, flat[source]);
+            let b: Int = push(px, flat[source]);
+            let a: Int = push(px, 255);
+        }
+        if channels == 2 {
+            let r: Int = push(px, flat[source]);
+            let g: Int = push(px, flat[source]);
+            let b: Int = push(px, flat[source]);
+            let a: Int = push(px, flat[source + 1]);
+        }
+        if channels == 3 {
+            let r: Int = push(px, flat[source]);
+            let g: Int = push(px, flat[source + 1]);
+            let b: Int = push(px, flat[source + 2]);
+            let a: Int = push(px, 255);
+        }
+        if channels == 4 {
+            let r: Int = push(px, flat[source]);
+            let g: Int = push(px, flat[source + 1]);
+            let b: Int = push(px, flat[source + 2]);
+            let a: Int = push(px, flat[source + 3]);
+        }
+    }
+    return Result.Ok(Image { w: width, h: height, px: px });
+}
+
+// One chunk: its length, its type, its data, and a CRC-32 over the type AND the data — over the type
+// as well, which is the part a reader of the format description skips.
+function png_chunk(mutable out: [Int], a: Int, b: Int, c: Int, d: Int, data: [Int]) -> Int {
+    let header: Int = png_push_be32(out, len(data));
+    let mutable covered: [Int] = [];
+    let ta: Int = push(covered, a);
+    let tb: Int = push(covered, b);
+    let tc: Int = push(covered, c);
+    let td: Int = push(covered, d);
+    for i in 0..len(data) {
+        let grew: Int = push(covered, data[i]);
+    }
+    for i in 0..len(covered) {
+        let grew: Int = push(out, covered[i]);
+    }
+    return png_push_be32(out, crc32(covered));
+}
+
+// A valid RGBA PNG. **Not Pillow's bytes** — this filters every row with 0 and compresses with fixed
+// Huffman, so the file is bigger than Pillow's and decodes to the same pixels. `--check` compares
+// pixels for exactly that reason: matching an encoder is a different and pointless problem.
+// The filtered scanlines an IDAT holds: one filter-type byte per row, then the row's bytes as
+// differences from whatever that predictor names. RFC 2083 §6.
+//
+// **One implementation of the five predictors, taking the choice as an argument**, rather than a
+// filtering function per encoder. `png_encode` asks for 0 and always did; the reason this is
+// separable is that `tests/pass/png_row_filters.bx` needs an image per predictor and no artwork
+// supplies one — ten source images here use four of the five, and **Average appears zero times**.
+//
+// **The wrap is `bit_and(diff, 255)` and not `remainder(diff, 256)`, which is the whole comment.**
+// `remainder` rounds toward zero, so a difference of -3 comes out as -3 where the format says 253,
+// and the image then decodes to ALMOST the right thing — the worst kind of wrong. The star-burxt
+// session paid for that one first and said so; `bit_and` is two's complement and lands on 253.
+//
+// `left`, `above` and `corner` are read from the ORIGINAL raster, which is correct because a decoder
+// reconstructs those same bytes before it needs them — encoder and decoder walk the same values in
+// the same order, which is what makes the round-trip meaningful rather than circular.
+pure function png_filtered_rows(image: Image, filtering: Int) -> [Int] {
+    let channels: Int = 4;
+    let stride: Int = image.w * channels;
+    let mutable rows: [Int] = [];
+    for y in 0..image.h {
+        let start: Int = push(rows, filtering);
+        for x in 0..stride {
+            let here: Int = image.px[y * stride + x];
+            let mutable left: Int = 0;
+            if x >= channels {
+                left = image.px[y * stride + x - channels];
+            }
+            let mutable above: Int = 0;
+            if y > 0 {
+                above = image.px[(y - 1) * stride + x];
+            }
+            let mutable corner: Int = 0;
+            if y > 0 && x >= channels {
+                corner = image.px[(y - 1) * stride + x - channels];
+            }
+            let mutable value: Int = here;
+            if filtering == 1 {
+                value = here - left;
+            }
+            if filtering == 2 {
+                value = here - above;
+            }
+            if filtering == 3 {
+                value = here - divide_floor(left + above, 2);
+            }
+            if filtering == 4 {
+                value = here - png_paeth(left, above, corner);
+            }
+            let grew: Int = push(rows, bit_and(value, 255));
+        }
+    }
+    return rows;
+}
+
+// A PNG with every row filtered by one chosen predictor. `png_encode` is this with `None`.
+function png_encode_filtered(image: Image, filtering: Int) -> [Int]
+        requires filtering >= 0
+        requires filtering <= 4
+        {
+    let rows: [Int] = png_filtered_rows(image, filtering);
+    return png_wrap(image, rows);
+}
+
+function png_encode(image: Image) -> [Int] {
+    let rows: [Int] = png_filtered_rows(image, 0);
+    return png_wrap(image, rows);
+}
+
+// The container around already-filtered scanlines: zlib, IHDR, IDAT, IEND.
+function png_wrap(image: Image, rows: [Int]) -> [Int] {
+
+    // A zlib stream, which is what IDAT holds: 0x78 0x01 is deflate with a 32 KB window and the
+    // header's own check value already satisfied (0x7801 is a multiple of 31), then the raw deflate
+    // stream, then an adler32 of the UNCOMPRESSED bytes.
+    let mutable stream: [Int] = [];
+    let cmf: Int = push(stream, 120);
+    let flg: Int = push(stream, 1);
+    let deflated: Int = deflate_into(stream, rows);
+    let sum: Int = adler32(rows);
+    let checksum: Int = png_push_be32(stream, sum);
+
+    let mutable header: [Int] = [];
+    let w: Int = png_push_be32(header, image.w);
+    let h: Int = png_push_be32(header, image.h);
+    let depth: Int = push(header, 8);
+    let colour: Int = push(header, 6);                     // RGBA
+    let compression: Int = push(header, 0);
+    let filtering: Int = push(header, 0);
+    let interlace: Int = push(header, 0);
+
+    let mutable out: [Int] = [];
+    let s0: Int = push(out, 137);
+    let s1: Int = push(out, 80);
+    let s2: Int = push(out, 78);
+    let s3: Int = push(out, 71);
+    let s4: Int = push(out, 13);
+    let s5: Int = push(out, 10);
+    let s6: Int = push(out, 26);
+    let s7: Int = push(out, 10);
+    let ihdr: Int = png_chunk(out, 73, 72, 68, 82, header);
+    let idat: Int = png_chunk(out, 73, 68, 65, 84, stream);
+    let mutable nothing: [Int] = [];
+    let iend: Int = png_chunk(out, 73, 69, 78, 68, nothing);
+    return out;
+}
+
+// ============================================================================
+// THE ICON FAMILY

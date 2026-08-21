@@ -2667,6 +2667,97 @@
   "where": "function zlib_into(mutable out: [Int], data: [Int]) -> Int"
  },
  {
+  "kind": "class",
+  "name": "Image",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#image",
+  "where": "class Image"
+ },
+ {
+  "kind": "function",
+  "name": "png_be32",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-be32",
+  "where": "pure function png_be32(bytes: [Int], at: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "png_push_be32",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-push-be32",
+  "where": "function png_push_be32(mutable out: [Int], value: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "png_chunk_is",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-chunk-is",
+  "where": "pure function png_chunk_is(bytes: [Int], at: Int, a: Int, b: Int, c: Int, d: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "png_chunk_name",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-chunk-name",
+  "where": "pure function png_chunk_name(bytes: [Int], at: Int) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "png_channels_for",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-channels-for",
+  "where": "pure function png_channels_for(colour: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "png_paeth",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-paeth",
+  "where": "pure function png_paeth(left: Int, above: Int, corner: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "png_decode",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-decode",
+  "where": "function png_decode(bytes: [Int]) -> Result<Image, String>"
+ },
+ {
+  "kind": "function",
+  "name": "png_chunk",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-chunk",
+  "where": "function png_chunk(mutable out: [Int], a: Int, b: Int, c: Int, d: Int, data: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "png_filtered_rows",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-filtered-rows",
+  "where": "pure function png_filtered_rows(image: Image, filtering: Int) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "png_encode_filtered",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-encode-filtered",
+  "where": "function png_encode_filtered(image: Image, filtering: Int) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "png_encode",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-encode",
+  "where": "function png_encode(image: Image) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "png_wrap",
+  "text": "lib/png.bx",
+  "url": "/reference/png.html#png-wrap",
+  "where": "function png_wrap(image: Image, rows: [Int]) -> [Int]"
+ },
+ {
   "kind": "function",
   "name": "hash_mask_32",
   "text": "lib/hash.bx",

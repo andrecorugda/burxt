@@ -31,6 +31,7 @@ Everything the language has. **Read out of the compiler**, not from memory: the 
 <li><a href="zip.html"><span><code>lib/zip.bx</code></span> <span class="what">write a ZIP archive</span></a></li>
 <li><a href="deflate.html"><span><code>lib/deflate.bx</code></span> <span class="what">DEFLATE compression, RFC 1951</span></a></li>
 <li><a href="inflate.html"><span><code>lib/inflate.bx</code></span> <span class="what">read a DEFLATE stream, RFC 1951</span></a></li>
+<li><a href="png.html"><span><code>lib/png.bx</code></span> <span class="what">PNG decode and encode, in Burxt</span></a></li>
 <li><a href="hash.html"><span><code>lib/hash.bx</code></span> <span class="what">hashes and checksums</span></a></li>
 <li><a href="secure.html"><span><code>lib/secure.bx</code></span> <span class="what">bytes nobody can predict, and a comparison that does not leak</span></a></li>
 <li><a href="vector.html"><span><code>lib/vector.bx</code></span> <span class="what">vector similarity, EXACTLY</span></a></li>

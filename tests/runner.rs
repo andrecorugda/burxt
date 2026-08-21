@@ -606,6 +606,135 @@ fn a_cgi_response_declares_exactly_the_bytes_it_writes() {
     );
 }
 
+/// **The five PNG row filters, checked by an unfilterer that has never heard of Burxt.**
+///
+/// `tests/pass/png_row_filters.bx` encodes with each predictor and decodes it back, which proves the
+/// encoder and decoder are inverses. **A control proved that is not enough:** breaking
+/// `divide_floor(left + above, 2)` in BOTH of them left the fixture reporting
+/// `Average round-trips: true`. A round trip structurally cannot see a bug the two halves share, so
+/// this is the half that says they are right rather than merely mutually consistent.
+///
+/// Python's `zlib` inflates the IDAT and the five predictors are re-implemented from RFC 2083 — a
+/// second implementation, in another language, written from the specification rather than from
+/// `lib/png.bx`. The expected raster is computed there too: an expectation read out of the thing
+/// under test is not one.
+///
+/// **It also asserts each file's filter bytes are uniformly the requested predictor.** Without that,
+/// an encoder that ignored the argument and wrote 0 everywhere would pass every pixel comparison —
+/// and 0 is the one predictor the corpus already covered.
+///
+/// **The oracle contains no backslash, deliberately.** Embedding it in a Rust string literal means
+/// two escaping layers, and the first attempt died on `b"\x89PNG\r\n..."` — the signature arrived
+/// mangled and Python blamed the PNG. So the signature is `bytes([137, 80, 78, 71, 13, 10, 26, 10])`
+/// and every string is single-quoted: nothing to escape twice. An assert in the test list above
+/// checks that property of this source rather than trusting it.
+///
+/// Why this exists: the icon deriver's ten source images use four of the five filters and **Average
+/// appears zero times**, so that branch of the decoder had never executed. star-burxt measured 2
+/// Average rows in 12,913 across twenty-nine real PNGs — worse than zero, because it passes and
+/// reads as coverage. No artwork fixes that, so the inputs are built.
+#[test]
+fn png_filters_match_an_independent_unfilterer() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("png-filters");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let wrote = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .args(["run", "tests/support/png_filter_files.bx", "--"])
+        .arg(&scratch)
+        .current_dir(root)
+        .output()
+        .expect("burxt run");
+    assert!(
+        wrote.status.success(),
+        "the filter writer did not run: {}{}",
+        String::from_utf8_lossy(&wrote.stdout),
+        String::from_utf8_lossy(&wrote.stderr)
+    );
+    for f in 0..5 {
+        let path = scratch.join(format!("filter{}.png", f));
+        let size = fs::metadata(&path)
+            .unwrap_or_else(|e| panic!("filter{}.png: {}", f, e))
+            .len();
+        assert!(size > 60, "filter{}.png is {} bytes, which is not a PNG", f, size);
+    }
+
+    let checked = Command::new("python3")
+        .arg("-c")
+        // A RAW string: Rust's line continuation strips the leading whitespace of the next
+        // line, which fed Python a program with no indentation at all. `r#"..."#` keeps the
+        // source exactly as written and needs no escaping — the reason the signature is
+        // `bytes([137, ...])` rather than a literal is that the FIRST attempt escaped it twice
+        // and Python then blamed the PNG for a mangled signature.
+        .arg(
+            r#"import zlib, struct, sys
+SIG = bytes([137, 80, 78, 71, 13, 10, 26, 10])
+def chunks(raw):
+    assert raw[:8] == SIG, 'signature'
+    at = 8
+    while at + 8 <= len(raw):
+        n = struct.unpack('>I', raw[at:at+4])[0]
+        yield raw[at+4:at+8], raw[at+8:at+8+n]
+        at += 12 + n
+def paeth(a, b, c):
+    p = a + b - c
+    pa, pb, pc = abs(p-a), abs(p-b), abs(p-c)
+    if pa <= pb and pa <= pc: return a
+    return b if pb <= pc else c
+def unfilter(raw):
+    ihdr, parts = None, []
+    for tag, data in chunks(raw):
+        if tag == b'IHDR': ihdr = data
+        elif tag == b'IDAT': parts.append(data)
+    assert ihdr is not None and len(ihdr) == 13, 'IHDR must be 13 bytes'
+    w, h, depth, colour = struct.unpack('>IIBB', ihdr[:10])
+    assert (depth, colour) == (8, 6), (depth, colour)
+    flat = zlib.decompress(b''.join(parts))
+    bpp, stride = 4, w*4
+    out, prev, at, seen = [], bytearray(stride), 0, []
+    for y in range(h):
+        f = flat[at]; at += 1; seen.append(f)
+        row = bytearray(flat[at:at+stride]); at += stride
+        for x in range(stride):
+            left = row[x-bpp] if x >= bpp else 0
+            up = prev[x]
+            ul = prev[x-bpp] if x >= bpp else 0
+            if f == 0: v = row[x]
+            elif f == 1: v = row[x] + left
+            elif f == 2: v = row[x] + up
+            elif f == 3: v = row[x] + (left + up)//2
+            elif f == 4: v = row[x] + paeth(left, up, ul)
+            else: raise AssertionError('filter %d' % f)
+            row[x] = v & 255
+        out.extend(row); prev = row
+    return w, h, bytes(out), seen
+def expected(w, h):
+    px = bytearray()
+    for y in range(h):
+        for x in range(w):
+            px += bytes([(x*37+y*11)&255, (x*5+y*61+7)&255, (x*91+y*3+19)&255, (255-x*13-y*29)&255])
+    return bytes(px)
+for f in range(5):
+    w, h, pixels, seen = unfilter(open('%s/filter%d.png' % (sys.argv[1], f), 'rb').read())
+    assert set(seen) == set([f]), 'filter %d: rows say %r, not the predictor that was asked for' % (f, seen)
+    want = expected(w, h)
+    assert pixels == want, 'filter %d: pixels differ at byte %d' % (f, next(i for i in range(len(want)) if pixels[i] != want[i]))
+print('ok')
+"#,
+        )
+        .arg(&scratch)
+        .output()
+        .expect("python3");
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        checked.status.success(),
+        "an independent unfilterer disagrees with lib/png.bx:\n{}{}",
+        String::from_utf8_lossy(&checked.stdout),
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
 #[test]
 fn panic_programs_die_cleanly_at_runtime() {
     let scratch = scratch_dir("panic");

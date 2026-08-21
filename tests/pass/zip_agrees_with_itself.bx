@@ -1,0 +1,85 @@
+// A ZIP stores every entry's metadata TWICE, and this asserts the two copies agree.
+//
+// **There is no expected value anywhere in this fixture.** It builds an archive, reads the central
+// directory, reads each entry's local header, and requires them to match — name, CRC, method, and
+// both sizes. The file only has to agree with itself, so nothing here goes stale when the archive
+// changes, and no golden bytes have to be maintained. That property is why this is worth having
+// over another byte-comparison fixture: a check with no list and no expected value cannot fall
+// behind.
+//
+// **It exists because the enabling function was written and the check never was.** `zip_local_at`'s
+// own comment in `lib/zip.bx` says: *"An oracle reading one copy of duplicated metadata is not an
+// oracle, so `zip_local_at` exists and a verifier can compare."* Nothing called it. That is the
+// shape `CONTRIBUTING.md` §7 names — a name asserting work is not evidence the work happens — with
+// the twist that here the name was honest and the caller was simply missing.
+//
+// And the failure is not hypothetical. **Zeroing a local CRC once left the independent Python test
+// passing**, because `zipfile` resolves entries through the central directory and never reads the
+// local copy — a reader that streams forward would have rejected that archive. That is the incident
+// which produced `zip_local_at`.
+//
+// **Re-measured 2026-08-21 rather than restated: the Python test catches it now**, because it was
+// strengthened at the same time to unpack the local headers itself and compare — it fails with
+// `('greeting.txt', 0, 3056721856)`, the two copies side by side. So the gap this fixture closes is
+// not "nothing sees it" but "only the Rust runner sees it": `tests/runner.bx` re-implements the
+// invariants and had no way to make this comparison, so the Burxt side was blind to a whole class of
+// writer bug. Two runners agreeing while one cannot ask the question is the shape that has cost this
+// repository three findings in one day.
+//
+// It is also strictly more diagnostic than the oracle: this names the FIELD and the ENTRY, where the
+// oracle names a tuple.
+//
+// Both methods are covered, because the two copies are written by different code paths for a
+// deflated entry than for a stored one — the sizes differ there, which is exactly where a writer
+// gets it wrong in a way no reader notices until a different reader tries.
+use "../../lib/zip.bx";
+
+function agree(label: String, name: String, central: Int, local: Int) -> Bool {
+    if central == local {
+        return true;
+    }
+    print(name + ": " + label + " disagrees — central " + to_string(central)
+            + ", local " + to_string(local));
+    return false;
+}
+
+region r {
+    let mutable archive: [Int] = [];
+    let entries: [ZipEntry] = [
+        zip_entry_text("a.txt", "hello, world"),
+        zip_entry_text_stored("stored.txt", "not compressed"),
+        // Long and repetitive, so deflate genuinely shrinks it and the two size fields differ.
+        zip_entry_text("repeats.txt",
+                "abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc"),
+        zip_entry("raw.bin", [0, 255, 10, 13, 65]),
+    ];
+    let total: Int = zip_into_deflated(archive, entries);
+    print("archive bytes: " + to_string(total > 0));
+
+    let mutable central: [ZipRead] = [];
+    let found: Int = zip_entries(archive, central);
+    print("entries in the central directory: " + to_string(found));
+
+    let mutable all_agree: Bool = true;
+    for entry in central {
+        let mutable local: [ZipRead] = [];
+        let read: Int = zip_local_at(archive, entry.at, local);
+        if read != 1 {
+            print(entry.name + ": no local header at the offset the directory recorded");
+            all_agree = false;
+        }
+        for copy in local {
+            if copy.name != entry.name {
+                print("name disagrees: central `" + entry.name + "`, local `" + copy.name + "`");
+                all_agree = false;
+            }
+            if !agree("crc", entry.name, entry.crc, copy.crc) { all_agree = false; }
+            if !agree("method", entry.name, entry.method, copy.method) { all_agree = false; }
+            if !agree("size", entry.name, entry.size, copy.size) { all_agree = false; }
+            if !agree("packed", entry.name, entry.packed, copy.packed) { all_agree = false; }
+            if !agree("date", entry.name, entry.dos_date, copy.dos_date) { all_agree = false; }
+            if !agree("time", entry.name, entry.dos_time, copy.dos_time) { all_agree = false; }
+        }
+    }
+    print("every entry agrees with itself: " + to_string(all_agree));
+}

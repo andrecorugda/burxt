@@ -1,0 +1,95 @@
+// All five PNG row filters, each on an image built for it.
+//
+// **This fixture exists because no artwork covers filter 3.** `lib/png.bx` reconstructs the five
+// predictors RFC 2083 defines, and the ten source images the icon deriver reads use four of them:
+// None 392 rows, Sub 200, Up 1148, Paeth 324, **Average 0**. So one branch of the decoder that reads
+// every PNG this project ships had never executed. The star-burxt session measured the same ratio
+// over twenty-nine real PNGs — **2 Average rows in 12,913** — which is worse than zero, because it
+// passes and reads as coverage.
+//
+// **Neither number can be fixed by finding better artwork, so this builds its own inputs.** One
+// image per predictor, every row filtered the same way, which makes each filter's reconstruction the
+// entire thing under test rather than a rare row inside a mixed image.
+//
+// **The raster is chosen so the predictors cannot agree.** A flat colour makes Sub, Up and Average
+// all produce zeros, and then four of the five paths look identical and any of them could be wrong.
+// This one varies along both axes and in every channel, so left, above and the corner differ at
+// almost every byte — which is what makes a wrong `left` or a swapped `above` show up.
+//
+// The check is a ROUND TRIP, not a golden file: encode with a chosen filter, decode, require the
+// pixels back. Nothing to keep current, and it cannot go stale. Its weakness is that encoder and
+// decoder could be wrong together — so `png_filters_match_an_independent_unfilterer` in
+// `tests/runner.rs` unfilters the same five images in Python and compares, which is a second
+// implementation of the predictors that has never heard of Burxt.
+use "../../lib/png.bx";
+
+// A raster where no two neighbours share a value, so every predictor has real work to do.
+function varied(w: Int, h: Int) -> Image {
+    let mutable px: [Int] = [];
+    for y in 0..h {
+        for x in 0..w {
+            let r: Int = push(px, bit_and(x * 37 + y * 11, 255));
+            let g: Int = push(px, bit_and(x * 5 + y * 61 + 7, 255));
+            let b: Int = push(px, bit_and(x * 91 + y * 3 + 19, 255));
+            let a: Int = push(px, bit_and(255 - x * 13 - y * 29, 255));
+        }
+    }
+    return Image { w: w, h: h, px: px };
+}
+
+function same(a: Image, b: Image) -> Bool {
+    if a.w != b.w || a.h != b.h {
+        return false;
+    }
+    let count: Int = a.w * a.h * 4;
+    for i in 0..count {
+        if a.px[i] != b.px[i] {
+            return false;
+        }
+    }
+    return true;
+}
+
+region r {
+    let original: Image = varied(6, 5);
+    print("raster: " + to_string(original.w) + "x" + to_string(original.h));
+
+    // Every filter, named, so a failure says which predictor is wrong rather than "a byte differs".
+    let names: [String] = ["None", "Sub", "Up", "Average", "Paeth"];
+    for filtering in 0..5 {
+        let bytes: [Int] = png_encode_filtered(original, filtering);
+        match png_decode(bytes) {
+            Ok(back) => {
+                print(names[filtering] + " round-trips: " + to_string(same(original, back)));
+            }
+            Error(why) => {
+                print(names[filtering] + " FAILED to decode: " + why);
+            }
+        }
+    }
+
+    // **The filter byte reaches the decoder as written.** A filter this module does not implement
+    // must be refused rather than silently treated as None — which is what an unchecked `if` chain
+    // would do, and it would make a corrupt file decode to a plausible image.
+    let mutable bad: [Int] = png_encode_filtered(original, 0);
+    // The first filter byte sits after the 8-byte signature, the 25-byte IHDR chunk, the IDAT
+    // length and tag, and the two zlib header bytes — but it is inside a deflate stream, so it
+    // cannot be poked directly. Instead: a truncated file, which is the cheapest corruption there
+    // is and the one a test is least likely to think of.
+    let mutable cut: [Int] = [];
+    let half: Int = divide_floor(len(bad), 2);
+    for i in 0..half {
+        let kept: Int = push(cut, bad[i]);
+    }
+    match png_decode(cut) {
+        Ok(anything) => { print("a HALF FILE decoded, which it must not"); }
+        Error(why) => { print("half a file is refused: " + why); }
+    }
+
+    // And the signature check, which is the other end of the same claim.
+    let mutable notpng: [Int] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    match png_decode(notpng) {
+        Ok(anything) => { print("ten arbitrary bytes decoded, which they must not"); }
+        Error(why) => { print("not a PNG is refused: " + why); }
+    }
+}

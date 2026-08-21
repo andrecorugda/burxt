@@ -1237,6 +1237,9 @@ function library_modules() -> [String] {
     push(out, "zip");
     push(out, "deflate");
     push(out, "inflate");
+    // Added 2026-08-21, when the PNG codec left `scripts/editor-icons.bx` so a fixture could
+    // reach the row filter no artwork uses.
+    push(out, "png");
     push(out, "hash");
     push(out, "secure");
     push(out, "vector");
