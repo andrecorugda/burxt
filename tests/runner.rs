@@ -3299,11 +3299,25 @@ fn a_package_dependency_resolves_and_an_ambiguous_import_is_refused() {
 
     // 1. the package import
     let (ok, said) = run("src/main.bx");
-    assert!(ok && said.contains("250.07"), "a package import did not resolve:\n{}", said);
+    // **Equality, not `contains`.** `said` is stdout and stderr together, and `burxt run` emits
+    // nothing of its own on either stream — measured 2026-08-21 — so the exact bytes are knowable
+    // and asserting less than that permits a superset. A `contains` here passes if the toolchain
+    // ever prepends a line, if the value becomes `1250.07`, or if a warning appears on stderr.
+    //
+    // The comet session found this shape in its own suite the hard way: its sandbox test asserted
+    // the visitor's output CONTAINED what the program printed, and a prepended compiler line would
+    // have been shown to a stranger as their own program's output. **An assertion is only as tight
+    // as the strongest thing you could have said and did not**, and the superset is where the
+    // defect lives.
+    assert!(ok, "the package-import program did not run:\n{}", said);
+    assert_eq!(said, "250.07\n", "a package import did not resolve");
 
     // 2. a relative import, unchanged
     let (ok, said) = run("src/rel.bx");
-    assert!(ok && said.contains("42"), "a relative import stopped working:\n{}", said);
+    // `twice(21)`, so the whole output is knowable. `contains("42")` also passes on `442`,
+    // `1042` and `42 errors` — see the note above.
+    assert!(ok, "the relative-import program did not run:\n{}", said);
+    assert_eq!(said, "42\n", "a relative import stopped working");
 
     // 3. no manifest at all
     let solo = scratch.join("solo");
