@@ -88,6 +88,8 @@ pub enum Token {
     TyWidth { bits: u32, signed: bool },
     TyCPointer,
     PrintError,
+    /// `print_exact` — stdout, with NO trailing newline. See `parse_print`.
+    PrintExact,
     /// C's `double` — an FFI-only type, so a lossy crossing can be NAMED and
     /// therefore refused. Burxt itself still has no float type.
     TyCDouble,
@@ -197,6 +199,7 @@ impl Token {
             }
             Token::TyCPointer => "`CPointer`".to_string(),
             Token::PrintError => "`print_error`".to_string(),
+            Token::PrintExact => "`print_exact`".to_string(),
             Token::TyCDouble => "`CDouble`".to_string(),
             Token::TyDecimal => "`Decimal`".to_string(),
             Token::RoundHalfEven => "`RoundHalfEven`".to_string(),
@@ -841,6 +844,7 @@ impl<'a> Lexer<'a> {
             "const" => Token::Const,
             "print" => Token::Print,
             "print_error" => Token::PrintError,
+            "print_exact" => Token::PrintExact,
             "while" => Token::While,
             "function" => Token::Fn,
             "external" => Token::Extern,

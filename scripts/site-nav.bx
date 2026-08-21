@@ -102,7 +102,7 @@ function group(mutable out: [String], root: String, g: Group) -> Int touches fil
 }
 
 // The reference's pages, in the order the reference itself lists them. Kept beside
-// scripts/site-reference.py's MODULES rather than derived from the directory, because alphabetical
+// scripts/site-reference.bx's `library_modules` rather than derived from the directory, because alphabetical
 // would put `builtins` between `os` and `result` and the reading order is the point.
 //
 // A function rather than a top-level table, because a top-level `let` is invisible inside a function

@@ -13,7 +13,8 @@ use "../../lib/html.bx";
 // 1. THE case. A script tag through `Text` reaches the page as characters, never as a tag.
 print(html_render(html_text("<script>alert('x')</script>")));
 
-// 2. All five entities in one string. `'` goes out as `&#39;` and not `&apos;` — see the header.
+// 2. All five entities in one string. `'` goes out as `&#x27;` — hex, matching Python's
+//    `html.escape` byte for byte. It was `&#39;` until 2026-08-21; see `lib/html.bx`.
 print(html_render(html_text("Tom & Jerry \"quoted\"")));
 
 // 3. `Raw` passes through unchanged, and that is the point: it is a different constructor, so

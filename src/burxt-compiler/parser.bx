@@ -2787,12 +2787,19 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
         if !self.eat(src, 21, "`;`") { return -1; }
         return self.add(60, type_node, value, 0, writable, name_tok);
     }
-    if k == 118 || k == 135 {                        // print, print_error
-        // One statement kind with a DESTINATION in `b`, not two kinds: the per-type formatting is
-        // the part that must never fork.
+    if k == 118 || k == 135 || k == 136 {            // print, print_error, print_exact
+        // One statement kind with a DESTINATION in `b` and a NEWLINE flag in `c`, not three kinds:
+        // the per-type formatting is the part that must never fork.
         let mutable to_stderr: Int = 0;
         if k == 135 {
             to_stderr = 1;
+        }
+        // `c` is 1 when NOTHING follows the value. Spelled this way round on purpose: a kind-62
+        // node built anywhere else leaves `c` at 0 and keeps today's behaviour, so the default is
+        // the statement that already existed rather than the new one.
+        let mutable exact: Int = 0;
+        if k == 136 {
+            exact = 1;
         }
         let n: Int = self.advance();
         if !self.eat(src, 29, "`(` after `print`") { return -1; }
@@ -2800,7 +2807,7 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
         if value < 0 { return -1; }
         if !self.eat(src, 30, "`)`") { return -1; }
         if !self.eat(src, 21, "`;`") { return -1; }
-        return self.add(62, value, to_stderr, 0, 0, here);
+        return self.add(62, value, to_stderr, exact, 0, here);
     }
     if k == 103 {                                    // return
         let n: Int = self.advance();

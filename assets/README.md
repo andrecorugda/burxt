@@ -72,7 +72,7 @@ subproject has its own shape with the `b` inside it:
 Wordmarks (`bmx_logo_transparent.svg`, `starb_logo_transparent.svg`) are copied into `docs/assets/`
 and carried by the navbar, the landing page and the reference index.
 
-**The PNGs here are derived, not drawn.** `scripts/editor-icons.py` crops each source to its own ink
+**The PNGs here are derived, not drawn.** `scripts/editor-icons.bx` crops each source to its own ink
 and centres it at 70% of the box, so all three have the same margin — and
 `the_editor_icons_are_derived_from_the_brand_assets` fails if what is committed is not what the
 script makes. The 70% is not taste: the shipped `.bx` icon filled 86% of its height, which at 48px

@@ -1860,7 +1860,7 @@ function (mutable self: Unit) emit_print_body(src: String, n: Node) -> Int {
             let out: Int = self.print_call("@burxt.fmt_str", ", ptr " + as_ptr);
             piece_index += 1;
         }
-        return self.print_call("@burxt.fmt_nl", "");
+        return self.end_print(n.c);
     }
     let shown: Type = self.type_at(n.a);
     let value: String = self.emit_expr(src, n.a);
@@ -1871,19 +1871,33 @@ function (mutable self: Unit) emit_print_body(src: String, n: Node) -> Int {
         let chosen: Int = self.write_body("  " + text + " = select i1 " + bit
                 + ", ptr getelementptr inbounds (\{ i64, [5 x i8] \}, ptr @burxt.string_true, i32 0, i32 1), ptr getelementptr inbounds (\{ i64, [6 x i8] \}, ptr @burxt.string_false, i32 0, i32 1)\n");
         let printed: Int = self.print_call("@burxt.fmt_str", ", ptr " + text);
-        return self.print_call("@burxt.fmt_nl", "");
+        return self.end_print(n.c);
     }
     if shown.kind == 45 {                            // a Decimal
         let rendered: Int = self.emit_decimal_print(value, shown.scale);
-        return self.print_call("@burxt.fmt_nl", "");
+        return self.end_print(n.c);
     }
     if shown.kind == 42 {                            // a String
         let as_ptr: String = self.fresh();
         let cast: Int = self.write_body("  " + as_ptr + " = inttoptr i64 " + value + " to ptr\n");
         let printed: Int = self.print_call("@burxt.fmt_str", ", ptr " + as_ptr);
-        return self.print_call("@burxt.fmt_nl", "");
+        return self.end_print(n.c);
     }
     let printed: Int = self.print_call("@burxt.fmt_int", ", i64 " + value);
+    return self.end_print(n.c);
+}
+
+// End a print statement: one newline, unless the statement was `print_exact`.
+//
+// **One decision, five call sites.** `emit_print_body` has an arm per printed type and every one of
+// them ended in `fmt_nl` — so gating the newline inline would have been five copies of one rule,
+// and a sixth arm added later would have been a silent bug. `exact` is the parser's `c` field,
+// carried on the node rather than in a `Unit` field: a new field on `Unit` means editing every
+// literal that constructs one, and `n` is already in scope at all five sites.
+function (mutable self: Unit) end_print(exact: Int) -> Int {
+    if exact == 1 {
+        return 0;
+    }
     return self.print_call("@burxt.fmt_nl", "");
 }
 

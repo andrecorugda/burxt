@@ -132,8 +132,20 @@ pure function html_element(tag: String, attrs: [Attr], children: [Html]) -> Html
 
 // ---- rendering -----------------------------------------------------------------
 
-// The five entities, and only those. `'` goes out as `&#39;` rather than `&apos;`, which is
+// The five entities, and only those. `'` goes out NUMERICALLY rather than as `&apos;`, which is
 // XML's spelling and not in HTML 4 — the numeric form is read correctly by everything.
+//
+// **Hex `&#x27;` rather than decimal `&#39;`, and the reason is interoperation rather than taste.**
+// Python's `html.escape` writes `&#x27;` (verified 2026-08-21), and it is the implementation people
+// port FROM — so a port that swapped a Python escaper for this one changed every page holding an
+// apostrophe, appearing later in a screenshot with nothing able to see it. The BMX session hit
+// exactly that and wrote the table out by hand rather than call the library.
+//
+// Changed from decimal on 2026-08-21, after measuring that it churned nothing: no generated
+// artefact in this repository or in star-burxt contains either spelling from this function — the
+// only `&#39;` anywhere was this comment describing the choice, and star does not call
+// `html_escape` at all. **A byte-level choice is free to change only while nothing has committed
+// its output**, which is the window this was found in.
 //
 // Built in RUNS rather than a byte at a time, copied from `json_escape` at lib/json.bx:98 for
 // the reason recorded there: `out = out + one_byte` copies the whole String on every byte, and
@@ -150,7 +162,7 @@ pure function html_escape(text: String) -> String {
         if b == 60 { entity = "&lt;"; }
         if b == 62 { entity = "&gt;"; }
         if b == 34 { entity = "&quot;"; }
-        if b == 39 { entity = "&#39;"; }
+        if b == 39 { entity = "&#x27;"; }
         if len(entity) > 0 {
             out = out + substring(text, copied, i - copied) + entity;
             copied = i + 1;

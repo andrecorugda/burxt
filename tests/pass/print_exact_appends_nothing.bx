@@ -1,0 +1,43 @@
+// `print_exact` — a String to stdout with NOTHING appended.
+//
+// **Why the language needed a third print statement.** LSP framing is `Content-Length: N`, a blank
+// line, and then *exactly* N bytes. BMX's language server could not write that: `print` and
+// `print_error` always append a newline, and the two routes that look like they replace it are a
+// DIFFERENT stream. Measured 2026-08-20: `file_write("/dev/stdout", s)` and
+// `write_bytes("/dev/stdout", b)` come out reordered against `print`, and both TRUNCATE when stdout
+// is a regular file — two writes gave `FIRST-SECOND` through a pipe and `SECOND` redirected. An
+// editor hands a server a pipe, so that workaround passes its own test and destroys the output the
+// moment anyone redirects it.
+//
+// **Where the evidence in this file lives, and why it is not at the end.** The obvious proof is a
+// `.stdout` with no final newline — and `tests/runner.rs` compares exactly, so it sees that. But
+// `tests/runner.bx` compares `trimmed()` on both sides, so the Burxt runner is BLIND to the last
+// byte: a `print_exact` that appended a newline would pass there and the two runners would still
+// agree fixture-for-fixture. So the load-bearing claim is INTERIOR, on the `AB` line below, where
+// trimming cannot reach it. The absent final newline is a second, weaker claim that only the Rust
+// runner can make. *(Both true as of 2026-08-21.)*
+region r {
+    // A complete LSP frame. `{"a":1}` is seven bytes, so a reader honouring the header consumes
+    // the body exactly and stops — the header would be a lie if anything were added.
+    let body: String = "\{\"a\":1\}";
+    print_exact("Content-Length: {len(body)}\r\n\r\n");
+    print_exact(body);
+    print("");
+
+    // **The interior claim.** Three statements, one line: `print_exact` twice with no newline
+    // between them, then `print` supplying the only newline on the line. If `print_exact` appended
+    // anything these would be three lines, and no amount of trimming hides that.
+    print_exact("A");
+    print_exact("B");
+    print("C");
+
+    // Interpolation goes through a second node (`PrintInterp`), so it needs its own line: a flag
+    // threaded to one of the two paths and not the other is the shape this suite exists to catch.
+    let n: Int = 42;
+    print_exact("n={n} ");
+    print("done");
+
+    // And the weaker claim: the output ends here, with no newline. `\ No newline at end of file`
+    // in the `.stdout` diff is deliberate — do not add one.
+    print_exact("end");
+}

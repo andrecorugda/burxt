@@ -1,0 +1,40 @@
+// CLAIM: Printing a String stops at a zero byte
+// HOLDS: accepted
+// WHY: a String is not NUL-terminated — `len` is one load from the eight bytes before the
+//      first byte, so `len(from_bytes([65, 0, 66]))` is 3 and the value genuinely holds
+//      three bytes. But every print path formats a String with `%s`, which stops at the
+//      first zero. Measured 2026-08-21 in BOTH compilers, identically: the program below
+//      prints `A`, not `A`, a zero byte, `B`. `print`, `print_exact` and interpolation all
+//      do it, because they share one formatter — which is why they agree.
+//
+//      The exact write is `fwrite(ptr, 1, len, stdout)` and it is NOT done, deliberately:
+//      `stdout` is a libc DATA symbol that Darwin spells `__stdoutp`, so the fix costs a
+//      second renamed symbol in `stamp_target` and a matching one in stage-1 — which emits
+//      `dprintf(2, ...)` precisely to avoid needing a `stderr` global at all. That is real
+//      portability surface for a case nothing here reaches: `print_exact` was added for LSP
+//      framing, and JSON may not contain a raw zero byte.
+//
+//      This file exists so the limit cannot become folklore. If it is ever fixed, the fix is
+//      a new symbol in two compilers and this file is the record of what it buys. And the
+//      inverse claim is the one worth re-reading: `len` is right, the WRITE is short — so a
+//      program that declares a length from `len` and then prints the text writes fewer bytes
+//      than it promised.
+//
+//      **The framing above was too narrow when it was written, and BMX said so.** "A declared
+//      length that lies" is one trap; the reachable one had no length in it at all.
+//      `lib/json.bx` escaped seven characters and passed the other twenty-five control bytes
+//      through raw, so `json_render` promised valid JSON and delivered invalid JSON — and for
+//      a zero byte, a string that never closed. **That is fixed** (every byte below 0x20 is
+//      now `\u00XX`, checked against Python's `json`), which is what makes this limit narrow
+//      rather than merely documented: the cheap half was in `lib/`, not in a libc symbol.
+//      What still reaches it is text built from arbitrary bytes and printed directly, such as
+//      rendering a document into a page. `write_bytes` is faithful and is the answer there.
+use "../../lib/string.bx";
+
+region r {
+    let s: String = from_bytes([65, 0, 66]);
+    // Three, and it is the printing that is short — not the String.
+    print(len(s));
+    print_exact(s);
+    print("");
+}

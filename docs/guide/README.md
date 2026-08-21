@@ -19,7 +19,7 @@ what the language refuses is usually the interesting part.
 | 12 | [Tools and agents](12-tools-and-agents.md) | `burxt mcp-schema`, `burxt review` — the contract IS the tool schema |
 | 13 | [Practices](13-practices.md) | where a contract belongs and where it does not, and the traps this project already paid for |
 
-The reference moved out of this directory and is now **generated**: `scripts/site-reference.py`
+The reference moved out of this directory and is now **generated**: `scripts/site-reference.bx`
 reads the keyword table out of `src/rust-compiler/lexer.rs`, the reserved names out of `src/rust-compiler/typeck.rs`, the
 commands out of `src/rust-compiler/main.rs` and every standard-library entry out of the `//` prose in `lib/*.bx`.
 It lives in [`docs/reference/`](../reference/index.md). The hand-written page it replaces had gone

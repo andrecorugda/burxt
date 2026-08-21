@@ -71,6 +71,16 @@ function (mutable self: Unit) install_keywords() -> Int {
     // type error can catch because both are grammar. Found by the subagent adding `const`, which
     // needed a free code and counted the table.
     n = self.add_word("print_error", 135);
+    // `print_exact` writes to stdout and appends NOTHING. A third keyword rather than a flag on a
+    // builtin, for the same reason `print_error` is a keyword: it must reach the SAME per-type
+    // formatter, and the trailing newline is the only thing that differs.
+    //
+    // **136, chosen by COUNTING the table above rather than by taking the next number.** That is
+    // the discipline the note on 135 asks for: 45 `add_word` calls hold 100-125, 130-135 and
+    // 140-152, so 136 is free and sits in the keyword band beside the statement it belongs with.
+    // A colliding code does not fail to compile — it parses as another keyword, which no type
+    // error can catch because both are grammar. *(Counted 2026-08-21.)*
+    n = self.add_word("print_exact", 136);
     n = self.add_word("self", 119);
     n = self.add_word("true", 120);
     n = self.add_word("false", 121);

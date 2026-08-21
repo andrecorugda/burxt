@@ -309,6 +309,221 @@ fn pass_programs_produce_expected_stdout() {
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
 
+/// **`print_exact` writes the same bytes whether stdout is a pipe or a regular file.**
+///
+/// This is the test no `tests/pass/` fixture can be: the harness captures stdout through a PIPE, so
+/// a fixture cannot say anything about a redirect. And a redirect is exactly where the workarounds
+/// failed. BMX measured this on 2026-08-20, before `print_exact` existed: writing through
+/// `file_write("/dev/stdout", s)` or `write_bytes("/dev/stdout", b)` reaches a different stream from
+/// `print`, so two writes came out `FIRST-SECOND` through a pipe and `SECOND` — six bytes, the first
+/// write gone — when redirected to a file. An editor hands a language server a pipe, which is why
+/// that shape passes its own test suite and then truncates a user's log.
+///
+/// So this runs one program twice, once each way, and requires the bytes to be **identical and
+/// exact**. The oracle is the operating system's own redirection, which has never heard of Burxt.
+#[test]
+fn print_exact_writes_the_same_bytes_to_a_pipe_and_to_a_file() {
+    let scratch = scratch_dir("print-exact-redirect");
+    fs::create_dir_all(&scratch).unwrap();
+    let source = scratch.join("frame.bx");
+    // Interleaved deliberately: `print_exact` and `print` must share one stream, so their order in
+    // the output is their order in the program. A second stream shows up here as a reordering.
+    fs::write(
+        &source,
+        "region r {\n\
+         \x20   print_exact(\"Content-Length: 7\\r\\n\\r\\n\");\n\
+         \x20   print_exact(\"\\{\\\"a\\\":1\\}\");\n\
+         \x20   print(\"\");\n\
+         \x20   print_exact(\"FIRST-\");\n\
+         \x20   print(\"SECOND\");\n\
+         \x20   print_exact(\"no trailing newline\");\n\
+         }\n",
+    )
+    .unwrap();
+
+    let binary = scratch.join("frame");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(&binary)
+        .current_dir(&scratch)
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "the frame program did not compile:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let expected = "Content-Length: 7\r\n\r\n{\"a\":1}\nFIRST-SECOND\nno trailing newline";
+
+    // Through a pipe.
+    let piped = Command::new(&binary).current_dir(&scratch).output().unwrap();
+    assert!(piped.status.success(), "the frame program failed through a pipe");
+    let through_pipe = String::from_utf8_lossy(&piped.stdout).to_string();
+
+    // Redirected to a regular file — the case that broke the workarounds.
+    let redirected_to = scratch.join("out.txt");
+    let handle = fs::File::create(&redirected_to).unwrap();
+    let status = Command::new(&binary)
+        .current_dir(&scratch)
+        .stdout(std::process::Stdio::from(handle))
+        .status()
+        .unwrap();
+    assert!(status.success(), "the frame program failed with stdout redirected to a file");
+    let through_file = fs::read_to_string(&redirected_to).unwrap();
+
+    let _ = fs::remove_dir_all(&scratch);
+
+    assert_eq!(
+        through_pipe, expected,
+        "print_exact wrote the wrong bytes through a pipe"
+    );
+    assert_eq!(
+        through_file, expected,
+        "print_exact wrote the wrong bytes with stdout redirected to a regular file — \
+         this is the failure mode `/dev/stdout` had: correct through a pipe, truncated to a file"
+    );
+    assert_eq!(
+        through_pipe, through_file,
+        "print_exact wrote DIFFERENT bytes to a pipe and to a file"
+    );
+}
+
+/// **`json_render`'s output is JSON to a parser that never heard of Burxt.**
+///
+/// `lib/json.bx`'s `json_escape` escaped seven characters and passed the other twenty-five control
+/// bytes through RAW, which RFC 8259 §7 forbids — so the library emitted text that is not JSON and
+/// nothing in this suite noticed, because every fixture rendered printable text. The corpus had no
+/// control byte in it, which is the shape worth remembering: *a suite tests what someone thought of*,
+/// and nobody had thought of a document holding byte 0x01.
+///
+/// Reported 2026-08-21 by the BMX session, measured against the PUBLISHED 1.6.0 — not against this
+/// tree — after their JavaScript reference renderer and their Burxt renderer disagreed about a
+/// document that `SPEC.md` makes legal, a BMX document being a sequence of bytes. One escaped it and
+/// one did not.
+///
+/// Python's `json` is the oracle and there is deliberately no skip if it is absent: a check that
+/// returns early when its oracle is missing looks exactly like one that passes, which is what the
+/// `python3`-and-Pillow branch in the icon test cost before it was ported away.
+#[test]
+fn json_render_is_valid_json_for_every_control_byte() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("json-control-bytes");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let rendered = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(root.join("tests/pass/json_escapes_every_control_byte.bx"))
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt run");
+    assert!(
+        rendered.status.success(),
+        "the render did not run: {}{}",
+        String::from_utf8_lossy(&rendered.stdout),
+        String::from_utf8_lossy(&rendered.stderr)
+    );
+    let first_line = String::from_utf8_lossy(&rendered.stdout)
+        .lines()
+        .next()
+        .expect("the fixture prints the rendered JSON first")
+        .to_string();
+    let json_path = scratch.join("rendered.json");
+    fs::write(&json_path, first_line.as_bytes()).unwrap();
+
+    let checked = Command::new("python3")
+        .arg("-c")
+        .arg(
+            "import sys, json\n\
+             raw = open(sys.argv[1], 'rb').read()\n\
+             value = json.loads(raw)\n\
+             # Every byte 0..31, then a quote, a backslash and 'A' — what the fixture builds.\n\
+             want = ''.join(chr(c) for c in list(range(32)) + [34, 92, 65])\n\
+             assert value == want, [ord(c) for c in value]\n\
+             # And the escaping must be the RFC's, not merely something this parser tolerates:\n\
+             # a raw control byte in the text would have been rejected by json.loads above.\n\
+             assert b'\\\\u0000' in raw, 'a zero byte must be escaped, not dropped'\n\
+             print('ok')\n",
+        )
+        .arg(&json_path)
+        .output()
+        .expect("python3");
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        checked.status.success(),
+        "Python's json rejected what lib/json.bx wrote:\n{}{}",
+        String::from_utf8_lossy(&checked.stdout),
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
+/// **`html_escape` writes the same bytes as the escaper people port away from.**
+///
+/// Not "valid HTML" — the same BYTES. `&#39;` and `&#x27;` are both correct and render identically,
+/// so no reader and no browser can tell them apart; the difference only ever appears as a diff in a
+/// committed page. That makes it exactly the kind of choice a suite has to pin, because nothing else
+/// will: `html_escape` had **no test of any kind** until 2026-08-21, and the spelling inside it had
+/// never been compared to anything.
+///
+/// It was `&#39;` and Python's `html.escape` writes `&#x27;`. The BMX session found it porting a
+/// Python generator — calling this library would have changed every page holding an apostrophe, so
+/// they wrote the escape table out by hand rather than depend on it. **A library avoided over one
+/// byte is a library that failed at the only thing it was for.**
+///
+/// `html.escape` is the oracle because it is the thing being ported FROM, and there is deliberately
+/// no skip when `python3` is missing: a check that returns early without its oracle looks exactly
+/// like one that passes.
+#[test]
+fn html_escape_agrees_with_pythons_reference_escaper() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("html-escape-oracle");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let ours = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(root.join("tests/pass/html_escape_matches_the_reference_spelling.bx"))
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt run");
+    assert!(
+        ours.status.success(),
+        "the escaper fixture did not run: {}{}",
+        String::from_utf8_lossy(&ours.stdout),
+        String::from_utf8_lossy(&ours.stderr)
+    );
+    let _ = fs::remove_dir_all(&scratch);
+    let mine = String::from_utf8_lossy(&ours.stdout).to_string();
+
+    // The same inputs the fixture escapes, in the same order. Written out here rather than parsed
+    // back out of the fixture: an expectation derived from the thing under test is not one.
+    let theirs = Command::new("python3")
+        .arg("-c")
+        .arg(
+            "import html\n\
+             cases = [\"it's a <b>\\\"test\\\"</b> & co\", '&', '<', '>', '\\\"', \"'\", '/',\n\
+             \x20        \"aaa'bbb'ccc\", \"''\", '']\n\
+             print('\\n'.join(html.escape(c) for c in cases))\n",
+        )
+        .output()
+        .expect("python3");
+    assert!(
+        theirs.status.success(),
+        "python3 html.escape failed: {}",
+        String::from_utf8_lossy(&theirs.stderr)
+    );
+    let reference = String::from_utf8_lossy(&theirs.stdout).to_string();
+
+    assert_eq!(
+        mine, reference,
+        "lib/html.bx and Python's html.escape disagree byte for byte. Both may be valid HTML — \
+         that is the point: a difference no reader can see still churns every committed page, and \
+         it is why BMX wrote its own table instead of calling this."
+    );
+}
+
 #[test]
 fn panic_programs_die_cleanly_at_runtime() {
     let scratch = scratch_dir("panic");
@@ -2125,8 +2340,24 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
 
     // What slice 1 covers: Ints, Bools, String literals, checked arithmetic,
     // comparisons, `if`, `while`, `break`, `continue`, functions, calls, `print`.
-    let programs: [(&str, &str); 7] = [
+    //
+    // **This is a hand-written list, which is a boundary a new fixture lands on the wrong side of.**
+    // `the_burxt_front_end_accepts_every_burxt_source` used to be seven hand-written paths too, and
+    // its own comment records what that cost: `examples/absence.bx` was the only user of `?` in the
+    // repository and went through the Burxt front end zero times. That test now walks directories.
+    // This one cannot yet — stage-1's BACK END is scoped to what it implements, so walking
+    // `tests/pass/` would fail on features it has not reached rather than on defects. Until it can,
+    // **a new statement belongs in this list on the day it is added**, which is why `print_exact` is
+    // here. *(Boundary measured 2026-08-21: `tests/pass/` reaches stage-1's front end and not its
+    // back end.)*
+    let programs: [(&str, &str); 8] = [
         ("arith.bx", "let a: Int = 6;\nlet b: Int = 7;\nprint(a * b);\nprint(a - b);\n"),
+        // `print_exact` — stdout with NOTHING appended, so the two writes below land on one line
+        // and the output ends without a newline. Both compilers must agree on the absence.
+        (
+            "exact.bx",
+            "print_exact(\"A\");\nprint_exact(\"B\");\nprint(\"C\");\nprint_exact(\"end\");\n",
+        ),
         (
             "loop.bx",
             "let mutable i: Int = 0;\nwhile i < 4 {\n  if i == 2 { i = i + 1; continue; }\n               print(i * 10);\n  i = i + 1;\n}\nprint(\"end\");\n",
@@ -2171,10 +2402,21 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
             .current_dir(&scratch)
             .output()
             .expect("failed to run stage-0");
+        // **`split_inclusive`, not `lines`.** This dropped the `compiled <path> -> <out>` line by
+        // splitting into lines and re-adding `\n` to each — which silently GIVES a final line its
+        // newline back. So the comparison could not see a trailing newline at all, and the first
+        // program that deliberately ended without one was reported as a stage-1/stage-0 divergence
+        // that did not exist: stage-1 printed `"ABC\nend"`, stage-0 printed `"ABC\nend"`, and the
+        // harness turned the second into `"ABC\nend\n"` before comparing. *(Found 2026-08-21 by
+        // adding `print_exact` to the list above — the entry failed, both compilers were right.)*
+        //
+        // `split_inclusive` keeps each piece's own terminator, so removing a line removes exactly
+        // that line and every other byte survives. The filter itself is belt-and-braces: `burxt
+        // run` writes that line to STDERR, as the note in `the_ir_is_the_same_for_every_target`
+        // says — measured again here, and this stream had no such line to drop.
         let expected_out = String::from_utf8_lossy(&expected.stdout)
-            .lines()
+            .split_inclusive('\n')
             .filter(|l| !l.starts_with("compiled "))
-            .map(|l| format!("{}\n", l))
             .collect::<String>();
 
         // stage-1: source -> IR text -> object -> program.
@@ -3434,7 +3676,7 @@ fn every_runtime_declaration_is_listed_as_such() {
 /// test's clothes. So this checks two properties, both derived from the files:
 ///
 ///   * **Every generated page is wrapped in `{% raw %}`.** That is the fix, made at the emitter in
-///     `scripts/site-reference.py` rather than in any page, because the next library header to
+///     `scripts/site-reference.bx` rather than in any page, because the next library header to
 ///     mention a brace would reintroduce a page-level repair. Checking the wrapper rather than the
 ///     content means a header may contain anything at all.
 ///   * **Every other page closes what it opens.** Hand-written pages use Liquid deliberately —
@@ -3471,7 +3713,7 @@ fn no_page_hands_jekyll_a_liquid_delimiter_it_did_not_mean() {
         "these GENERATED reference pages are not wrapped in `{{% raw %}}`: {:?}\n\
          They are built from library headers, and a header is free to document a brace. \
          Wrap them in \
-         scripts/site-reference.py, never in the page.",
+         scripts/site-reference.bx, never in the page.",
         unwrapped
     );
 
@@ -3564,14 +3806,14 @@ fn every_library_module_has_a_reference_page() {
     assert!(
         missing.is_empty(),
         "these library modules have no page in docs/reference/: {:?}\n\
-         Add them to MODULES in scripts/site-reference.py and regenerate. A module with no page is \
+         Add them to `library_modules` in scripts/site-reference.bx and regenerate. A module with no page is \
          a module a reader concludes does not exist.",
         missing
     );
 
     // **And the other direction, which this test asked for years and never answered.**
     //
-    // `scripts/site-reference.py` WRITES pages and never removes one, so a module leaving `lib/`
+    // `scripts/site-reference.bx` WRITES pages and never removes one, so a module leaving `lib/`
     // strands its page: it documents functions that are gone, and every `[Source]` link on it
     // points at a line in a file that no longer exists. `bmx.bx` moved to its own repository and
     // left exactly that behind — twenty-nine pages on disk from a run that generated twenty-eight.
@@ -3591,7 +3833,7 @@ fn every_library_module_has_a_reference_page() {
         let name = path.file_stem().unwrap().to_str().unwrap().to_string();
         // Three pages are legitimately not a module's. `index.md` is the contents page;
         // `builtins.md` and `cli.md` are generated from the COMPILER — `render_builtins` and
-        // `render_cli` in `scripts/site-reference.py` — so they document things that were never in
+        // the `cli_*` prose in `scripts/site-reference.bx` — so they document things that were never in
         // `lib/` and never will be. Named individually rather than pattern-matched, because a list
         // of three is checkable and a pattern would quietly exempt the next orphan too.
         if name == "index" || name == "builtins" || name == "cli" {
@@ -3607,7 +3849,7 @@ fn every_library_module_has_a_reference_page() {
         "these pages in docs/reference/ document a module that is not in lib/: {:?}\n\
          The generator writes pages and never deletes one, so a module that moved or was removed \
          leaves its page behind — documenting functions that are gone, under `[Source]` links that \
-         404. Delete the page, and drop the name from MODULES in scripts/site-reference.py.",
+         404. Delete the page, and drop the name from `library_modules` in scripts/site-reference.bx.",
         orphans
     );
 }
@@ -14597,7 +14839,7 @@ fn a_broken_declaration_does_not_blame_an_innocent_file() {
 /// trusting it.
 ///
 /// **`the_reference_is_not_stale` cannot make this check, by construction.** It compares the
-/// committed pages against a fresh run of `scripts/site-reference.py`, so it measures whether the
+/// committed pages against a fresh run of `scripts/site-reference.bx`, so it measures whether the
 /// generator agrees with itself. When that generator silently dropped every `public` declaration —
 /// 188 lines and 119 search entries, exactly the symbols meant to BE the public API — its failure
 /// message said *"Regenerate it"*, and following that instruction would have committed the deletion
@@ -14675,7 +14917,7 @@ fn every_declaration_in_the_library_reaches_the_reference() {
     assert!(
         missing.is_empty(),
         "these declarations are in lib/ and not in their reference page:\n  {}\n\
-         The page is generated, so this is `scripts/site-reference.py` failing to read a form the \
+         The page is generated, so this is `scripts/site-reference.bx` failing to read a form the \
          language now has — teach it the form. Regenerating will NOT fix it; regenerating is how \
          the last one got committed.",
         missing.join("\n  ")

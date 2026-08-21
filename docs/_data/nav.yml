@@ -403,6 +403,8 @@
       steps:
         - name: "print_error"
           id: print-error
+        - name: "print_exact"
+          id: print-exact
         - name: "bit_and"
           id: bit-and
         - name: "bit_or"

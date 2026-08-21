@@ -2,7 +2,7 @@
   "name": "burxt",
   "displayName": "Burxt",
   "description": "Burxt — a contract-first imperative language. Syntax highlighting, live diagnostics and hover, from the compiler itself.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "burxt",
   "license": "MIT OR Apache-2.0",
   "repository": {

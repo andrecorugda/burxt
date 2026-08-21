@@ -1,4 +1,4 @@
-&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;
+&lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt;
 Tom &amp; Jerry &quot;quoted&quot;
 <b>bold</b>
 <span title="&quot; onmouseover=&quot;steal()"></span>

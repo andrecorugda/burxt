@@ -192,7 +192,7 @@ pub enum TypedStmtKind {
     },
     /// Bounds-checked element assignment.
     AssignIndex { name: String, len: u32, index: TypedExpr, value: TypedExpr },
-    Print { value: TypedExpr, to_stderr: bool },
+    Print { value: TypedExpr, to_stderr: bool, newline: bool },
     /// `region name { .. }`: open a region, run the body, release as a unit.
     Region { name: String, body: Vec<TypedStmt> },
     /// An ORDINARY block that the escape analysis proved keeps nothing — so it
@@ -215,7 +215,7 @@ pub enum TypedStmtKind {
     /// payload slots. Exhaustiveness was proven by the typechecker.
     Match { value: TypedExpr, arms: Vec<TypedArm> },
     /// `print` of an interpolated string: emit each piece in order.
-    PrintInterp { parts: Vec<TypedInterpPart>, to_stderr: bool },
+    PrintInterp { parts: Vec<TypedInterpPart>, to_stderr: bool, newline: bool },
     /// Leave the enclosing loop, or jump to its next test.
     Break,
     Continue,
@@ -6847,7 +6847,7 @@ impl TypeChecker {
                 self.loop_depth -= 1;
                 Ok(TypedStmtKind::While { cond, body: body? })
             }
-            StmtKind::Print { value: e, to_stderr } => {
+            StmtKind::Print { value: e, to_stderr, newline } => {
                 if let Some(why) = self.impure("print") {
                     // Output is an effect: a pure function computes its result and
                     // does nothing else.
@@ -6897,7 +6897,11 @@ impl TypeChecker {
                             }
                         }
                     }
-                    return Ok(TypedStmtKind::PrintInterp { parts: typed_parts, to_stderr: *to_stderr });
+                    return Ok(TypedStmtKind::PrintInterp {
+                        parts: typed_parts,
+                        to_stderr: *to_stderr,
+                        newline: *newline,
+                    });
                 }
                 let typed = self.check_expr(e, None)?;
                 match &typed.ty {
@@ -6945,7 +6949,7 @@ impl TypeChecker {
                     }
                     _ => {}
                 }
-                Ok(TypedStmtKind::Print { value: typed, to_stderr: *to_stderr })
+                Ok(TypedStmtKind::Print { value: typed, to_stderr: *to_stderr, newline: *newline })
             }
             StmtKind::Return(e) => {
                 // The keyword, for the same reason and to the same length stage-1 uses.
@@ -11290,17 +11294,17 @@ impl<'a> ReleasePass<'a> {
                 self.scan(&e);
                 TypedStmtKind::Exit(e)
             }
-            TypedStmtKind::Print { value, to_stderr } => {
+            TypedStmtKind::Print { value, to_stderr, newline } => {
                 self.scan(&value);
-                TypedStmtKind::Print { value, to_stderr }
+                TypedStmtKind::Print { value, to_stderr, newline }
             }
-            TypedStmtKind::PrintInterp { parts, to_stderr } => {
+            TypedStmtKind::PrintInterp { parts, to_stderr, newline } => {
                 for p in &parts {
                     if let TypedInterpPart::Expr(e) = p {
                         self.scan(e);
                     }
                 }
-                TypedStmtKind::PrintInterp { parts, to_stderr }
+                TypedStmtKind::PrintInterp { parts, to_stderr, newline }
             }
             // Whatever is handed back outlives every block in this function.
             TypedStmtKind::Return(e) => {

@@ -43,7 +43,8 @@ And going out, **money crosses as a quoted string**: `json_money($19.99)` render
 | [`json_list`](#json-list) | function | — |
 | [`json_object`](#json-object) | function | — |
 | [`json_field`](#json-field) | function | — |
-| [`json_escape`](#json-escape) | function | A String with the six escapes JSON requires, and nothing else. |
+| [`json_hex_nibble`](#json-hex-nibble) | function | One lowercase hex digit, for the `\u00XX` escapes below. `to_string` for a digit and the letters by arithmetic — `a` is  |
+| [`json_escape`](#json-escape) | function | A String with every escape JSON requires, and nothing else. |
 | [`json_render`](#json-render) | function | One JSON value as text, with no whitespace. Recursive, because the shape is. |
 | [`json_at`](#json-at) | function | A member by name, or None. Linear, like every other lookup in this repository at this scale — an MCP request has single- |
 | [`json_as_text`](#json-as-text) | function | — |
@@ -100,7 +101,7 @@ class Reader { text: String, at: Int }
 
 Where the parser is. A class with `mutable self` methods, because Burxt has no writable parameters — the same constraint that made `lib/map.bx` method-based, and the same outcome: the cursor being a value you can name reads better than threading an index through twelve returns.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L286)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L320)
 
 ## Functions
 {: #functions}
@@ -179,6 +180,17 @@ pure function json_field(name: String, value: Json) -> Field
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L87)
 
+### `json_hex_nibble`
+{: #json-hex-nibble}
+
+```burxt
+pure function json_hex_nibble(n: Int) -> String
+```
+
+One lowercase hex digit, for the `\u00XX` escapes below. `to_string` for a digit and the letters by arithmetic — `a` is 97, so 87 + n lands on the right letter for n in 10..15.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L95)
+
 ### `json_escape`
 {: #json-escape}
 
@@ -186,11 +198,13 @@ pure function json_field(name: String, value: Json) -> Field
 pure function json_escape(text: String) -> String
 ```
 
-A String with the six escapes JSON requires, and nothing else.
+A String with every escape JSON requires, and nothing else.
+
+**Seven short forms and `\u00XX` for the rest.** RFC 8259 §7 forbids ANY unescaped character below 0x20, and this escaped seven of the thirty-two and passed the others through raw until 2026-08-21 — so `json_render` emitted text that is not JSON, and for a zero byte it emitted a string that never closed. Found by the BMX session against published 1.6.0, when their JavaScript renderer escaped a byte this one did not.
 
 Built in RUNS rather than a byte at a time: `out = out + one_byte` copies the whole String on every byte, which this project has paid for three times — the lexer was quadratic for eleven versions on exactly this shape. Everything from `copied` to here is appended in one slice.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L98)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L113)
 
 ### `json_render`
 {: #json-render}
@@ -201,7 +215,7 @@ pure function json_render(value: Json) -> String
 
 One JSON value as text, with no whitespace. Recursive, because the shape is.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L123)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L157)
 
 ### `json_at`
 {: #json-at}
@@ -212,7 +226,7 @@ pure function json_at(value: Json, name: String) -> Option<Json>
 
 A member by name, or None. Linear, like every other lookup in this repository at this scale — an MCP request has single-digit field counts, and a map would allocate to save nothing.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L161)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L195)
 
 ### `json_as_text`
 {: #json-as-text}
@@ -221,7 +235,7 @@ A member by name, or None. Linear, like every other lookup in this repository at
 pure function json_as_text(value: Json) -> Option<String>
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L182)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L216)
 
 ### `json_digits`
 {: #json-digits}
@@ -234,7 +248,7 @@ The digits of a number, whether it arrived as a JSON number or as a quoted strin
 
 Both, on purpose: an exact producer sends money as a string (see the header) and a careless one sends it as a number, and a server that reads only one of the two rejects half its callers for a difference that carries no information.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L198)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L232)
 
 ### `json_as_int`
 {: #json-as-int}
@@ -243,7 +257,7 @@ Both, on purpose: an exact producer sends money as a string (see the header) and
 pure function json_as_int(value: Json) -> Option<Int>
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L209)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L243)
 
 ### `json_as_truth`
 {: #json-as-truth}
@@ -252,7 +266,7 @@ pure function json_as_int(value: Json) -> Option<Int>
 pure function json_as_truth(value: Json) -> Option<Bool>
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L217)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L251)
 
 ### `json_as_money`
 {: #json-as-money}
@@ -267,7 +281,7 @@ Money, at two places, or None when the digits are not exactly that.
 
 The reconstruction is a count of pennies times a penny, which is exact by construction and needs no rounding contract, because that is literally what a scaled decimal already is.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L237)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L271)
 
 ### `is_json_digit`
 {: #is-json-digit}
@@ -276,7 +290,7 @@ The reconstruction is a count of pennies times a penny, which is exact by constr
 pure function is_json_digit(b: Int) -> Bool
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L389)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L423)
 
 ### `json_parse`
 {: #json-parse}
@@ -287,7 +301,7 @@ function json_parse(text: String) -> Result<Json, String>
 
 One JSON document. Trailing whitespace is allowed; trailing anything else is not, because a second document where one was expected means the caller framed its input wrong and saying so beats parsing half of it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L600)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L634)
 
 ## Methods
 {: #methods}
@@ -301,7 +315,7 @@ function (mutable self: Reader) skip_space() -> Int
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L288)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L322)
 
 ### `peek`
 {: #peek}
@@ -310,7 +324,7 @@ Takes `mutable self`, so it changes the value it is called on.
 pure function (self: Reader) peek() -> Int
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L295)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L329)
 
 ### `parse_value`
 {: #parse-value}
@@ -323,7 +337,7 @@ Parse one value at the cursor. Recursive through `parse_list` and `parse_object`
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L303)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L337)
 
 ### `word`
 {: #word}
@@ -336,7 +350,7 @@ Consume `word` if it is at the cursor. Answers whether it was.
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L331)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L365)
 
 ### `parse_number`
 {: #parse-number}
@@ -349,7 +363,7 @@ A number, kept as the digits it was written with. Only the SHAPE is checked here
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L350)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L384)
 
 ### `parse_unicode_escape`
 {: #parse-unicode-escape}
@@ -366,7 +380,7 @@ A lone surrogate, high or low, is an error rather than U+FFFD. Substituting a re
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L407)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L441)
 
 ### `read_four_hex`
 {: #read-four-hex}
@@ -379,7 +393,7 @@ The four hex digits of a `\uXXXX`, with `self.at` on the `u`. Leaves `self.at` p
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L445)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L479)
 
 ### `parse_text`
 {: #parse-text}
@@ -392,7 +406,7 @@ A quoted string, with the escapes undone.
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L468)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L502)
 
 ### `parse_list`
 {: #parse-list}
@@ -403,7 +417,7 @@ function (mutable self: Reader) parse_list() -> Result<Json, String>
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L520)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L554)
 
 ### `parse_object`
 {: #parse-object}
@@ -414,7 +428,7 @@ function (mutable self: Reader) parse_object() -> Result<Json, String>
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L551)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L585)
 
 
 {% endraw %}

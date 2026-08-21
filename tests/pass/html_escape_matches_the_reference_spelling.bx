@@ -1,0 +1,38 @@
+// `html_escape` — the five entities, spelled the way the implementation people port FROM spells them.
+//
+// **This function had no test at all until 2026-08-21**, which is how a byte-level choice inside it
+// went unexamined: `'` was written `&#39;` and Python's `html.escape` writes `&#x27;`. Both are
+// correct HTML and they render identically, so nothing a reader looks at would ever show the
+// difference — it shows up as a diff in a committed page, later, in a screenshot.
+//
+// The BMX session hit exactly that porting a Python generator: calling this library would have
+// changed every page holding an apostrophe, so they wrote the table out by hand instead. That is a
+// library being avoided for a reason that is one byte wide.
+//
+// Changed to hex after measuring that it churned nothing — no generated artefact in this repository
+// or in star-burxt held either spelling from this function. **A byte-level choice is free to change
+// only while nothing has committed its output**, and this test is what closes that window: the
+// independent half, `html_escape_agrees_with_pythons_reference_escaper` in `tests/runner.rs`, hands
+// this same text to `html.escape` and requires the bytes to match.
+//
+// The five and ONLY the five: anything else escaped here would be a second difference from every
+// other escaper, and anything missing is an injection.
+use "../../lib/html.bx";
+
+region r {
+    print(html_escape("it's a <b>\"test\"</b> & co"));
+    // Each entity alone, so a failure names which one moved rather than "the string differs".
+    print(html_escape("&"));
+    print(html_escape("<"));
+    print(html_escape(">"));
+    print(html_escape("\""));
+    print(html_escape("'"));
+    // A byte that must NOT be escaped: the five are the whole list, and a sixth would diverge
+    // from every other escaper in the world.
+    print(html_escape("/"));
+    // Runs matter: the implementation copies whole slices between entities, and an off-by-one
+    // there loses text rather than mis-escaping it.
+    print(html_escape("aaa'bbb'ccc"));
+    print(html_escape("''"));
+    print(html_escape(""));
+}

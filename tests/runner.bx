@@ -285,7 +285,17 @@ function (mutable self: Outcome) check_pass(compiler: String, name: String, work
             "has no .stdout — a fixture must state what it expects");
         return 0;
     }
-    let expected: String = trimmed(read_file(expectation));
+    // **Exact, not `trimmed`.** Both sides were trimmed until 2026-08-21, which made this runner
+    // BLIND to the last byte of a program's output: `tests/runner.rs` compares exactly, so a
+    // fixture whose output deliberately ends without a newline — `print_exact_appends_nothing` —
+    // would pass here even if the compiler appended one, and `the_suite_also_runs_on_burxt` would
+    // still report the two runners agreeing fixture for fixture. Agreement between a strict check
+    // and a lax one is not agreement about the program.
+    //
+    // Safe to tighten because the Rust runner ALREADY compares exactly over the same `.stdout`
+    // files, so every fixture already satisfies this. `run_capturing_stdout` redirects with the
+    // shell, which adds nothing of its own.
+    let expected: String = read_file(expectation);
     let binary: String = work + "/" + name;
     let log: String = work + "/out";
 
@@ -298,7 +308,7 @@ function (mutable self: Outcome) check_pass(compiler: String, name: String, work
     // and a fixture may also WRITE one — running in the source tree is how
     // `tests/pass/` came to hold three of its own outputs, two of them committed.
     let ran: Int = run_capturing_stdout("cd " + work + " && " + binary, log);
-    let printed: String = trimmed(read_file(log));
+    let printed: String = read_file(log);
     if ran != 0 {
         let noted: Int = self.note(false, "pass", name, "exited " + to_string(ran));
         return 0;

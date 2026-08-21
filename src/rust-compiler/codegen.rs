@@ -1073,13 +1073,13 @@ impl<'ctx> CodeGen<'ctx> {
             // by `emit_print_call`, so every arm of the per-type formatter below serves both — which
             // is the point of not having a second statement: the first time one formatter learned
             // about a new type, the other would print something different for the same value.
-            TypedStmtKind::Print { value, to_stderr } => {
+            TypedStmtKind::Print { value, to_stderr, newline } => {
                 let outer = std::mem::replace(&mut self.print_to_stderr, *to_stderr);
-                let r = self.gen_print(value);
+                let r = self.gen_print(value, *newline);
                 self.print_to_stderr = outer;
                 r
             }
-            TypedStmtKind::PrintInterp { parts, to_stderr } => {
+            TypedStmtKind::PrintInterp { parts, to_stderr, newline } => {
                 // Emit each piece in order — no intermediate String is built,
                 // so this needs no allocation.
                 let outer = std::mem::replace(&mut self.print_to_stderr, *to_stderr);
@@ -1096,7 +1096,10 @@ impl<'ctx> CodeGen<'ctx> {
                             crate::typeck::TypedInterpPart::Expr(e) => self.gen_print_value(e)?,
                         }
                     }
-                    self.gen_newline()
+                    if *newline {
+                        return self.gen_newline();
+                    }
+                    Ok(())
                 })();
                 self.print_to_stderr = outer;
                 r
@@ -2237,9 +2240,18 @@ impl<'ctx> CodeGen<'ctx> {
             .is_some_and(|b| b.get_terminator().is_none())
     }
 
-    fn gen_print(&mut self, e: &TypedExpr) -> Result<(), String> {
+    /// One value, then a newline unless this is `print_exact`.
+    ///
+    /// **The newline is the whole difference, and it is gated here rather than by a second
+    /// formatter.** `gen_print_value` decides how every type displays; a separate no-newline
+    /// writer would have been a second copy of that decision, and the first type either one
+    /// learned about would print differently from the other.
+    fn gen_print(&mut self, e: &TypedExpr, newline: bool) -> Result<(), String> {
         self.gen_print_value(e)?;
-        self.gen_newline()
+        if newline {
+            return self.gen_newline();
+        }
+        Ok(())
     }
 
     /// Print a single trailing newline.

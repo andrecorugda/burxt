@@ -1278,6 +1278,16 @@ function builtins() -> [Builtin] {
     });
 
     push(out, Builtin {
+        name: "print_exact",
+        signature: "print_exact(value)",
+        answers: "nothing",
+        allocates: false,
+        doc: "Writes one value to **standard output** and appends **nothing** — no newline. The same statement as `print` and `print_error`, so the per-type formatting cannot fork; the trailing newline is the only difference.\n\nIt exists for output whose length is declared before its bytes. Language Server Protocol framing is `Content-Length: N`, a blank line, and then exactly N bytes; so is CGI, and so is any protocol a program speaks down its own stdout. `print` cannot write that, and the routes that look like they can are a different stream: `file_write(\"/dev/stdout\", s)` and `write_bytes(\"/dev/stdout\", b)` come out reordered against `print`, and both truncate when stdout is a regular file rather than a pipe. An editor hands a language server a pipe, so that shape passes its own tests and destroys the output the moment anyone redirects it.\n\nInterpolation works, which is usually how a header is written: `print_exact(\"Content-Length: \{n\}\\r\\n\\r\\n\")`.\n\n**One limit, measured rather than assumed.** A String may hold a zero byte — `len(from_bytes([65, 0, 66]))` is 3 — and printing one stops at that byte, in `print_exact` exactly as in `print`, because both share the one formatter. So a declared length and a written length can disagree for text built out of arbitrary bytes. JSON cannot contain a raw zero byte, so protocol framing is unaffected; for anything that can, write the bytes with `write_bytes` rather than declaring a length you did not write. See `tests/limitations/`.",
+        probe: "print_exact(\"Content-Length: 7\\r\\n\\r\\n\");\n",
+        refuses: "",
+    });
+
+    push(out, Builtin {
         name: "bit_and",
         signature: "bit_and(a: Int, b: Int)",
         answers: "`Int`",
@@ -1888,9 +1898,14 @@ function failures_table() -> String {
 // The prose around the tables, verbatim
 // ----------------------------------------------------------------------------------------------
 //
-// One function per paragraph the pages state outright. They are the page's CONTENTS, so the two that
-// name `scripts/site-reference.py` still name it — changing either would be a diff, and whoever
-// retires the Python changes them then.
+// One function per paragraph the pages state outright. They are the page's CONTENTS, so a name in
+// here is a name on the live site.
+//
+// **These said `scripts/site-reference.py` until 2026-08-21, deliberately: the port's bar was
+// byte-identical output, so the prose kept the old name and the comment here said "whoever retires
+// the Python changes them then". The Python is retired — there is no `scripts/*.py` left in the
+// tree — so they name this file now.** A byte-identical bar is worth keeping while it is proving a
+// port; keeping it afterwards freezes a page that tells a reader to edit a file that is not there.
 
 pure function index_description() -> String {
     return "Every keyword, builtin, operator and standard-library function — read out of the compiler "
@@ -1902,7 +1917,7 @@ pure function index_intro() -> String {
             + "below comes from `src/rust-compiler/lexer.rs`, the reserved names from "
             + "`src/rust-compiler/typeck.rs`, the commands from `src/rust-compiler/main.rs`, and every "
             + "standard-library entry from the `//` prose written above the declaration itself. "
-            + "`scripts/site-reference.py` regenerates these pages and a test diffs them, so this cannot fall "
+            + "`scripts/site-reference.bx` regenerates these pages and a test diffs them, so this cannot fall "
             + "behind the language again — which it had: the page this replaces still listed `record`, a "
             + "keyword renamed eleven versions earlier.\n";
 }
@@ -2038,12 +2053,14 @@ function verify(root: String, burxt: String, work: String, all: [Builtin],
     for b in all {
         let added: Int = push(described, b.name);
     }
-    // `print` and `print_error` are KEYWORDS, so the lexer already makes them unusable as
+    // `print`, `print_error` and `print_exact` are KEYWORDS, so the lexer already makes them
+    // unusable as
     // identifiers and `is_reserved_name` has no reason to list them. They are still builtins a
     // reader looks up, so they are described.
     let mutable owned: [String] = reserved(root);
     let with_print: Int = push(owned, "print");
     let with_print_error: Int = push(owned, "print_error");
+    let with_print_exact: Int = push(owned, "print_exact");
 
     let mutable unknown: [String] = [];
     for name in owned {

@@ -14,6 +14,7 @@ The names a program may not declare, because the language already means somethin
 | Call | Answers | Allocates? | Reaches |
 |---|---|---|---|
 | [`print_error`](#print-error) | nothing | no | — |
+| [`print_exact`](#print-exact) | nothing | no | — |
 | [`bit_and`](#bit-and) | `Int` | no | — |
 | [`bit_or`](#bit-or) | `Int` | no | — |
 | [`bit_xor`](#bit-xor) | `Int` | no | — |
@@ -59,6 +60,23 @@ print_error(value)
 ```
 
 Writes one value and a newline to **standard error**. The same statement as `print` with a different destination, so the per-type formatting cannot fork — two statements would mean two formatters, and the first time one learned about a new type the other would print something else.
+
+**Answers** nothing. **Allocates:** no.
+
+## `print_exact`
+{: #print-exact}
+
+```burxt
+print_exact(value)
+```
+
+Writes one value to **standard output** and appends **nothing** — no newline. The same statement as `print` and `print_error`, so the per-type formatting cannot fork; the trailing newline is the only difference.
+
+It exists for output whose length is declared before its bytes. Language Server Protocol framing is `Content-Length: N`, a blank line, and then exactly N bytes; so is CGI, and so is any protocol a program speaks down its own stdout. `print` cannot write that, and the routes that look like they can are a different stream: `file_write("/dev/stdout", s)` and `write_bytes("/dev/stdout", b)` come out reordered against `print`, and both truncate when stdout is a regular file rather than a pipe. An editor hands a language server a pipe, so that shape passes its own tests and destroys the output the moment anyone redirects it.
+
+Interpolation works, which is usually how a header is written: `print_exact("Content-Length: {n}\r\n\r\n")`.
+
+**One limit, measured rather than assumed.** A String may hold a zero byte — `len(from_bytes([65, 0, 66]))` is 3 — and printing one stops at that byte, in `print_exact` exactly as in `print`, because both share the one formatter. So a declared length and a written length can disagree for text built out of arbitrary bytes. JSON cannot contain a raw zero byte, so protocol framing is unaffected; for anything that can, write the bytes with `write_bytes` rather than declaring a length you did not write. See `tests/limitations/`.
 
 **Answers** nothing. **Allocates:** no.
 

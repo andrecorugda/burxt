@@ -234,7 +234,7 @@ fn compile_main() {
         eprintln!("  burxt layout  <file.bx>                  print class layouts");
         eprintln!("  burxt explain memory <file.bx>           what each function builds");
         // One `eprintln!` per row. These two were a single call holding a raw newline, which
-        // read the same on a terminal and broke the scrape: `scripts/site-reference.py` matches
+        // read the same on a terminal and broke the scrape: `scripts/site-reference.bx` matches
         // `eprintln!("(  burxt [^"]*)")`, so `[^"]*` ran through the newline and produced one
         // reference row whose "what it does" column was the whole `mcp-schema` line. The
         // published page said so for months. A generated document is only as honest as the

@@ -115,6 +115,41 @@ What is actually missing:
 - **No version constraint.** A manifest pins a commit; it cannot say `requires burxt >= 1.3`. The
   first thing that needs it is a package's own CI, not a user.
 
+### Printing a String stops at a zero byte
+
+A Burxt String is **not** NUL-terminated: `len` is one load from the eight bytes before the first
+byte, so a String genuinely holds a zero and `+`, `substring` and `byte_at` all preserve it. But
+every print path formats a String with `%s`, which stops at the first zero — so `len` says three and
+`print` writes one.
+
+```burxt
+let s: String = from_bytes([65, 0, 66]);
+print(len(s));      // 3
+print_exact(s);     // writes `A`
+```
+
+`print`, `print_error`, `print_exact` and interpolation all do it, because they share one formatter
+— which is why the two compilers agree about it exactly. **The trap is that the length is the honest
+half:** a program that declares a byte count from `len` and then prints the text writes fewer bytes
+than it promised, which for a framed protocol means a reader waiting for bytes that never arrive.
+
+**Why it is not fixed.** The exact write is `fwrite(ptr, 1, len, stdout)`, and `stdout` is a libc
+*data* symbol that Darwin spells `__stdoutp`. Stage-0 already carries one such rename as its
+documented exception to byte-identical IR, and stage-1 avoids the whole class by emitting
+`dprintf(2, ...)` rather than ever naming a `stderr` global — so the fix costs a second renamed
+symbol in one compiler and a mechanism that does not exist in the other.
+
+**What made that trade acceptable was closing the path that actually reached it.** `lib/json.bx`
+escaped seven characters and passed the other twenty-five control bytes through raw, which RFC 8259
+§7 forbids — so `json_render` emitted invalid JSON, and for a zero byte it emitted a string that
+never closed. That was the reachable damage, it was in the library rather than in a libc symbol, and
+it is fixed: every byte below 0x20 is now `\u00XX`, checked against Python's `json` for all
+thirty-two. What remains is text built from arbitrary bytes and printed directly — rendering a
+document into a page, rather than serialising it.
+
+Reported by the BMX session against published 1.6.0, measured 2026-08-21. `write_bytes` writes a
+byte buffer faithfully and is the answer when the bytes are arbitrary.
+
 ### No threads. Processes, yes
 
 No threads, no async, no channels. `os_fork` and `os_wait_for_child` in `lib/os.bx` are what a Burxt

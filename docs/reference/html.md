@@ -43,7 +43,7 @@ A **void element cannot carry children**, also by contract. `<br>Rice</br>` does
 | [`html_raw`](#html-raw) | function | The escape hatch, and it is spelled out. There is no convenience wrapper on this and there will not be one: one way to s |
 | [`html_attr`](#html-attr) | function | — |
 | [`html_element`](#html-element) | function | Answers `Html` rather than `Element` so that nesting is one call deep: the tree is the surface, and `Html.Node(html_elem |
-| [`html_escape`](#html-escape) | function | The five entities, and only those. `'` goes out as `&#39;` rather than `&apos;`, which is XML's spelling and not in HTML |
+| [`html_escape`](#html-escape) | function | The five entities, and only those. `'` goes out NUMERICALLY rather than as `&apos;`, which is XML's spelling and not in  |
 | [`html_render`](#html-render) | function | One node as text. Recursive, because the shape is. |
 | [`html_document`](#html-document) | function | A whole document, with the doctype every browser needs to stay out of quirks mode. |
 
@@ -153,11 +153,15 @@ Answers `Html` rather than `Element` so that nesting is one call deep: the tree 
 pure function html_escape(text: String) -> String
 ```
 
-The five entities, and only those. `'` goes out as `&#39;` rather than `&apos;`, which is XML's spelling and not in HTML 4 — the numeric form is read correctly by everything.
+The five entities, and only those. `'` goes out NUMERICALLY rather than as `&apos;`, which is XML's spelling and not in HTML 4 — the numeric form is read correctly by everything.
+
+**Hex `&#x27;` rather than decimal `&#39;`, and the reason is interoperation rather than taste.** Python's `html.escape` writes `&#x27;` (verified 2026-08-21), and it is the implementation people port FROM — so a port that swapped a Python escaper for this one changed every page holding an apostrophe, appearing later in a screenshot with nothing able to see it. The BMX session hit exactly that and wrote the table out by hand rather than call the library.
+
+Changed from decimal on 2026-08-21, after measuring that it churned nothing: no generated artefact in this repository or in star-burxt contains either spelling from this function — the only `&#39;` anywhere was this comment describing the choice, and star does not call `html_escape` at all. **A byte-level choice is free to change only while nothing has committed its output**, which is the window this was found in.
 
 Built in RUNS rather than a byte at a time, copied from `json_escape` at lib/json.bx:98 for the reason recorded there: `out = out + one_byte` copies the whole String on every byte, and this project has paid for that shape three times.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L141)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L153)
 
 ### `html_render`
 {: #html-render}
@@ -170,7 +174,7 @@ One node as text. Recursive, because the shape is.
 
 Attribute values are escaped and always double-quoted. An unquoted attribute is where a value with a space becomes two attributes, so there is no option to omit them.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L167)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L179)
 
 ### `html_document`
 {: #html-document}
@@ -181,7 +185,7 @@ pure function html_document(root: Html) -> String
 
 A whole document, with the doctype every browser needs to stay out of quirks mode.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L194)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L206)
 
 
 {% endraw %}

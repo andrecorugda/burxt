@@ -505,7 +505,10 @@ pub enum StmtKind {
     /// One variant on purpose: the per-type formatting is the part that must never fork. Two
     /// statements would mean two formatters, and the first time one of them learned about a new type
     /// the other would print something different for the same value.
-    Print { value: Expr, to_stderr: bool },
+    /// `newline` is false for `print_exact`, which appends nothing. The trailing newline is
+    /// the ONLY difference, deliberately: an LSP or CGI header is `Content-Length: N` then exactly
+    /// N bytes, and a formatter that forked to serve that would print a Decimal two ways.
+    Print { value: Expr, to_stderr: bool, newline: bool },
     /// `return expr;` — only valid inside a function.
     Return(Expr),
     /// `break;` — leave the enclosing loop.

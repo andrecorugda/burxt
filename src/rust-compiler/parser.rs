@@ -1282,8 +1282,9 @@ impl Parser {
     fn parse_stmt_kind(&mut self) -> Result<StmtKind, String> {
         match self.peek() {
             Token::Let => self.parse_let(),
-            Token::Print => self.parse_print(false),
-            Token::PrintError => self.parse_print(true),
+            Token::Print => self.parse_print(false, true),
+            Token::PrintError => self.parse_print(true, true),
+            Token::PrintExact => self.parse_print(false, false),
             Token::Break => {
                 self.bump();
                 self.expect(&Token::Semicolon)?;
@@ -1789,14 +1790,19 @@ impl Parser {
         Ok(StmtKind::Let { name, mutable, declared, value })
     }
 
-    /// `print(x);` and `print_error(x);` — the same statement with a different destination.
-    fn parse_print(&mut self, to_stderr: bool) -> Result<StmtKind, String> {
-        self.expect(if to_stderr { &Token::PrintError } else { &Token::Print })?;
+    /// `print(x);`, `print_error(x);` and `print_exact(x);` — one statement, a destination and
+    /// whether a newline follows. `print_exact` writes to stdout and appends NOTHING.
+    fn parse_print(&mut self, to_stderr: bool, newline: bool) -> Result<StmtKind, String> {
+        self.expect(match (to_stderr, newline) {
+            (true, _) => &Token::PrintError,
+            (false, true) => &Token::Print,
+            (false, false) => &Token::PrintExact,
+        })?;
         self.expect(&Token::LParen)?;
         let e = self.parse_expr()?;
         self.expect(&Token::RParen)?;
         self.expect(&Token::Semicolon)?;
-        Ok(StmtKind::Print { value: e, to_stderr })
+        Ok(StmtKind::Print { value: e, to_stderr, newline })
     }
 
     // ---- types ----

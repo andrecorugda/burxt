@@ -1,0 +1,70 @@
+// `json_escape` — every byte below 0x20, escaped, because RFC 8259 §7 forbids a raw one.
+//
+// **This is a defect fixture: the library shipped the wrong answer for twenty-five of the
+// thirty-two.** `json_escape` handled seven — quote, backslash, newline, carriage return, tab,
+// backspace, form feed — and passed every other control byte through raw, so `json_render`
+// produced text that is not JSON. Found 2026-08-21 by the BMX session, measured against the
+// PUBLISHED 1.6.0 rather than against this tree: a document holding byte 0x01 rendered as a raw
+// 0x01 inside a string, which Python's `json` rejects with *invalid control character*, while
+// their JavaScript reference renderer escaped it. Two renderers disagreeing about a document
+// neither is wrong to accept is a serialiser defect, not a document defect.
+//
+// **Byte 0x00 was the case that compounded.** A Burxt String genuinely holds it — `len` counts it,
+// `+` and `substring` preserve it, all measured — but every print path stops at it, so the render
+// was `"A` and the string never closed. Escaping it is what makes that unreachable through JSON:
+// see `tests/limitations/no-nul-inside-printed-text.bx` for the limit that remains, and why the
+// alternative fix costs a `__stdoutp` rename in both compilers.
+//
+// The independent half is `json_render_is_valid_json_for_every_control_byte` in `tests/runner.rs`,
+// which hands this same text to Python's `json` — a parser that never heard of Burxt. This half
+// proves the bytes are what the RFC names; that half proves a stranger accepts them. And the
+// round-trip below proves the two halves of THIS library agree: a writer whose own reader cannot
+// read it back is self-consistently wrong.
+use "../../lib/json.bx";
+use "../../lib/string.bx";
+
+region r {
+    let mutable bytes: [Int] = [];
+    let mutable i: Int = 0;
+    while i < 32 {
+        let added: Int = push(bytes, i);
+        i += 1;
+    }
+    // A quote and a backslash too: the short forms must keep working, and they are the two the
+    // fallback must NOT reach — a fallback that swallowed them would produce `"`, which is
+    // legal JSON and a silent change to every string this library has ever written.
+    let with_quote: Int = push(bytes, 34);
+    let with_slash: Int = push(bytes, 92);
+    let with_letter: Int = push(bytes, 65);
+
+    let original: String = from_bytes(bytes);
+    let rendered: String = json_render(json_text(original));
+    print(rendered);
+
+    // Round-trip: this library's own reader must recover the exact bytes, including the zero.
+    match json_parse(rendered) {
+        Ok(back) => {
+            match back {
+                Text(recovered) => {
+                    print("recovered length = " + to_string(len(recovered)));
+                    print("byte 0 is a zero = " + to_string(byte_at(recovered, 0)));
+                    let mutable same: Bool = len(recovered) == len(original);
+                    let mutable j: Int = 0;
+                    while j < len(original) {
+                        if byte_at(recovered, j) != byte_at(original, j) {
+                            same = false;
+                        }
+                        j += 1;
+                    }
+                    print("round-trip is exact = " + to_string(same));
+                }
+                Null => { print("round-trip gave the wrong shape"); }
+                Truth(t) => { print("round-trip gave the wrong shape"); }
+                Number(d) => { print("round-trip gave the wrong shape"); }
+                List(l) => { print("round-trip gave the wrong shape"); }
+                Object(f) => { print("round-trip gave the wrong shape"); }
+            }
+        }
+        Error(why) => { print("this library cannot read what it wrote: " + why); }
+    }
+}

@@ -90,7 +90,22 @@ pure function json_field(name: String, value: Json) -> Field {
 
 // ---- rendering ---------------------------------------------------------------
 
-// A String with the six escapes JSON requires, and nothing else.
+// One lowercase hex digit, for the `\u00XX` escapes below. `to_string` for a digit and the
+// letters by arithmetic — `a` is 97, so 87 + n lands on the right letter for n in 10..15.
+pure function json_hex_nibble(n: Int) -> String {
+    if n < 10 {
+        return to_string(n);
+    }
+    return byte_as_string(87 + n);
+}
+
+// A String with every escape JSON requires, and nothing else.
+//
+// **Seven short forms and `\u00XX` for the rest.** RFC 8259 §7 forbids ANY unescaped character
+// below 0x20, and this escaped seven of the thirty-two and passed the others through raw until
+// 2026-08-21 — so `json_render` emitted text that is not JSON, and for a zero byte it emitted a
+// string that never closed. Found by the BMX session against published 1.6.0, when their
+// JavaScript renderer escaped a byte this one did not.
 //
 // Built in RUNS rather than a byte at a time: `out = out + one_byte` copies the whole String on
 // every byte, which this project has paid for three times — the lexer was quadratic for eleven
@@ -110,6 +125,25 @@ pure function json_escape(text: String) -> String {
         if b == 9 { escape = "\\t"; }
         if b == 8 { escape = "\\b"; }
         if b == 12 { escape = "\\f"; }
+        // **Every OTHER byte below 0x20, as `\u00XX`.** RFC 8259 §7 forbids an unescaped
+        // character in that range, and this table handled seven of them and passed the rest
+        // through raw — so `json_render` emitted invalid JSON for the other twenty-five.
+        //
+        // Measured 2026-08-21, reported by the BMX session against published 1.6.0: a document
+        // holding byte 0x01 rendered as `"A\x01B"`, which Python's `json` rejects with *invalid
+        // control character*, while their JavaScript reference renderer escaped it. Two writers
+        // disagreeing about a document neither is wrong to accept — a BMX document is a sequence
+        // of bytes — is a serialiser defect, not a document defect.
+        //
+        // **And byte 0x00 was the compounding case.** A String genuinely holds it (`len` counts
+        // it, `substring` and `+` preserve it — measured), but every print path stops there, so
+        // the rendered text was `"A` and the string never closed. Escaping it here removes the
+        // raw zero from the output, which is what makes the truncation unreachable through JSON
+        // without a `fwrite` and the `__stdoutp` rename that would cost both compilers. See
+        // `tests/limitations/no-nul-inside-printed-text.bx` for the limit that remains.
+        if len(escape) == 0 && b < 32 {
+            escape = "\\u00" + json_hex_nibble(divide_floor(b, 16)) + json_hex_nibble(remainder(b, 16));
+        }
         if len(escape) > 0 {
             out = out + substring(text, copied, i - copied) + escape;
             copied = i + 1;

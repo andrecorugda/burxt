@@ -8,6 +8,13 @@
  },
  {
   "kind": "builtin",
+  "name": "print_exact",
+  "text": "nothing",
+  "url": "/reference/builtins.html#print-exact",
+  "where": "print_exact(value)"
+ },
+ {
+  "kind": "builtin",
   "name": "bit_and",
   "text": "`Int`",
   "url": "/reference/builtins.html#bit-and",
@@ -1783,6 +1790,13 @@
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-field",
   "where": "pure function json_field(name: String, value: Json) -> Field"
+ },
+ {
+  "kind": "function",
+  "name": "json_hex_nibble",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-hex-nibble",
+  "where": "pure function json_hex_nibble(n: Int) -> String"
  },
  {
   "kind": "function",
@@ -4370,6 +4384,13 @@
  {
   "kind": "keyword",
   "name": "print_error",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "print_exact",
   "text": "",
   "url": "/reference/#keywords",
   "where": "keyword"
